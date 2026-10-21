@@ -17,27 +17,6 @@ pub fn normalized_key_input(raw: &str) -> Option<String> {
     (!key.is_empty() && !key.eq_ignore_ascii_case("bearer")).then_some(key)
 }
 
-/// Parses one optional token-count field: empty keeps `None`, a plain number
-/// overrides; anything else is an error.
-pub fn parse_token_field(raw: &str) -> Result<Option<u64>, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    trimmed
-        .parse::<u64>()
-        .map(Some)
-        .map_err(|_| token_fields_error())
-}
-
-fn token_fields_error() -> String {
-    crate::i18n::t(
-        "Context window and max output must be plain numbers.",
-        "上下文窗口和最大输出必须是纯数字。",
-    )
-    .to_owned()
-}
-
 /// Parses the stdio form's environment line: `KEY=VALUE` pairs separated by
 /// commas or whitespace, values optionally quoted. Empty input is no env.
 pub fn parse_env_line(line: &str) -> Result<BTreeMap<String, String>, String> {
@@ -132,6 +111,7 @@ pub fn build_mcp_server(
                 command: None,
                 args: Vec::new(),
                 env: Default::default(),
+                headers: Default::default(),
                 endpoint: Some(endpoint.to_owned()),
                 key_header: Some("bearer".to_owned()),
             }
@@ -155,6 +135,7 @@ pub fn build_mcp_server(
                 command: Some(program),
                 args: words.collect(),
                 env,
+                headers: Default::default(),
                 endpoint: None,
                 key_header: None,
             }
@@ -175,69 +156,6 @@ pub fn build_mcp_server(
         .validate()
         .map_err(|error| format!("invalid MCP server: {}", error.summary()))?;
     Ok(server)
-}
-
-/// Validates and builds one custom provider from form inputs before
-/// dispatching, so duplicate ids or invalid URLs cannot overwrite an existing
-/// key or leave `settings` in an unsaveable state.
-pub fn build_custom_provider(
-    existing_ids: &[String],
-    id: &str,
-    kind: &str,
-    base_url: &str,
-    model: &str,
-    context_limit: &str,
-    max_output: &str,
-) -> Result<mycode_config::ProviderSettings, String> {
-    let id = id.trim();
-    let kind = kind.trim();
-    let base_url = base_url.trim();
-    let model = model.trim();
-    if id.is_empty() || base_url.is_empty() || model.is_empty() {
-        return Err(crate::i18n::t(
-            "Fill in the id, base URL, and model.",
-            "请填写 ID、Base URL 和模型。",
-        )
-        .to_owned());
-    }
-    if existing_ids.iter().any(|existing| existing == id) {
-        return Err(format!(
-            "{} '{id}'",
-            crate::i18n::t("A provider already uses the id", "已有服务商使用此 ID：")
-        ));
-    }
-    if existing_ids.len() >= mycode_config::MAX_PROVIDERS {
-        return Err(format!(
-            "{} {}",
-            crate::i18n::t("Providers, at most:", "服务商数量上限："),
-            mycode_config::MAX_PROVIDERS
-        ));
-    }
-    let (context_limit, max_output) = match (
-        parse_token_field(context_limit),
-        parse_token_field(max_output),
-    ) {
-        (Ok(a), Ok(b)) => (a, b),
-        _ => return Err(token_fields_error()),
-    };
-    let provider = mycode_config::ProviderSettings {
-        id: id.to_owned(),
-        kind: kind.to_owned(),
-        base_url: base_url.to_owned(),
-        models: vec![model.to_owned()],
-        enabled: true,
-        context_limit,
-        max_output,
-        hidden_models: Vec::new(),
-    };
-    let probe = mycode_config::AppSettings {
-        providers: vec![provider.clone()],
-        ..mycode_config::AppSettings::default()
-    };
-    probe
-        .validate()
-        .map_err(|error| format!("invalid provider: {}", error.summary()))?;
-    Ok(provider)
 }
 
 /// Merges picked choices and free text into the answers one ask card sends.
@@ -272,10 +190,7 @@ pub fn collect_ask_answers(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_custom_provider, build_mcp_server, collect_ask_answers, normalized_key_input,
-        parse_env_line, parse_token_field,
-    };
+    use super::{build_mcp_server, collect_ask_answers, normalized_key_input, parse_env_line};
 
     #[test]
     fn env_line_keeps_commas_inside_quoted_values() {
@@ -342,50 +257,6 @@ mod tests {
         );
         assert_eq!(stdio.env.get("FOO").map(String::as_str), Some("bar"));
         assert!(stdio.endpoint.is_none());
-    }
-
-    #[test]
-    fn custom_provider_validates_id_url_duplicates_and_token_fields() {
-        assert_eq!(parse_token_field("").unwrap(), None);
-        assert_eq!(parse_token_field("200000").unwrap(), Some(200000));
-        assert!(parse_token_field("lots").is_err());
-
-        let provider = build_custom_provider(
-            &[],
-            "acme",
-            "anthropic-messages",
-            "https://api.example.com",
-            "claude-x",
-            "200000",
-            "8192",
-        )
-        .expect("valid custom provider");
-        assert_eq!(provider.id, "acme");
-        assert_eq!(provider.context_limit, Some(200000));
-        assert_eq!(provider.max_output, Some(8192));
-
-        let dupe = build_custom_provider(
-            &["acme".to_owned()],
-            "acme",
-            "anthropic-messages",
-            "https://api.example.com",
-            "claude-x",
-            "",
-            "",
-        )
-        .expect_err("duplicate id must be refused");
-        assert!(dupe.contains("already uses the id 'acme'"), "{dupe}");
-
-        let bad_url = build_custom_provider(
-            &[],
-            "acme2",
-            "anthropic-messages",
-            "not a url",
-            "claude-x",
-            "",
-            "",
-        );
-        assert!(bad_url.is_err());
     }
 
     #[test]

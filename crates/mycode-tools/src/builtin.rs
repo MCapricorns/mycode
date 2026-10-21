@@ -16,7 +16,6 @@ pub(crate) mod process;
 pub mod read;
 pub(crate) mod search_report;
 pub mod shell;
-pub mod web;
 pub mod write;
 
 pub use agent::{
@@ -31,7 +30,6 @@ pub use find::FindTool;
 pub use grep::GrepTool;
 pub use read::ReadTool;
 pub use shell::ShellTool;
-pub use web::{FetchContentTool, WebHit, WebHost, WebPage, WebSearchTool};
 pub use write::WriteTool;
 
 use std::sync::Arc;
@@ -40,8 +38,8 @@ use crate::registry::ToolRegistry;
 use crate::tool::ToolDyn;
 
 /// The host-independent builtin tools as type-erased, registry-ready
-/// handles. `ask`, `agent`, and `web` tools need host plumbing and are
-/// registered by their callers.
+/// handles. `ask` and `agent` need host plumbing and are registered by
+/// their callers.
 pub(crate) fn builtin_tools() -> Vec<Arc<dyn ToolDyn>> {
     vec![
         Arc::new(ReadTool),

@@ -10,14 +10,11 @@ mod data;
 mod general;
 mod mcp;
 mod models;
-mod provider_detail;
 mod shortcuts;
 mod skills;
-mod web;
 mod widgets;
 
 pub(crate) use mcp::McpForm;
-pub(crate) use models::ProviderForm;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
@@ -199,9 +196,6 @@ pub(super) fn render_settings_view(
                                         SettingsSection::Mcp => {
                                             mcp::render_mcp_section(workspace, window, cx)
                                         }
-                                        SettingsSection::Web => {
-                                            web::render_web_section(workspace, window, cx)
-                                        }
                                         SettingsSection::Data => {
                                             data::render_data_section(workspace, cx)
                                         }
@@ -222,21 +216,11 @@ fn settings_page_key(workspace: &Workspace) -> String {
     let vm = workspace.vm();
     match vm.settings_section {
         SettingsSection::Models => match vm.models_subview {
-            crate::view_model::ModelsSubview::List => format!(
-                "models-list-{}",
-                vm.provider_detail.as_deref().unwrap_or("all")
-            ),
-            crate::view_model::ModelsSubview::Catalog => "models-catalog".to_owned(),
-            crate::view_model::ModelsSubview::OAuth => "models-oauth".to_owned(),
-            crate::view_model::ModelsSubview::Custom => "models-custom".to_owned(),
-        },
-        SettingsSection::Web => match vm.web_detail.as_deref() {
-            Some(id) => format!("web-detail-{id}"),
-            None => "web-list".to_owned(),
+            crate::view_model::ModelsSubview::List => "magpie-list".to_owned(),
+            crate::view_model::ModelsSubview::Catalog => "magpie-models".to_owned(),
         },
         SettingsSection::Mcp => match vm.mcp_subview {
             crate::view_model::McpSubview::List => "mcp-list".to_owned(),
-            crate::view_model::McpSubview::Catalog => "mcp-catalog".to_owned(),
             crate::view_model::McpSubview::Json => "mcp-json".to_owned(),
             crate::view_model::McpSubview::Custom => "mcp-custom".to_owned(),
         },
@@ -259,14 +243,18 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     let desk = crate::ui::desk::Desk::of(theme);
     let vm = workspace.vm();
     let settings = vm.settings.as_ref();
-    let providers = settings.map(|s| s.providers.iter().filter(|p| p.enabled).count());
     let servers = settings.map(|s| s.mcp_servers.iter().filter(|m| m.enabled).count());
-    let backends = settings.map(|s| s.web_backends.iter().filter(|b| b.enabled).count());
-    let missing_key = settings.is_some_and(|s| {
-        s.providers
-            .iter()
-            .any(|p| p.enabled && !s.providers_with_keys.contains(&p.id))
-    });
+    let magpie = settings.map(|s| s.magpie.clone()).unwrap_or_default();
+    let models = vm
+        .catalog
+        .as_ref()
+        .and_then(|catalog| catalog.provider(mycode_config::MAGPIE_PROVIDER_ID))
+        .map(|provider| provider.models.len());
+    let magpie_lamp = if !magpie.is_active() || models == Some(0) {
+        Some(desk.amber)
+    } else {
+        None
+    };
     let update_lamp = match vm.update {
         UpdateState::Available { .. } | UpdateState::Ready { .. } => Some(desk.amber),
         // A failed check is the top-right toast. The About row stays
@@ -279,8 +267,8 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
         (
             SettingsSection::Models,
             NavBadge {
-                count: providers,
-                lamp: missing_key.then_some(desk.red),
+                count: models,
+                lamp: magpie_lamp,
             },
         ),
         (
@@ -308,13 +296,6 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
             SettingsSection::Mcp,
             NavBadge {
                 count: servers,
-                lamp: None,
-            },
-        ),
-        (
-            SettingsSection::Web,
-            NavBadge {
-                count: backends,
                 lamp: None,
             },
         ),

@@ -1,6 +1,5 @@
-//! The settings editor half of the workspace: form entities, backend rows,
-//! MCP forms, subagent routes, and the save pipeline they all feed. Provider
-//! rows live in [`providers`].
+//! The settings editor half of the workspace: form entities, MCP forms,
+//! subagent routes, and the save pipeline they all feed.
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::{AppContext as _, Context, Entity, Window};
 
@@ -10,7 +9,7 @@ use crate::ui::McpForm;
 use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
-mod providers;
+mod inputs;
 
 impl Workspace {
     /// The proxy URL field. Only a value that parses as a proxy reaches the
@@ -74,95 +73,6 @@ impl Workspace {
         self.driver_do(|d, fx| d.test_proxy(fx), cx);
     }
 
-    // ---- web search backends ----
-
-    /// The row's enable switch. Disabling is immediate; enabling first runs
-    /// a key-resolving search probe against the row, landing `on` only when
-    /// the probe returns `Ok`. A missing key or dead endpoint can therefore
-    /// never silently turn a backend on.
-    pub(crate) fn on_backend_toggled(
-        &mut self,
-        index: usize,
-        enabled: bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.driver_do(
-            |driver, fx| driver.toggle_web_backend(index, enabled, fx),
-            cx,
-        );
-    }
-
-    pub(crate) fn web_key_input(
-        &mut self,
-        id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        self.web_key_inputs
-            .entry(id.to_owned())
-            .or_insert_with(|| {
-                let input = cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder(crate::i18n::t(
-                            "Paste API key (Bearer is added)",
-                            "粘贴 API 密钥（自动加 Bearer）",
-                        ))
-                        .masked(true)
-                });
-                cx.subscribe_in(&input, window, |_, _, event, _, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        cx.notify();
-                    }
-                })
-                .detach();
-                input
-            })
-            .clone()
-    }
-
-    pub(crate) fn on_save_web_key(
-        &mut self,
-        id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(input) = self.web_key_inputs.get(id).cloned() else {
-            return;
-        };
-        let raw = input.read(cx).value().to_string();
-        if !self.driver.save_key(format!("web-{id}"), &raw) {
-            return;
-        }
-        input.update(cx, |state, cx| state.set_value("", window, cx));
-        self.web_key_replace.remove(id);
-        cx.notify();
-    }
-
-    pub(crate) fn on_cancel_replace_web_key(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.web_key_replace.remove(id);
-        self.web_key_inputs.remove(id);
-        cx.notify();
-    }
-
-    pub(crate) fn web_key_replacing(&self, id: &str) -> bool {
-        self.web_key_replace.contains(id)
-    }
-
-    /// Opens an empty field so a stored web key can be replaced. The stored
-    /// secret is never copied into the field.
-    pub(crate) fn on_replace_web_key(
-        &mut self,
-        id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(input) = self.web_key_inputs.get(id).cloned() {
-            input.update(cx, |state, cx| state.set_value("", window, cx));
-        }
-        self.web_key_replace.insert(id.to_owned());
-        cx.notify();
-    }
-
     // ---- MCP servers ----
 
     pub(crate) fn mcp_form(
@@ -172,22 +82,6 @@ impl Workspace {
     ) -> Entity<McpForm> {
         self.mcp_form
             .get_or_insert_with(|| McpForm::new(window, cx))
-            .clone()
-    }
-
-    pub(crate) fn mcp_key_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        self.mcp_key_input
-            .get_or_insert_with(|| {
-                cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder(crate::i18n::t("Paste API key", "粘贴 API 密钥"))
-                        .masked(true)
-                })
-            })
             .clone()
     }
 

@@ -327,7 +327,6 @@ fn section_keywords(section: SettingsSection) -> &'static [&'static str] {
         SettingsSection::Agents => &["agents", "子代理", "scout", "artisan", "roles", "角色"],
         SettingsSection::Skills => &["skills", "技能", "slash", "斜杠"],
         SettingsSection::Mcp => &["mcp", "tool servers", "工具服务器"],
-        SettingsSection::Web => &["web", "search", "网页", "搜索"],
         SettingsSection::Data => &["data", "数据", "export", "import", "导出", "导入"],
         SettingsSection::About => &["about", "关于", "version", "updates", "版本", "更新"],
     }
@@ -352,19 +351,6 @@ mod tests {
         SkillEntry, WorkspaceState, reduce,
     };
 
-    fn provider(id: &str, model: &str, enabled: bool) -> mycode_config::ProviderSettings {
-        mycode_config::ProviderSettings {
-            id: id.to_owned(),
-            kind: "openai-completions".to_owned(),
-            base_url: "https://api.example.com/v1".to_owned(),
-            models: vec![model.to_owned()],
-            enabled,
-            context_limit: None,
-            max_output: None,
-            hidden_models: Vec::new(),
-        }
-    }
-
     fn session(id: &str, title: &str, corrupt: bool) -> crate::view_model::SessionSummary {
         crate::view_model::SessionSummary {
             session_id: id.to_owned(),
@@ -378,11 +364,16 @@ mod tests {
     }
 
     fn populated() -> WorkspaceState {
-        let mut document = mycode_config::AppSettings::default();
-        document.providers.push(provider("openai", "gpt-5", true));
-        document
-            .providers
-            .push(provider("off", "hidden-model", false));
+        let mut document = mycode_config::AppSettings {
+            magpie: mycode_config::MagpieSettings {
+                enabled: true,
+                base_url: "http://127.0.0.1:3425/v1".to_owned(),
+                api_key: "magpie-mycode".to_owned(),
+                model: "gpt-5".to_owned(),
+                hidden_models: vec!["hidden-model".to_owned()],
+            },
+            ..mycode_config::AppSettings::default()
+        };
         document.mcp_servers.push(mycode_config::McpServerSettings {
             id: "docs".to_owned(),
             enabled: true,
@@ -390,11 +381,12 @@ mod tests {
             command: None,
             args: Vec::new(),
             env: std::collections::BTreeMap::new(),
+            headers: Default::default(),
             endpoint: None,
             key_header: None,
         });
         WorkspaceState {
-            settings: Some(SettingsState::from_settings(&document, 1, Vec::new())),
+            settings: Some(SettingsState::from_settings(&document, 1)),
             sessions: vec![
                 session("ses-live", "Fix the parser", false),
                 session("ses-bad", "Broken", true),
@@ -406,9 +398,9 @@ mod tests {
                 global: false,
             }],
             mcp_tools: vec![("docs".to_owned(), vec!["search".to_owned()])],
-            selected_provider: Some("openai".to_owned()),
+            selected_provider: Some("magpie".to_owned()),
             selected_model: Some("gpt-5".to_owned()),
-            recent_models: vec![mycode_config::ModelPin::new("openai", "gpt-5")],
+            recent_models: vec![mycode_config::ModelPin::new("magpie", "gpt-5")],
             ..WorkspaceState::default()
         }
     }

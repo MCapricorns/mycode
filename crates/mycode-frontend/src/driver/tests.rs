@@ -533,9 +533,10 @@ fn a_steer_reaches_the_running_turn_and_a_refusal_queues_it() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// With no turn running there is nothing to steer: the draft is sent.
+/// With no turn running there is nothing to steer: the keypress explains
+/// itself instead of sending or queueing the draft.
 #[test]
-fn a_steer_with_no_turn_running_is_a_send() {
+fn a_steer_with_no_turn_running_does_not_send_or_queue() {
     use mycode_app::{BranchId, SessionId};
 
     let (mut driver, root) = scratch_driver("steer-idle");
@@ -544,8 +545,19 @@ fn a_steer_with_no_turn_running_is_a_send() {
     driver.vm.active = Some(conversation(&session, &branch));
     let mut out = Vec::new();
     driver.steer_send("start here", &mut out);
-    assert!(driver.vm.sending, "the draft started a turn");
+    assert!(!driver.vm.sending, "the draft did not start a turn");
     assert!(driver.vm.pending_steers.is_empty());
+    assert!(driver.vm.queued.is_empty(), "the draft did not queue");
+    assert!(
+        out.iter().any(|effect| matches!(
+            effect,
+            super::Effect::Toast {
+                kind: super::ToastKind::Warning,
+                ..
+            }
+        )),
+        "the refused steer says why"
+    );
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }

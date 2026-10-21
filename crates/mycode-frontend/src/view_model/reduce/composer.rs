@@ -207,6 +207,7 @@ mod tests {
             command: None,
             args: Vec::new(),
             env: std::collections::BTreeMap::new(),
+            headers: Default::default(),
             endpoint: None,
             key_header: None,
         }

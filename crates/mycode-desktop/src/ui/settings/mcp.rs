@@ -1,10 +1,9 @@
-//! The MCP settings page: configured server rows, the built-in catalog, JSON
-//! import, and the custom add-server form (plus the row builder for configured
-//! servers).
+//! The MCP settings page: configured server rows, the read-only servers
+//! magpie's Library writes, JSON import, and the custom add-server form.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputState, Textarea};
+use gpui_kit::component::input::{InputState, Textarea};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
@@ -28,14 +27,13 @@ pub(super) fn render_mcp_section(
 ) -> AnyElement {
     match workspace.vm().mcp_subview {
         crate::view_model::McpSubview::List => render_mcp_list(workspace, cx),
-        crate::view_model::McpSubview::Catalog => render_mcp_catalog_page(workspace, window, cx),
         crate::view_model::McpSubview::Json => render_mcp_json_page(workspace, window, cx),
         crate::view_model::McpSubview::Custom => render_mcp_custom_page(workspace, window, cx),
     }
 }
 
 fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
-    let (mcp_rows, has_catalog) = {
+    let mcp_rows = {
         let vm = workspace.vm();
         let Some(settings) = vm.settings.as_ref() else {
             return div().into_any_element();
@@ -81,18 +79,53 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                 }
             })
             .collect();
-        let has_catalog = mycode_config::builtin_mcp_servers().iter().any(|server| {
-            !settings
-                .mcp_servers
-                .iter()
-                .any(|configured| configured.id == server.id)
-        });
-        (rows, has_catalog)
+        rows
     };
+    let theme = cx.theme();
     let mcp_row_elements: Vec<AnyElement> =
         mcp_rows.into_iter().map(|row| mcp_row(row, cx)).collect();
+    let magpie_servers = mycode_config::global_mcp_servers(workspace.home()).unwrap_or_default();
+    let magpie_rows: Vec<AnyElement> = magpie_servers
+        .iter()
+        .map(|server| {
+            let target = match server.transport.as_str() {
+                "stdio" => server.command.clone().unwrap_or_default(),
+                _ => server.endpoint.clone().unwrap_or_default(),
+            };
+            div()
+                .id(format!("mcp-magpie-{}", server.id))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .py_1()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(Icon::new(IconName::Lock).xsmall())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().text_sm().child(server.id.clone()))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(target),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("magpie"),
+                )
+                .into_any_element()
+        })
+        .collect();
 
-    let theme = cx.theme();
     let mcp_empty = mcp_row_elements.is_empty();
     div()
         .id("mcp-section")
@@ -132,21 +165,6 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                     .flex_wrap()
                     .gap_2()
                     .pt_1()
-                    .when(has_catalog, |this| {
-                        this.child(
-                            Button::new("mcp-open-catalog")
-                                .icon(IconName::Plus)
-                                .label(t("Add from catalog\u{2026}", "从目录添加\u{2026}"))
-                                .small()
-                                .outline()
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_show_mcp_subview(
-                                        crate::view_model::McpSubview::Catalog,
-                                        cx,
-                                    );
-                                })),
-                        )
-                    })
                     .child(
                         Button::new("mcp-open-json")
                             .icon(IconName::File)
@@ -172,84 +190,32 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                     .into_any_element(),
             ],
         ))
-        .into_any_element()
-}
-
-fn render_mcp_catalog_page(
-    workspace: &mut Workspace,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-) -> AnyElement {
-    let catalog_rows: Vec<(String, String)> = {
-        let Some(settings) = workspace.vm().settings.as_ref() else {
-            return div().into_any_element();
-        };
-        mycode_config::builtin_mcp_servers()
-            .into_iter()
-            .filter(|server| {
-                !settings
-                    .mcp_servers
-                    .iter()
-                    .any(|configured| configured.id == server.id)
-            })
-            .map(|server| (server.id, server.transport))
-            .collect()
-    };
-    let catalog_row_elements: Vec<AnyElement> = catalog_rows
-        .iter()
-        .map(|(id, transport)| builtin_catalog_row(id, transport, cx))
-        .collect();
-    let key_input = workspace.mcp_key_input(window, cx);
-    let header = super::subview_header(
-        t("MCP", "MCP"),
-        t("Add from catalog", "从目录添加"),
-        Some(t(
-            "Paste a new key, then Add. A stored key is not shown here.",
-            "粘贴新的密钥后点击添加。已保存的密钥不会在这里显示。",
-        )),
-        |workspace, cx| {
-            workspace.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
-        },
-        cx,
-    );
-    let theme = cx.theme();
-    div()
-        .id("mcp-catalog-page")
-        .flex()
-        .flex_col()
-        .gap_3()
-        .child(header)
         .child(settings_card(
-            "mcp-catalog",
-            t("Built-in servers", "内置服务器"),
+            "mcp-magpie",
+            t("From magpie", "来自 magpie"),
             Some(t(
-                "The key field starts empty. Bearer is added on the wire.",
-                "密钥输入框默认为空。Bearer 会在请求时自动附加。",
+                "magpie's Library writes ~/.mycode/mcp.json. These rows are read-only here; \
+                 a server you configure with the same id wins.",
+                "magpie 的 Library 写入 ~/.mycode/mcp.json。这些行在这里是只读的；\
+                 同 id 的自有服务器优先。",
             )),
             theme,
-            vec![
+            vec![if magpie_rows.is_empty() {
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(t(
+                        "No library servers. magpie adds them from its Library page.",
+                        "还没有 Library 服务器。magpie 会在 Library 页添加。",
+                    ))
+                    .into_any_element()
+            } else {
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .children(catalog_row_elements)
-                    .child(
-                        div()
-                            .id("mcp-key-row")
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .pt_2()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(t("Key for the server you add", "要添加的服务器的密钥")),
-                            )
-                            .child(div().h(px(28.)).text_sm().child(Input::new(&key_input))),
-                    )
-                    .into_any_element(),
-            ],
+                    .children(magpie_rows)
+                    .into_any_element()
+            }],
         ))
         .into_any_element()
 }
@@ -536,44 +502,6 @@ fn mcp_row(row: McpRow, cx: &Context<Workspace>) -> AnyElement {
         .into_any_element()
 }
 
-fn builtin_catalog_row(id: &str, transport: &str, cx: &mut Context<Workspace>) -> AnyElement {
-    let theme = cx.theme();
-    div()
-        .id(format!("mcp-catalog-{id}"))
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .gap_2()
-        .p_2()
-        .rounded(skin::radius_control())
-        .border_1()
-        .border_color(skin::glass_border(theme))
-        .bg(skin::frost(theme))
-        .child(div().text_sm().child(format!("{id} \u{b7} {transport}")))
-        .child(
-            Button::new(format!("mcp-add-{id}"))
-                .label(t("Add", "添加"))
-                .small()
-                .outline()
-                .on_click({
-                    let id = id.to_owned();
-                    cx.listener(move |workspace, _, window, cx| {
-                        let server = mycode_config::builtin_mcp_servers()
-                            .into_iter()
-                            .find(|server| server.id == id)
-                            .expect("catalog entry");
-                        let input = workspace.mcp_key_input(window, cx);
-                        let key = crate::workspace::normalized_key_input(&input.read(cx).value())
-                            .unwrap_or_default();
-                        input.update(cx, |state, cx| state.set_value("", window, cx));
-                        workspace.on_add_builtin_mcp(server, &key, cx);
-                    })
-                }),
-        )
-        .into_any_element()
-}
-
 /// Inline add-MCP-server form state (http or stdio).
 pub(crate) struct McpForm {
     /// Server identity input.
@@ -595,16 +523,13 @@ impl McpForm {
         let mut make = |placeholder: &'static str| {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
-        let id = make(t("id, e.g. my-mcp", "标识，例如 my-mcp"));
+        let id = make("id, e.g. my-mcp");
         let endpoint = make("https://mcp.example.com/mcp");
         let command = make("npx -y @modelcontextprotocol/server-filesystem C:\\projects");
-        let env = make(t(
-            "KEY=value, OTHER=value (optional)",
-            "KEY=value, OTHER=value（可选）",
-        ));
+        let env = make("KEY=value, OTHER=value (optional)");
         let api_key = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(t("api key (leave empty to skip)", "API 密钥（留空则跳过）"))
+                .placeholder("api key (leave empty to skip)")
                 .masked(true)
         });
         cx.new(|_| Self {

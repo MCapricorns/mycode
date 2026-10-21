@@ -533,17 +533,6 @@ fn opencode_family_snapshots_cover_effort_cache_and_usage() {
     assert_eq!(pro["thinking"]["type"], "disabled");
     assert!(pro.get("reasoning_effort").is_none());
 
-    let document = crate::catalog::bundled();
-    for id in ["bedrock", "vertex", "google", "azure"] {
-        assert!(
-            document.provider(id).is_none(),
-            "{id} is not a catalog preset"
-        );
-    }
-    assert!(document.providers.iter().all(|provider| {
-        let id = provider.id.to_ascii_lowercase();
-        !id.contains("bedrock") && !id.contains("vertex")
-    }));
     let custom = anthropic_body(
         "claude-sonnet-4-6",
         "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic/v1/messages",
@@ -643,7 +632,6 @@ fn unpublished_messages_max_tokens_follows_output_token_max_without_a_cap() {
 
 #[test]
 fn kimi_coding_plan_models_match_from_the_id_on_a_proxy() {
-    crate::catalog::install_kimi_fixture();
     let mut request = Request::new()
         .with_system_prompt("stable")
         .with_reasoning(ReasoningLevel::Max)
@@ -698,14 +686,12 @@ fn kimi_coding_plan_models_match_from_the_id_on_a_proxy() {
     assert!(coding_off.get("reasoning_effort").is_none());
 }
 
-/// models.dev publishes `low` / `high` / `max` for `kimi-for-coding`.
-/// OpenCode sends that as `reasoningEffort` on `@ai-sdk/openai-compatible`
+/// The app sends `reasoningEffort` on `@ai-sdk/openai-compatible`
 /// (`reasoningEffort` in `transform.ts`), which is wire `reasoning_effort`,
-/// in addition to the K2 `thinking` toggle. `kimi-for-coding-highspeed`
-/// publishes no effort list.
+/// in addition to the K2 `thinking` toggle. The gateway catalog decides
+/// which levels a model offers; the id decides the wire token.
 #[test]
 fn kimi_for_coding_sends_published_effort_beside_thinking() {
-    crate::catalog::install_kimi_fixture();
     let hosts = [
         "https://api.kimi.com/coding/v1/chat/completions",
         "http://127.0.0.1:18080/kimi/v1/chat/completions",
@@ -736,7 +722,7 @@ fn kimi_for_coding_sends_published_effort_beside_thinking() {
             );
             assert!(
                 fast.get("reasoning_effort").is_none(),
-                "{level:?} {endpoint}"
+                "the highspeed row has no effort list: {level:?} {endpoint}"
             );
         }
     }

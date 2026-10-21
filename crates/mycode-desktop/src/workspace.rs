@@ -1,6 +1,6 @@
 //! The workspace window view: title bar, sessions sidebar, chat column,
 //! right inspector, and the full-page settings view.
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::Root;
@@ -14,7 +14,7 @@ use mycode_config::HomeLayout;
 use mycode_frontend::driver::{Effect, FrontendDriver};
 use mycode_frontend::stream;
 
-use crate::ui::{McpForm, ProviderForm};
+use crate::ui::McpForm;
 use crate::view_model::{FrontendAction, MainView, WorkspaceState};
 
 mod appearance;
@@ -29,7 +29,6 @@ mod settings_editor;
 mod toasts;
 mod updates_data;
 
-pub(crate) use mycode_frontend::forms::normalized_key_input;
 pub(crate) use toasts::{Toast, ToastKind};
 
 /// Seconds a confirmed close stays armed before the next request asks again.
@@ -249,16 +248,9 @@ pub struct Workspace {
     proxy_input: Option<Entity<InputState>>,
     /// The proxy field shows the stored URL on its next render.
     proxy_sync_pending: bool,
-    provider_form: Option<Entity<ProviderForm>>,
     mcp_form: Option<Entity<McpForm>>,
-    mcp_key_input: Option<Entity<InputState>>,
+
     mcp_json_input: Option<Entity<TextareaState>>,
-    web_key_inputs: HashMap<String, Entity<InputState>>,
-    /// Vendor ids whose empty replace-key field is open. A stored key is
-    /// never written back into the field.
-    web_key_replace: HashSet<String>,
-    preset_key_input: Option<Entity<InputState>>,
-    preset_search_input: Option<Entity<InputState>>,
     /// Search box inside the model step of the shared picker.
     model_picker_input: Option<Entity<InputState>>,
     /// Top-bar filter for the settings navigation.
@@ -272,16 +264,6 @@ pub struct Workspace {
     /// The next frame should focus the workspace node. Set when settings
     /// opens, because the previously focused composer is no longer mounted.
     settings_focus_pending: bool,
-    /// Filter for the add-from-catalog model checklist.
-    preset_model_search_input: Option<Entity<InputState>>,
-    provider_key_inputs: HashMap<String, Entity<InputState>>,
-    /// Provider ids whose empty replace-key field is open.
-    provider_key_replace: HashSet<String>,
-    /// Endpoint fields for provider detail. Seeded from the base URL only;
-    /// a stored API key is never written here.
-    provider_endpoint_inputs: HashMap<String, Entity<InputState>>,
-    /// Last base URL copied into each endpoint field from settings.
-    provider_endpoint_seed: HashMap<String, String>,
     /// The next model-step render should clear and focus the search box.
     picker_focus_pending: bool,
     ask_inputs: Vec<Entity<InputState>>,
@@ -365,25 +347,15 @@ impl Workspace {
             composer_busy: false,
             proxy_input: None,
             proxy_sync_pending: false,
-            provider_form: None,
             mcp_form: None,
-            mcp_key_input: None,
+
             mcp_json_input: None,
-            web_key_inputs: HashMap::new(),
-            web_key_replace: HashSet::new(),
-            preset_key_input: None,
-            preset_search_input: None,
             model_picker_input: None,
             settings_search_input: None,
             session_filter_input: None,
             command_palette: None,
             palette_focus_pending: false,
             settings_focus_pending: false,
-            preset_model_search_input: None,
-            provider_key_inputs: HashMap::new(),
-            provider_key_replace: HashSet::new(),
-            provider_endpoint_inputs: HashMap::new(),
-            provider_endpoint_seed: HashMap::new(),
             picker_focus_pending: false,
             ask_inputs: Vec::new(),
             menu_navigation: menus::MenuNavigation::default(),
@@ -770,16 +742,6 @@ impl Workspace {
         self.apply_action(FrontendAction::ShowModelsSubview(view), cx);
     }
 
-    /// Opens one vendor's Web detail page (key, enable switch, endpoint).
-    pub(crate) fn on_open_web_detail(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.apply_action(FrontendAction::WebDetailOpened(Some(id.to_owned())), cx);
-    }
-
-    /// Returns from a Web vendor detail to the backend list.
-    pub(crate) fn on_close_web_detail(&mut self, cx: &mut Context<Self>) {
-        self.apply_action(FrontendAction::WebDetailOpened(None), cx);
-    }
-
     /// Switches the MCP settings sub-page.
     pub(crate) fn on_show_mcp_subview(
         &mut self,
@@ -787,18 +749,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.apply_action(FrontendAction::ShowMcpSubview(view), cx);
-    }
-
-    pub(crate) fn on_toggle_provider_kind_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(FrontendAction::ProviderKindMenuToggled(open), cx);
-    }
-
-    /// Picks the custom provider form's wire protocol.
-    pub(crate) fn on_select_provider_kind(&mut self, kind: &str, cx: &mut Context<Self>) {
-        if let Some(form) = self.provider_form.clone() {
-            form.update(cx, |form, _| form.kind = kind.to_owned());
-        }
-        self.apply_action(FrontendAction::ProviderKindMenuToggled(false), cx);
     }
 
     pub(crate) fn on_toggle_mcp_transport_menu(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -959,6 +909,11 @@ impl Workspace {
 
     pub(crate) fn vm(&self) -> &WorkspaceState {
         self.driver.vm()
+    }
+
+    /// The owned home, for readers of magpie's Library files.
+    pub(crate) fn home(&self) -> &HomeLayout {
+        self.driver.home()
     }
 
     pub(crate) fn focus_handle(&self) -> &gpui_kit::FocusHandle {

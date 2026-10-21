@@ -361,6 +361,7 @@ mod tests {
             env: BTreeMap::new(),
             endpoint: None,
             key_header: None,
+            headers: BTreeMap::new(),
         }
     }
 

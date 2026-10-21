@@ -1,8 +1,8 @@
 # mycode-providers
 
-把一条已配置的端点变成 `mycode-core::Provider`。协议只有三种：`anthropic-messages`、`openai-completions`、`openai-responses`。厂商差异放在 `family.rs` 的数据表里，新厂商通常只改设置。
+MCode 只通过本机 magpie 网关请求模型：`base_url` 是 magpie 的 `/v1`，密钥是 magpie 给 MCode 的 `magpie-mycode`。网关的 `GET /v1/models` 决定可选模型和上下文窗口；MCode 不再保存厂商列表、models.dev 目录或 OAuth 凭据。协议仍是三种：`anthropic-messages`、`openai-completions`、`openai-responses`，由 magpie 按模型选择。
 
-密钥不在 `settings.json`。`ResolvedProvider::resolve` 由调用方传入 key 和 User-Agent。
+密钥不在 `settings.json`：`settings.magpie.apiKey` 是 magpie 写入的网关密钥，`ResolvedProvider::resolve` 由调用方传入它和 User-Agent。
 
 ## 模块
 
@@ -20,8 +20,9 @@
 | `transport` | `SseTransport` trait 与 reqwest 实现 |
 | `http_pin` | DNS 解析、地址检查、钉住连接、手动重定向 |
 | `proxy` | 系统代理或手动代理路由；本机地址直连 |
-| `oauth` | Copilot / Codex 设备码登录、轮询、令牌刷新 |
-| `catalog` | models.dev 下载与缓存，以及编进二进制的 Codex / OpenDesign 行 |
+| `catalog` | 网关 `/v1/models` 的 `CatalogDocument` 类型，以及 `catalog/magpie.rs` 的解析 |
+
+MCode 的本地 magpie 网关是回环地址，因此 `proxy` 对 `127.0.0.1` / `localhost` 直连；网关自身再决定上游代理。
 
 各协议的请求体要点：Anthropic 的 `system` 是 text block 数组，`tool_result` 会合并进同一条 user 消息；Chat Completions 的 system 用 `\n\n` 拼接，固定发 `stream_options.include_usage`，图片转 `image_url` 的 data URL；Responses 的 system 放在 `instructions`，工具是扁平结构。
 
@@ -125,27 +126,15 @@ K3 识别只看路径段：`k3`、`k3-*`、`kimi-k3`、`kimi-k3-*`。`k30`、`k3
 
 ## 目录
 
-models.dev 的 `https://models.dev/api.json` 由 `catalog` 下载并写入家目录的 `catalog-cache.json`。刷新要发 HTTP，所以这部分在 providers，`mycode-config` 不依赖网络。
+`mycode-app::magpie::fetch_models` 在启动时和手动刷新时请求网关的 `GET /v1/models`，把回答构造成 `CatalogDocument`，只保留 `magpie` 这一行。目录不落盘、不缓存 24 小时：网关是唯一来源，magpie 换了模型后刷新即可。读取失败时保留上一次内存里的列表，界面显示网关状态；没有模型列表就不能开始新回合。
 
-离线基线只有两行硬编码：`openai_codex_preset()` 和 `catalog/opendesign.rs` 的 `CURATED`。models.dev 不含这两个服务商。每次加载云端文档、物化缓存和生成基线时都会调用 `codex::attach` + `opendesign::attach`，所以它们不受云端数据影响。
+每条模型只带网关给出的 `id`、显示名、上下文窗口和输出上限；思考档位由模型 id 决定（见 `family.rs`），未知模型按通用兜底。MCode 不再下载 models.dev，也没有编进二进制的 Codex/OpenDesign 行。
 
-缓存 24 小时内不发请求（`DEFAULT_MAX_AGE_SECS`）。之后带 `If-None-Match` 条件请求；304 只更新 `fetchedAt` 和 ETag。下载失败保留旧缓存；没有缓存就用基线。云端文档和缓存上限都是 32 MiB，缓存格式版本 3。启动时只校验缓存信封，模型列表在第一次 `document()` 时才解析。
-
-旧的非零格式版本迁移为基线；信封损坏时把原字节备份为 `catalog-cache.json.broken-<nanos>`，再写入基线；I/O 读失败不动原文件，内存里用基线。信封合法但文档不可用时，第一次解析静默回退到基线。
-
-解析规则：带任意 `status` 的模型跳过；`npm` 含 `bedrock` / `vertex` / `azure` / `google` 的服务商跳过；每个服务商最多 512 个模型；字符串字段最多 8 KiB；思考档位只取 `reasoning_options` 的 toggle 和 effort，effort 为空时取 `variants` 的键，最多 16 个，未知但合法的标识符保留，`default` 和非标识符丢弃。设备码服务商始终使用固定端点，不使用云端文档里的控制台 URL。
-
-`model_for_endpoint` 的查找顺序：先按 provider id，再按精确 base URL；两者都没有命中任何服务商时，才按模型 id 搜整个目录（优先带思考档位的行，其次有输出上限的行）。命中了服务商但该服务商没有这个模型时返回 `None`，不会借用别家的行。
+`model_for_endpoint` 的查找顺序：先按 provider id，再按精确 base URL；两者都没有命中任何服务商时，才按模型 id 搜整个目录。命中了服务商但该服务商没有这个模型时返回 `None`，不会借用别家的行。
 
 ## 登录
 
-`github-copilot` 和 `openai-codex` 用设备码登录；其它服务商（包括 `xai`）贴 API key。旧缓存里 `xai` 的 `oauth` 标记按普通 API key 处理。
-
-- Copilot：GitHub 设备码，scope 是 `read:user`；轮询成功后保存 GitHub token，每次请求前用它换短期 bearer（缓存到过期前 60s），并附加 `COPILOT_CHAT_HEADERS`。
-- Codex：OpenAI 设备码，轮询拿到 authorization code + PKCE verifier 后换 token。`OAuthSecret` 存 `access`、`refresh`、`expires`、`account_id`；过期时间取 `now + expires_in - 300`，距离过期 60s 内即刷新。请求额外带 `originator: mycode`、`openai-beta: responses=experimental`，以及从 JWT 的 `https://api.openai.com/auth/chatgpt_account_id` 取出的 `chatgpt-account-id`。
-
-OAuth 调用走钉住客户端（`CheckRedirect`），不跟随重定向，调用方通过 `PinnedCall` 传入 User-Agent 和总超时（应用默认 30s）。错误信息只带状态码和字段名，不带 token。
-
+没有登录流程。magpie 的 agent 插件把 `magpie.enabled`、`magpie.baseUrl`、`magpie.apiKey`、`magpie.model` 写进 `~/.mycode/settings.json`；MCode 只读这四个字段。密钥属于 magpie，删除插件或在 magpie 的 Agents 页把 MCode 设为 default 即可撤销。
 ## 常量
 
 | 项 | 值 |
@@ -155,6 +144,6 @@ OAuth 调用走钉住客户端（`CheckRedirect`），不跟随重定向，调�
 | 内容块或工具调用索引 | 64 |
 | 重试 | 同一 body 最多 4 次；改 body 重发最多再加 1 次 |
 | 重定向跳数 | 5 |
-| 目录文档 / 缓存 / 有效期 | 32 MiB / 32 MiB / 24h |
+| 网关模型列表 | 每次刷新时读取，不落盘 |
 | 每个服务商模型数 / 每字符串字段 | 512 / 8 KiB |
 | OpenDesign 提示预留 | 2048 token |

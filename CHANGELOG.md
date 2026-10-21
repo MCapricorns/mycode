@@ -8,10 +8,20 @@
 
 ### Changed
 
-- 桌面版默认窗口从 1760×1040 改为 1440×900，最小尺寸从"和默认一样大"改为 960×600：之前默认尺寸同时是窗口下限，在 1080p、150% 缩放的屏幕上窗口几乎铺满整屏且一点都拖不小。现在打开尺寸居中且留出余量，用户可以拖到 960×600，`ui.json` 会记住拖动后的尺寸（低于下限时按 960×600 打开）。
+- 整套模型、MCP、技能和规则改为由 [magpie](https://usemagpie.ai) 统一提供：新增 `magpie` 设置段（网关地址、`magpie-mycode` 密钥、选中的模型），模型列表实时读取网关 `GET /v1/models`；自带供应商体系（models.dev 目录、厂商预设、Copilot/Codex 设备登录、手动 provider 配置）与 `catalog-cache.json` 全部移除。MCode 现在只通过本机 magpie 网关请求模型，关掉 magpie 就没有模型来源。
+- 内置 `web_search` / `fetch_content` 与 Settings → 网页搜索一起移除：联网检索改为 magpie Library 下发的 MCP 服务（如 anysearch），系统提示词不再有 `<web>` 段，`scout` 角色只保留 `read` / `grep` / `find` 和只读 MCP 工具。
+- MCP 设置页去掉内置的 Context7 / GitHub 目录；magpie Library 写入的 `~/.mycode/mcp.json` 作为只读托管行显示，技能从 `~/.mycode/skills` 发现，规则从 `~/.mycode/AGENTS.md` 读取。
+- 新增独立的 [magpie-mycode](https://github.com/MCapricorns/magpie-mycode) 仓库：magpie 的 agent 插件，把网关地址、密钥和 magpie 选中的模型写进 `~/.mycode/settings.json`，并声明 instructions / MCP / skills 三个 Library 位置。用 `magpie plugin add github:MCapricorns/magpie-mycode` 安装。
 
 ### Fixed
 
+- 桌面版默认窗口从 1760×1040 改为 1440×900，最小尺寸从"和默认一样大"改为 960×600：之前默认尺寸同时是窗口下限，在 1080p、150% 缩放的屏幕上窗口几乎铺满整屏且一点都拖不小。现在打开尺寸居中且留出余量，用户可以拖到 960×600，`ui.json` 会记住拖动后的尺寸（低于下限时按 960×600 打开）。
+- `Ctrl+G`（引导）在没有运行中的回合时不再退化成发送：之前会把草稿排进压缩队列，现在只提示"没有可引导的任务"，不再产生队列消息，空草稿也不会顺带释放暂停的队列。
+- `/com` 这类前缀弹窗打开时按一次 Enter 只执行一次：之前捕获阶段先补全并执行 `/compact`，延迟到达的 Enter 又把原始 `/com` 当成跟进消息排队，压缩结束后还会真的发给模型。
+- 差异面板现在和「改动」抽屉一样响应外部点击：之前点别处只会关掉抽屉或详情，Diff 面板没有遮罩，只能按 Esc 或点「关闭」。
+- 用户消息按纯文本渲染，粘贴进来的 Markdown、字体和富文本样式不再重新排版；换行保留。
+- 连不上 magpie 网关时，第一次启动会提示安装或启动 magpie 并给出 `magpie plugin add` 命令；提示过之后记在 `ui.json`，不会每次启动重复。设置里的 Magpie 页也显示同样的安装步骤。
+- `edit` 的旧文本差在缩进、行尾空格或换行位置时自动按空白不敏感的方式匹配并明确注明；`line_range` 的行号过期但 `expected_text` 仍唯一时，改到该文本所在位置而不是整次失败。
 - 工具参数在 schema 校验前统一修补，不再让模型为拼写差异多花一轮：`required` 字段接受其它框架的叫法（`file`/`filename`→`path`、`text`/`body`→`content`、`query`/`glob`→`pattern`、`task`/`instructions`→`prompt`、`name`/`role`→`agent`、`q`→`query` 等，命中的拼法不是 schema 声明属性时才生效）；字符串形式的数字/布尔在任意深度按 schema 转成标量；带 `const`/单值 `enum` 标签的 `oneOf`/`anyOf` 对象缺少标签时按字段推断变体、拼写只差大小写或连字符时改正，并丢掉该变体没有声明的多余键（例如 `type_note`）；整个参数对象被编码成 JSON 字符串时先解析。空对象、认不出的字段、没有标签的联合仍然按原样报错，不会猜一个变体。MCP 工具用服务器 schema 走同一套修补与错误渲染（不做 camelCase 转换，服务器可能就声明成驼峰）。
 - `edit` 的 `operations` 不再因为缺少 `type` 标签或多出一个说明字段（例如 `type_note`）而整次拒绝：按操作里实际出现的字段推断 `literal`／`regex`／`fuzzy`／`line_range`，并只保留该变体的字段（`old_string`/`new_string`、`search`/`replace`、`start`/`end`、`replace_all`、`distance` 这些叫法也一并映射，字符串形式的行号和距离会转成数字）。缺少标签的调用之前直接返回 `invalid arguments: value at /operations/0 is missing required field type`，模型只能重发一次；现在同一批操作直接生效。字段仍然按变体校验（例如 `literal` 必须给 `pattern`+`replacement`），认不出字段的操作照旧报错。
 

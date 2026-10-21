@@ -14,19 +14,16 @@ use std::sync::Arc;
 
 use mycode_agent::session::{BranchId, HeadStamp, SessionId};
 use mycode_agent::{Agent, AgentConfig, HookRunner};
-use mycode_config::{
-    AppSettings, HomeLayout, ProviderSettings, read_app_settings, read_provider_secrets,
-};
+use mycode_config::{AppSettings, ProviderSettings};
 use mycode_core::Message;
 use mycode_providers::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
 use mycode_tools::ToolRegistry;
 
 use crate::BridgeEvent;
 use crate::ledger::{HeadWriter, branch_head, head_spelling, ledger_history, render_error};
-use crate::oauth::resolve_request_auth;
 use crate::protocol::CHAT_CANCELLED;
 use crate::state::{CoreState, model_context_window, model_output_limit};
-use crate::tool_hosts::{BridgeAskChannel, BridgeWebHost};
+use crate::tool_hosts::BridgeAskChannel;
 
 pub(crate) use self::compact::manual_compact;
 use self::compact::{DeferredSummaries, publish_visible_summary};
@@ -139,48 +136,25 @@ async fn end_turn(
     reported
 }
 
-/// Loads the provider row and its stored key for one turn. Saves dispatched
-/// alongside the turn run as concurrent tasks, so a just-added provider may
-/// not have reached the disk yet — the read settles with a short retry.
+/// Reads the magpie binding and the provider row one turn runs on.
+///
+/// The row's model list is the gateway's published list, so a session pin
+/// and the model magpie picked both resolve through the same check.
 pub(crate) async fn turn_credentials(
-    home: &HomeLayout,
+    state: &CoreState,
     provider_id: &str,
 ) -> Result<(AppSettings, ProviderSettings, String), String> {
-    let mut last_error = "provider not found or disabled in settings".to_owned();
-    for attempt in 0..3 {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        }
-        let step_home = home.clone();
-        let step_id = provider_id.to_owned();
-        let loaded = tokio::task::spawn_blocking(move || {
-            let settings = read_app_settings(&step_home)
-                .map_err(|error| crate::settings_io::render_config_error(&error))?;
-            let Some(index) = settings
-                .providers
-                .iter()
-                .position(|provider| provider.id == step_id && provider.enabled)
-            else {
-                return Err("provider not found or disabled in settings".to_owned());
-            };
-            let secrets = read_provider_secrets(&step_home)
-                .map_err(|error| crate::settings_io::render_config_error(&error))?;
-            let Some(key) = secrets.key(&step_id).map(str::to_owned) else {
-                return Err("provider API key is not set".to_owned());
-            };
-            let provider = settings.providers[index].clone();
-            Ok((settings, provider, key))
-        })
-        .await
-        .map_err(|error| format!("credentials task failed: {error}"))?;
-        match loaded {
-            Ok(ready) => return Ok(ready),
-            Err(error) => last_error = error,
-        }
+    if provider_id != mycode_config::MAGPIE_PROVIDER_ID {
+        return Err(format!(
+            "provider '{provider_id}' is not the magpie gateway"
+        ));
     }
-    Err(last_error)
+    let settings = crate::magpie::load_settings(&state.home).await?;
+    let provider = crate::magpie::provider_row(&settings.magpie, &state.models())
+        .ok_or_else(|| "magpie is not connected: pick a model in magpie first".to_owned())?;
+    let key = settings.magpie.api_key.clone();
+    Ok((settings, provider, key))
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn run_chat_turn(
     state: &CoreState,
@@ -194,27 +168,17 @@ async fn run_chat_turn(
     cwd: PathBuf,
     control: &TurnControl,
 ) -> Result<BridgeEvent, String> {
-    let home = &state.home;
-    // Settings and keys are written by concurrently dispatched save
-    // commands; a provider added moments ago may not have landed on disk
-    // yet, so the lookup retries briefly before failing the turn.
-    let (settings, provider, stored_key) = control
-        .unless_cancelled(turn_credentials(home, provider_id))
+    let (settings, provider, bearer) = control
+        .unless_cancelled(turn_credentials(state, provider_id))
         .await??;
-    // Copilot stores its long-lived OAuth token where other providers keep
-    // an API key; each turn exchanges it for a short-lived bearer. A refresh
-    // rotates the stored token, so this step always runs to completion.
-    let (bearer, extra_headers) =
-        resolve_request_auth(&state.home, &state.copilot, &provider, &stored_key).await?;
     control.check()?;
-    let mut resolved = ResolvedProvider::resolve(
+    let resolved = ResolvedProvider::resolve(
         &provider,
         model,
         &bearer,
         &crate::user_agent::default_user_agent(),
     )
     .map_err(|error| format!("provider setup failed: {error}"))?;
-    resolved.headers.extend(extra_headers);
     let transport: Arc<dyn SseTransport> = Arc::new(
         ReqwestTransport::new().map_err(|error| format!("HTTP transport unavailable: {error}"))?,
     );
@@ -300,22 +264,13 @@ async fn run_chat_turn_on(
         .await?;
     // Keep role discovery and workspace extra-root reads off the single
     // core runtime thread.
-    let (role_catalog, extra_roots, web_ready) = {
+    let (role_catalog, extra_roots) = {
         let home = home.clone();
         let cwd = cwd.clone();
-        let catalog = Arc::clone(&state.catalog);
-        let web_settings = settings.clone();
         tokio::task::spawn_blocking(move || {
-            // The context-window and output-limit lookups below read the
-            // catalog on the core thread; a still-lazy cache pays its
-            // multi-megabyte parse here instead.
-            if let Ok(cache) = catalog.read() {
-                drop(cache.document());
-            }
             (
                 mycode_config::discover_roles(&home, Some(&cwd)),
                 workspace_extra_roots(&home, &cwd),
-                crate::tool_hosts::web_backend_ready(&home, &web_settings),
             )
         })
         .await
@@ -343,27 +298,13 @@ async fn run_chat_turn_on(
                     session_id.to_owned(),
                     state.subagent_cancels.clone(),
                     state.mcp_pool.clone(),
-                    state.copilot.clone(),
                 )
-                .with_web(web_ready)
                 .with_context(
                     Arc::clone(&state.catalog),
                     provider.clone(),
                     model.to_owned(),
                 ),
             ))));
-        }
-        // The model's web tools ride the same settings-configured backend,
-        // and appear only when that backend can answer.
-        if web_ready {
-            let web_host: Arc<dyn mycode_tools::builtin::WebHost> =
-                Arc::new(BridgeWebHost { home: home.clone() });
-            registry.register(Arc::new(mycode_tools::builtin::WebSearchTool::new(
-                web_host.clone(),
-            )));
-            registry.register(Arc::new(mycode_tools::builtin::FetchContentTool::new(
-                web_host,
-            )));
         }
         registry
     });
@@ -374,7 +315,7 @@ async fn run_chat_turn_on(
 
     let context_window = model_context_window(state, &provider, model);
     let user_home = os_user_home();
-    let read_roots = mycode_config::skill_read_roots(user_home.as_deref());
+    let read_roots = mycode_config::skill_read_roots(user_home.as_deref(), Some(home.root()));
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
     let mcp_note = mcp_catalog.as_ref().map(|catalog| catalog.prompt_note());
     let system_prompt = {

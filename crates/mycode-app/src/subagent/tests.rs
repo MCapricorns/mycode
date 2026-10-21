@@ -229,11 +229,8 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
         kind: mycode_tools::ShellKind::Bash,
         program: std::path::PathBuf::from("/bin/bash"),
     };
-    let registry = super::child_registry_with(
-        &home,
-        &allowed,
-        mycode_tools::ShellTool::forcing(shell.clone()),
-    );
+    let registry =
+        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
     let workspace = super::ChildWorkspace {
         resources: vec!["# AGENTS.md (workspace)\n\nRun `just check` before reporting.".to_owned()],
         mcp_note: Some(super::child_mcp_note(
@@ -315,7 +312,7 @@ fn child_registry_keeps_one_shell_tool_for_every_allowlist_alias() {
         (mycode_tools::ShellKind::Cmd, "cmd.exe", "cmd"),
     ];
     for (kind, program, expected) in cases {
-        let registry = super::child_registry_with(&home, &aliases, shell_tool(kind, program));
+        let registry = super::child_registry_with(&aliases, shell_tool(kind, program));
         assert_eq!(
             shell_names(&registry),
             vec![expected.to_owned()],
@@ -342,11 +339,8 @@ fn artisan_on_windows_powershell_does_not_receive_bash() {
         kind: mycode_tools::ShellKind::WindowsPowerShell,
         program: std::path::PathBuf::from("powershell.exe"),
     };
-    let registry = super::child_registry_with(
-        &home,
-        &allowed,
-        mycode_tools::ShellTool::forcing(shell.clone()),
-    );
+    let registry =
+        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
     assert_eq!(shell_names(&registry), vec!["powershell".to_owned()]);
     let prompt = super::subagent_system_prompt(
         &artisan,
@@ -380,11 +374,8 @@ fn the_scratch_root_is_listed_apart_from_workspace_folders() {
         kind: mycode_tools::ShellKind::Pwsh,
         program: std::path::PathBuf::from("pwsh.exe"),
     };
-    let registry = super::child_registry_with(
-        &home,
-        &allowed,
-        mycode_tools::ShellTool::forcing(shell.clone()),
-    );
+    let registry =
+        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
     let scratch = mycode_tools::os_scratch_root();
     let prompt = super::subagent_system_prompt(
         &role,
@@ -420,11 +411,8 @@ fn a_bash_allowlist_entry_still_launches_the_active_powershell_tool() {
         kind: mycode_tools::ShellKind::Pwsh,
         program: std::path::PathBuf::from("pwsh.exe"),
     };
-    let registry = super::child_registry_with(
-        &home,
-        &allowed,
-        mycode_tools::ShellTool::forcing(shell.clone()),
-    );
+    let registry =
+        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
     assert_eq!(shell_names(&registry), vec!["powershell".to_owned()]);
     let prompt = super::subagent_system_prompt(
         &role,
@@ -454,11 +442,8 @@ fn zsh_and_cmd_subagents_match_that_interpreter() {
         kind: mycode_tools::ShellKind::Zsh,
         program: std::path::PathBuf::from("/bin/zsh"),
     };
-    let registry = super::child_registry_with(
-        &home,
-        &allowed,
-        mycode_tools::ShellTool::forcing(zsh.clone()),
-    );
+    let registry =
+        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(zsh.clone()));
     assert_eq!(shell_names(&registry), vec!["zsh".to_owned()]);
     let prompt = super::subagent_system_prompt(
         &artisan,
@@ -482,11 +467,8 @@ fn zsh_and_cmd_subagents_match_that_interpreter() {
         kind: mycode_tools::ShellKind::Cmd,
         program: std::path::PathBuf::from(r"C:\Windows\System32\cmd.exe"),
     };
-    let registry = super::child_registry_with(
-        &home,
-        &allowed,
-        mycode_tools::ShellTool::forcing(cmd.clone()),
-    );
+    let registry =
+        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(cmd.clone()));
     assert_eq!(shell_names(&registry), vec!["cmd".to_owned()]);
     let prompt = super::subagent_system_prompt(
         &artisan,
@@ -527,11 +509,8 @@ fn scout_stays_read_only_and_does_not_list_a_shell() {
         kind: mycode_tools::ShellKind::WindowsPowerShell,
         program: std::path::PathBuf::from("powershell.exe"),
     };
-    let registry = super::child_registry_with(
-        &home,
-        &allowed,
-        mycode_tools::ShellTool::forcing(shell.clone()),
-    );
+    let registry =
+        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
     assert!(shell_names(&registry).is_empty(), "{:?}", registry.names());
     let prompt = super::subagent_system_prompt(
         &scout,
@@ -584,11 +563,8 @@ fn scout_prompt_lists_workspace_skills() {
         kind: mycode_tools::ShellKind::Bash,
         program: std::path::PathBuf::from("/bin/bash"),
     };
-    let registry = super::child_registry_with(
-        &home,
-        &allowed,
-        mycode_tools::ShellTool::forcing(shell.clone()),
-    );
+    let registry =
+        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
     let prompt = super::subagent_system_prompt(
         &scout,
         &registry,
@@ -619,11 +595,8 @@ fn artisan_gets_the_same_tool_guidance_as_the_parent() {
         kind: mycode_tools::ShellKind::Bash,
         program: std::path::PathBuf::from("/bin/bash"),
     };
-    let registry = super::child_registry_with(
-        &home,
-        &allowed,
-        mycode_tools::ShellTool::forcing(shell.clone()),
-    );
+    let registry =
+        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
     let prompt = super::subagent_system_prompt(
         &artisan,
         &registry,
@@ -723,110 +696,6 @@ async fn parent_cancel_stops_the_run_and_its_child_token() {
     assert!(child.is_cancelled());
     run.abort();
     let _ = (&mut run).await;
-}
-
-#[tokio::test]
-async fn a_routed_role_sends_the_oauth_access_token_not_the_vault_blob() {
-    use std::sync::Arc;
-
-    use mycode_config::{
-        AppSettings, AuthorityRevision, HomeLayout, ProviderSecrets, ProviderSettings,
-        SubagentRoleSettings, SubagentSettings, replace_provider_secrets,
-    };
-    use mycode_providers::{OAuthSecret, OPENAI_CODEX_PROVIDER_ID, ResolvedProvider};
-
-    let root = std::env::temp_dir().join(format!(
-        "mycode-subagent-auth-{}-{}",
-        std::process::id(),
-        crate::unix_now().as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let home = HomeLayout::from_root(&root).unwrap();
-    let blob = OAuthSecret {
-        kind: "oauth".to_owned(),
-        access: "live-access-token".to_owned(),
-        refresh: "refresh-token".to_owned(),
-        expires: u64::MAX / 2,
-        account_id: Some("acct_123".to_owned()),
-    }
-    .encode();
-    replace_provider_secrets(
-        &home,
-        AuthorityRevision::ABSENT,
-        &ProviderSecrets::new().with_key(OPENAI_CODEX_PROVIDER_ID, Some(&blob)),
-    )
-    .unwrap();
-    let parent = ProviderSettings {
-        id: "openai".to_owned(),
-        kind: "openai-completions".to_owned(),
-        base_url: "https://api.openai.com/v1".to_owned(),
-        models: vec!["gpt-parent".to_owned()],
-        enabled: true,
-        context_limit: None,
-        max_output: None,
-        hidden_models: Vec::new(),
-    };
-    let codex = ProviderSettings {
-        id: OPENAI_CODEX_PROVIDER_ID.to_owned(),
-        kind: "openai-responses".to_owned(),
-        base_url: "https://chatgpt.com/backend-api/codex".to_owned(),
-        models: vec!["gpt-5.5".to_owned()],
-        enabled: true,
-        context_limit: None,
-        max_output: None,
-        hidden_models: Vec::new(),
-    };
-    let mut subagents = SubagentSettings::default();
-    subagents.roles.push(SubagentRoleSettings {
-        role: "scout".to_owned(),
-        enabled: true,
-        provider: Some(OPENAI_CODEX_PROVIDER_ID.to_owned()),
-        model: Some("gpt-5.5".to_owned()),
-        thinking: None,
-    });
-    let settings = AppSettings {
-        providers: vec![parent.clone(), codex],
-        subagents,
-        ..AppSettings::default()
-    };
-    let resolved = ResolvedProvider::resolve(&parent, "gpt-parent", "parent-key", "ua").unwrap();
-    let host = super::BridgeAgentHost::new(
-        resolved,
-        home,
-        std::path::PathBuf::from("/tmp"),
-        &settings,
-        "session".to_owned(),
-        Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
-        Arc::new(tokio::sync::Mutex::new(None)),
-        Arc::new(tokio::sync::Mutex::new(None)),
-    );
-    let routed = host.resolve_route("scout").await.expect("route");
-    let authorization = routed
-        .headers
-        .iter()
-        .find(|(name, _)| name == "authorization")
-        .map(|(_, value)| value.as_str())
-        .unwrap_or_default();
-    assert_eq!(authorization, "Bearer live-access-token");
-    assert!(!authorization.contains("refresh-token"));
-    assert!(
-        routed
-            .headers
-            .iter()
-            .any(|(name, value)| name == "originator" && value == mycode_providers::ORIGINATOR)
-    );
-    assert!(
-        routed
-            .headers
-            .iter()
-            .any(|(name, value)| { name == "chatgpt-account-id" && value == "acct_123" })
-    );
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -948,34 +817,44 @@ fn a_stopped_child_answers_with_its_last_text() {
 fn a_child_sizes_its_window_from_its_own_model() {
     use std::sync::Arc;
 
-    use mycode_config::{AppSettings, ProviderSettings, SubagentRoleSettings};
+    use mycode_config::{AppSettings, MagpieSettings, SubagentRoleSettings};
+    use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
 
-    let provider = |id: &str, model: &str, limit: u64| ProviderSettings {
-        id: id.to_owned(),
-        kind: "openai-completions".to_owned(),
-        base_url: format!("https://{id}.example.com/v1"),
-        models: vec![model.to_owned()],
-        enabled: true,
-        context_limit: Some(limit),
-        max_output: None,
-        hidden_models: Vec::new(),
-    };
-    let parent = provider("parent", "parent-model", 100_000);
     let mut settings = AppSettings {
-        providers: vec![parent.clone(), provider("wide", "wide-model", 400_000)],
+        magpie: MagpieSettings {
+            enabled: true,
+            base_url: "http://127.0.0.1:3425/v1".to_owned(),
+            api_key: "k".to_owned(),
+            model: "parent-model".to_owned(),
+            hidden_models: Vec::new(),
+        },
         ..AppSettings::default()
     };
     settings.subagents.roles.push(SubagentRoleSettings {
         role: "scout".to_owned(),
         enabled: true,
-        provider: Some("wide".to_owned()),
+        provider: Some(mycode_config::MAGPIE_PROVIDER_ID.to_owned()),
         model: Some("wide-model".to_owned()),
         thinking: None,
     });
     let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-window")).unwrap();
-    let catalog = Arc::new(std::sync::RwLock::new(mycode_providers::catalog::current(
-        &home,
-    )));
+    let model = |id: &str, context: u64| CatalogModel {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        context,
+        ..CatalogModel::default()
+    };
+    let catalog = Arc::new(std::sync::RwLock::new(Arc::new(CatalogDocument {
+        providers: vec![CatalogProvider {
+            id: "magpie".to_owned(),
+            name: "Magpie".to_owned(),
+            base_url: "http://127.0.0.1:3425/v1".to_owned(),
+            models: vec![model("parent-model", 100_000), model("wide-model", 400_000)],
+            ..CatalogProvider::default()
+        }],
+    })));
+    let parent = crate::magpie::provider_row(&settings.magpie, &catalog.read().unwrap())
+        .expect("gateway row");
     let resolved = mycode_providers::ResolvedProvider::resolve(&parent, "parent-model", "k", "ua")
         .expect("resolve");
     let host = || {
@@ -986,7 +865,6 @@ fn a_child_sizes_its_window_from_its_own_model() {
             &settings,
             "session".to_owned(),
             Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
-            Arc::new(tokio::sync::Mutex::new(None)),
             Arc::new(tokio::sync::Mutex::new(None)),
         )
     };

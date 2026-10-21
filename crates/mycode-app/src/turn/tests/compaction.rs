@@ -4,10 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use mycode_agent::session::{BranchId, EventKind, HeadStamp, SessionId};
-use mycode_config::{
-    AppSettings, AuthorityRevision, ProviderSecrets, ProviderSettings, replace_app_settings,
-    replace_provider_secrets,
-};
+use mycode_config::{AppSettings, AuthorityRevision, replace_app_settings};
 use mycode_core::ProviderError;
 use mycode_providers::{ResolvedProvider, SseTransport, TransportCall};
 
@@ -102,26 +99,17 @@ fn tool_sse() -> String {
 #[tokio::test]
 async fn hook_compaction_waits_until_the_turn_commits() {
     let (root, home) = scratch();
-    let mut settings = AppSettings::default();
-    settings.providers.push(ProviderSettings {
-        id: "local".to_owned(),
-        kind: "openai-completions".to_owned(),
-        base_url: "https://example.com/v1".to_owned(),
-        models: vec!["test-model".to_owned()],
-        enabled: true,
-        // ~22k token auto threshold. The seeded prompt stays under it;
-        // the `read` result (the whole 20k-char fixture) pushes the next hook over it.
-        context_limit: Some(26_000),
-        max_output: None,
-        hidden_models: Vec::new(),
-    });
+    let settings = AppSettings {
+        magpie: mycode_config::MagpieSettings {
+            enabled: true,
+            base_url: "http://127.0.0.1:3425/v1".to_owned(),
+            api_key: "test-key".to_owned(),
+            model: "test-model".to_owned(),
+            hidden_models: Vec::new(),
+        },
+        ..AppSettings::default()
+    };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    replace_provider_secrets(
-        &home,
-        AuthorityRevision::ABSENT,
-        &ProviderSecrets::new().with_key("local", Some("test-key")),
-    )
-    .expect("secrets");
     let cwd = home.root().join(mycode_config::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
     std::fs::write(
@@ -130,8 +118,9 @@ async fn hook_compaction_waits_until_the_turn_commits() {
     )
     .expect("a");
 
-    let catalog = mycode_providers::catalog::current(&home);
-    let state = CoreState::new(home, catalog, Vec::new());
+    let state = CoreState::new(home, Vec::new());
+    *state.catalog.write().expect("catalog") =
+        Arc::new(super::test_catalog(&[("test-model", 26_000)]));
     let created = state.service.create(None).await.expect("session");
     let mut head = HeadStamp::Empty;
     for text in ["prior work", &"P".repeat(78_000)] {
@@ -159,7 +148,8 @@ async fn hook_compaction_waits_until_the_turn_commits() {
         final_summaries: Mutex::new(None),
     });
     let transport: Arc<dyn SseTransport> = scripted.clone();
-    let provider = settings.providers[0].clone();
+    let provider =
+        crate::magpie::provider_row(&settings.magpie, &state.models()).expect("gateway row");
     let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
         .expect("resolve");
 
@@ -336,8 +326,7 @@ async fn mid_turn_stash_defers_the_card_and_the_pump_watch_is_compaction() {
 #[tokio::test]
 async fn manual_compact_fails_when_the_session_cannot_open() {
     let (root, home) = scratch();
-    let catalog = mycode_providers::catalog::current(&home);
-    let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
+    let state = Arc::new(CoreState::new(home, Vec::new()));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     manual_compact(
         state,
@@ -363,8 +352,7 @@ async fn manual_compact_fails_when_the_session_cannot_open() {
 #[tokio::test]
 async fn manual_compact_rejects_a_moved_branch_head() {
     let (root, home) = scratch();
-    let catalog = mycode_providers::catalog::current(&home);
-    let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
+    let state = Arc::new(CoreState::new(home, Vec::new()));
     let created = state.service.create(None).await.expect("session");
     let (head, _) = crate::ledger::send_message(
         &state.service,
@@ -564,30 +552,23 @@ async fn measured_turn(reported: u64) -> Arc<MeasuredTransport> {
 /// tokens and ends with a prompt to read `a.txt`.
 async fn turn_in_a_100k_window(transport: Arc<dyn SseTransport>) {
     let (root, home) = scratch();
-    let mut settings = AppSettings::default();
-    settings.providers.push(ProviderSettings {
-        id: "local".to_owned(),
-        kind: "openai-completions".to_owned(),
-        base_url: "https://example.com/v1".to_owned(),
-        models: vec!["test-model".to_owned()],
-        enabled: true,
-        // ~85.5k token trigger.
-        context_limit: Some(100_000),
-        max_output: Some(32_000),
-        hidden_models: Vec::new(),
-    });
+    let settings = AppSettings {
+        magpie: mycode_config::MagpieSettings {
+            enabled: true,
+            base_url: "http://127.0.0.1:3425/v1".to_owned(),
+            api_key: "test-key".to_owned(),
+            model: "test-model".to_owned(),
+            hidden_models: Vec::new(),
+        },
+        ..AppSettings::default()
+    };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    replace_provider_secrets(
-        &home,
-        AuthorityRevision::ABSENT,
-        &ProviderSecrets::new().with_key("local", Some("test-key")),
-    )
-    .expect("secrets");
     let cwd = home.root().join(mycode_config::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
     std::fs::write(cwd.join("a.txt"), "alpha-body").expect("a");
-    let catalog = mycode_providers::catalog::current(&home);
-    let state = CoreState::new(home, catalog, Vec::new());
+    let state = CoreState::new(home, Vec::new());
+    *state.catalog.write().expect("catalog") =
+        Arc::new(super::test_catalog(&[("test-model", 100_000)]));
     let created = state.service.create(None).await.expect("session");
     let mut head = HeadStamp::Empty;
     for text in ["prior work", &"P".repeat(40_000), "read a.txt"] {
@@ -726,7 +707,8 @@ async fn run_scripted_turn(
     settings: &AppSettings,
     transport: Arc<dyn SseTransport>,
 ) -> Result<(), String> {
-    let provider = settings.providers[0].clone();
+    let provider =
+        crate::magpie::provider_row(&settings.magpie, &state.models()).expect("gateway row");
     let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
         .expect("resolve");
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -771,26 +753,17 @@ async fn run_scripted_turn(
 async fn a_turn_that_compacts_four_times_loses_nothing_and_the_next_turn_resumes() {
     const ROUNDS: usize = 6;
     let (root, home) = scratch();
-    let mut settings = AppSettings::default();
-    settings.providers.push(ProviderSettings {
-        id: "local".to_owned(),
-        kind: "openai-completions".to_owned(),
-        base_url: "https://example.com/v1".to_owned(),
-        models: vec!["test-model".to_owned()],
-        enabled: true,
-        // ~25.6k token trigger; each read adds ~12k, so from the second
-        // round on every request compacts.
-        context_limit: Some(30_000),
-        max_output: None,
-        hidden_models: Vec::new(),
-    });
+    let settings = AppSettings {
+        magpie: mycode_config::MagpieSettings {
+            enabled: true,
+            base_url: "http://127.0.0.1:3425/v1".to_owned(),
+            api_key: "test-key".to_owned(),
+            model: "test-model".to_owned(),
+            hidden_models: Vec::new(),
+        },
+        ..AppSettings::default()
+    };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    replace_provider_secrets(
-        &home,
-        AuthorityRevision::ABSENT,
-        &ProviderSecrets::new().with_key("local", Some("test-key")),
-    )
-    .expect("secrets");
     let cwd = home.root().join(mycode_config::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
     let line = format!("{}\n", "b".repeat(79));
@@ -799,8 +772,9 @@ async fn a_turn_that_compacts_four_times_loses_nothing_and_the_next_turn_resumes
         std::fs::write(cwd.join(format!("f{round}.txt")), body).expect("fixture");
     }
 
-    let catalog = mycode_providers::catalog::current(&home);
-    let state = CoreState::new(home.clone(), catalog, Vec::new());
+    let state = CoreState::new(home.clone(), Vec::new());
+    *state.catalog.write().expect("catalog") =
+        Arc::new(super::test_catalog(&[("test-model", 30_000)]));
     let created = state.service.create(None).await.expect("session");
     let (session, branch) = (created.session_id.clone(), created.branch_id.clone());
     crate::ledger::send_message(

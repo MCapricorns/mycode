@@ -252,6 +252,8 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
                 text("command")
             }
         }
+        // Retired tools. The arms stay so old session ledgers replay with the
+        // description the model originally sent.
         "web_search" => text("query"),
         "fetch_content" => arguments
             .get("urls")
@@ -263,8 +265,6 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
             .to_owned(),
         "search_tool" | "use_tool" => text("name"),
         "agent" => join_target(&text("agent"), &text("description")),
-        // Retired tool. The arm stays so old session ledgers replay with the
-        // description the model originally sent.
         "run_code" => text("description"),
         _ => text("path"),
     };

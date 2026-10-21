@@ -42,8 +42,8 @@ pub use home::{
     HomeEnv, HomeLayout, NO_PROJECT_DIR, SCRATCH_DIR, SESSIONS_DIR, locate_session_dir,
     new_session_dir, project_dir_key,
 };
-pub use mcp_import::{normalize_api_key, parse_mcp_import};
-pub use project_mcp::project_mcp_servers;
+pub use mcp_import::{normalize_api_key, parse_mcp_import, parse_mcp_library};
+pub use project_mcp::{global_mcp_servers, project_mcp_servers};
 #[doc(inline)]
 pub use resources::{
     MAX_SKILLS, ResourceFile, SkillFile, discover_resources, discover_skills, os_user_home,
@@ -72,14 +72,14 @@ pub(crate) fn write_owned_test_bytes(
 }
 #[doc(inline)]
 pub use settings::{
-    AppSettings, AppearanceSettings, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_DISABLED_SKILLS,
+    AppSettings, AppearanceSettings, DEFAULT_MAGPIE_BASE_URL, MAGPIE_KEY_PREFIX,
+    MAGPIE_PROVIDER_ID, MAGPIE_PROVIDER_NAME, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_DISABLED_SKILLS,
     MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
-    MAX_PROVIDERS, MAX_WEB_BACKENDS, McpServerSettings, PROXY_SCHEMES, ProviderSettings,
-    ProxyPreference, SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SUBAGENT_CONCURRENCY, SkillsSettings,
+    MagpieSettings, McpServerSettings, PROXY_SCHEMES, ProviderSettings, ProxyPreference,
+    SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SUBAGENT_CONCURRENCY, SkillsSettings,
     SubagentRoleSettings, SubagentSettings, VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES,
-    WebBackendSettings, WebSettings, builtin_mcp_servers, builtin_web_backends, is_mcp_executable,
-    merged_web_backends, read_app_settings, read_app_settings_with_repair, replace_app_settings,
-    salvage_app_settings, split_command_line, web_key_env,
+    is_mcp_executable, read_app_settings, read_app_settings_with_repair, replace_app_settings,
+    salvage_app_settings, split_command_line,
 };
 #[doc(inline)]
 pub use subagents::{

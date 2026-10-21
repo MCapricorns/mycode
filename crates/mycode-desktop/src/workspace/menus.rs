@@ -263,9 +263,8 @@ impl Workspace {
             .is_some_and(|mention| !mention.items.is_empty())
             && self.composer.read(cx).focus_handle(cx).is_focused(window)
         {
-            if key == "enter" {
-                return self.accept_open_mention(window, cx);
-            }
+            // Enter is left to on_composer_event: accepting the mention here
+            // and again there ran a command and queued the raw draft.
             let index = moved(
                 self.mention_highlight(),
                 self.vm()

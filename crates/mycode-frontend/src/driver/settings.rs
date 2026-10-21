@@ -1,14 +1,13 @@
-//! The settings editor's product half: the debounced save pipeline, provider
-//! and MCP rows, key-vault writes, OAuth sign-in starts, subagent routes,
-//! and the appearance/language picks. Input widgets stay in the frontend;
-//! every decision about what reaches `settings.json` or the key store is
-//! made here.
+//! The settings editor's product half: the debounced save pipeline, MCP
+//! rows, key-vault writes, subagent routes, and the appearance/language
+//! picks. Input widgets stay in the frontend; every decision about what
+//! reaches `settings.json` or the key store is made here.
 use mycode_app::BridgeCommand;
 use mycode_config::{AuthorityRevision, ProxyPreference};
 
 use super::{DriverMsg, Effect, FrontendDriver, SETTINGS_TEXT_SAVE_DEBOUNCE, ToastKind};
 use crate::forms;
-use crate::view_model::{FrontendAction, McpSubview, ModelsSubview, ProxyTestState};
+use crate::view_model::{FrontendAction, McpSubview, ProxyTestState};
 
 impl FrontendDriver {
     // ---- the save pipeline ----
@@ -147,38 +146,10 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::TestProxy { proxy });
     }
 
-    // ---- web search backends ----
+    // ---- key vault ----
 
-    /// The row's enable switch. Disabling is immediate; enabling first runs
-    /// a key-resolving search probe against the row, landing `on` only when
-    /// the probe returns `Ok`.
-    pub fn toggle_web_backend(&mut self, index: usize, enabled: bool, out: &mut Vec<Effect>) {
-        let Some(backend) = self
-            .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.web_backends.get(index))
-            .cloned()
-        else {
-            return;
-        };
-        if !enabled {
-            self.pending_web_enable.remove(&backend.id);
-            self.act(FrontendAction::SettingsBackendToggled(index, false), out);
-            return;
-        }
-        if self.pending_web_enable.contains(&backend.id) {
-            return;
-        }
-        self.pending_web_enable.insert(backend.id.clone());
-        self.dispatch(BridgeCommand::ProbeWebBackend {
-            backend: Box::new(backend),
-        });
-    }
-
-    /// Saves one provider's, web backend's, or MCP server's API key after
-    /// normalization. `target` is the key-store id: the provider id itself,
-    /// `web-{id}`, or `mcp-{id}`. `false` refuses a blank/`bearer` field so
+    /// Saves one MCP server's API key after normalization. `target` is the
+    /// key-store id, `mcp-{id}`. `false` refuses a blank/`bearer` field so
     /// the replace flow cannot delete a stored credential.
     pub fn save_key(&mut self, target: String, raw_key: &str) -> bool {
         let Some(api_key) = forms::normalized_key_input(raw_key) else {
@@ -504,243 +475,6 @@ impl FrontendDriver {
             }
         }
         self.act(FrontendAction::SettingsSubagentsChanged(next), out);
-    }
-
-    // ---- providers ----
-
-    /// Adds the provider the custom form describes from its raw field
-    /// values: [`forms::build_custom_provider`] validates and refuses a
-    /// duplicate id before anything is dispatched. `true` when the row was
-    /// added, so the frontend can clear its form.
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_custom_provider(
-        &mut self,
-        id: &str,
-        kind: &str,
-        base_url: &str,
-        model: &str,
-        api_key: &str,
-        context_limit: &str,
-        max_output: &str,
-        out: &mut Vec<Effect>,
-    ) -> bool {
-        let existing: Vec<String> = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| {
-                settings
-                    .providers
-                    .iter()
-                    .map(|provider| provider.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let provider = match forms::build_custom_provider(
-            &existing,
-            id,
-            kind,
-            base_url,
-            model,
-            context_limit,
-            max_output,
-        ) {
-            Ok(provider) => provider,
-            Err(message) => {
-                self.act(FrontendAction::Failed(message), out);
-                return false;
-            }
-        };
-        let provider_id = provider.id.clone();
-        self.act(FrontendAction::SettingsProviderAdded(provider), out);
-        if let Some(api_key) = forms::normalized_key_input(api_key) {
-            self.dispatch(BridgeCommand::SaveProviderKey {
-                provider_id,
-                api_key,
-            });
-        }
-        self.act(FrontendAction::ShowModelsSubview(ModelsSubview::List), out);
-        true
-    }
-
-    /// Removes one provider row and closes its detail page when open.
-    pub fn remove_provider(&mut self, index: usize, out: &mut Vec<Effect>) {
-        let removed = self
-            .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.providers.get(index))
-            .map(|provider| provider.id.clone());
-        self.act(FrontendAction::SettingsProviderRemoved(index), out);
-        if removed.is_some_and(|id| self.vm.provider_detail.as_deref() == Some(id.as_str())) {
-            self.act(FrontendAction::ProviderDetailOpened(None), out);
-        }
-    }
-
-    /// Commits an endpoint edit after the same document validation the
-    /// settings save runs. The key vault is not touched. `typed` is the
-    /// field's text; an unchanged or invalid value leaves the row alone.
-    pub fn apply_provider_endpoint(&mut self, id: &str, typed: &str, out: &mut Vec<Effect>) {
-        let previewed = {
-            let Some(settings) = self.vm.settings.as_ref() else {
-                return;
-            };
-            let Some(current) = settings
-                .providers
-                .iter()
-                .find(|provider| provider.id == id)
-                .map(|provider| provider.base_url.clone())
-            else {
-                return;
-            };
-            if typed.trim() == current {
-                return;
-            }
-            settings.preview_provider_base_url(id, typed)
-        };
-        match previewed {
-            Ok(base_url) => {
-                self.act(
-                    FrontendAction::SettingsProviderBaseUrlChanged {
-                        id: id.to_owned(),
-                        base_url,
-                    },
-                    out,
-                );
-            }
-            Err(message) => {
-                self.act(FrontendAction::Failed(message), out);
-            }
-        }
-    }
-
-    /// Device-code sign-in for a provider that is already configured.
-    /// Does not open the add-from-catalog form.
-    pub fn start_provider_oauth(&mut self, provider_id: &str) {
-        let models = self
-            .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| {
-                settings
-                    .providers
-                    .iter()
-                    .find(|provider| provider.id == provider_id)
-            })
-            .map(|provider| provider.models.clone())
-            .unwrap_or_default();
-        self.dispatch(BridgeCommand::StartOAuthSignIn {
-            provider_id: provider_id.to_owned(),
-            models,
-        });
-    }
-
-    /// Starts an OAuth device-flow sign-in from the shared page, binding
-    /// the catalog row's models (or the configured subset when the row is
-    /// already in settings).
-    pub fn start_oauth_sign_in(&mut self, provider_id: String, out: &mut Vec<Effect>) {
-        let models = crate::view_model::preset_pick(&self.vm, &provider_id);
-        if models.is_empty() {
-            self.act(
-                FrontendAction::Failed(
-                    crate::i18n::t(
-                        "Provider catalog is not loaded yet; refresh it in About and try again.",
-                        "服务商目录尚未就绪，可在「关于」页刷新目录后重试。",
-                    )
-                    .to_owned(),
-                ),
-                out,
-            );
-            return;
-        }
-        self.dispatch(BridgeCommand::StartOAuthSignIn {
-            provider_id,
-            models,
-        });
-    }
-
-    /// Adds one catalog preset: provider entry plus stored key, then saves.
-    /// `api_key` was already normalized by the caller's field handling.
-    pub fn add_preset_provider(
-        &mut self,
-        provider_id: &str,
-        api_key: Option<String>,
-        out: &mut Vec<Effect>,
-    ) {
-        let Some(catalog) = self.vm.catalog.clone() else {
-            return;
-        };
-        let Some(preset) = catalog.provider(provider_id) else {
-            return;
-        };
-        // Checked models in catalog order; an empty selection falls back to
-        // the catalog's first model.
-        let checked = self.vm.preset_models.clone();
-        let mut models: Vec<String> = preset
-            .models
-            .iter()
-            .filter(|entry| checked.contains(&entry.id))
-            .map(|entry| entry.id.clone())
-            .collect();
-        if models.is_empty() {
-            let Some(first) = preset.models.first() else {
-                return;
-            };
-            models.push(first.id.clone());
-        }
-        let model = models[0].clone();
-        // OpenDesign is one gateway: adding it again updates the configured
-        // row (its endpoint and overrides stay). Other presets get a unique
-        // id, the catalog spelling suffixed when already configured.
-        let opendesign = preset.id == mycode_providers::catalog::opendesign::PROVIDER_ID;
-        let existing = self
-            .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.providers.iter().find(|p| p.id == preset.id))
-            .filter(|_| opendesign)
-            .cloned();
-        let mut id = preset.id.clone();
-        let mut suffix = 2;
-        while existing.is_none()
-            && self
-                .vm
-                .settings
-                .as_ref()
-                .is_some_and(|settings| settings.providers.iter().any(|p| p.id == id))
-        {
-            id = format!("{}-{suffix}", preset.id);
-            suffix += 1;
-        }
-        let row = match existing {
-            Some(existing) => mycode_config::ProviderSettings {
-                models,
-                enabled: true,
-                ..existing
-            },
-            None => mycode_config::ProviderSettings {
-                id: id.clone(),
-                kind: preset.kind.clone(),
-                base_url: preset.base_url.clone(),
-                models,
-                enabled: true,
-                context_limit: None,
-                max_output: None,
-                hidden_models: Vec::new(),
-            },
-        };
-        self.act(FrontendAction::SettingsProviderAdded(row), out);
-        if let Some(api_key) = api_key {
-            self.dispatch(BridgeCommand::SaveProviderKey {
-                provider_id: id.clone(),
-                api_key,
-            });
-        }
-        self.act(FrontendAction::ActivePresetChanged(None), out);
-        self.act(FrontendAction::ProviderSelected(id), out);
-        self.act(FrontendAction::ModelSelected(model), out);
-        self.save_settings(out);
-        self.persist_ui_state();
     }
 
     // ---- appearance & language ----

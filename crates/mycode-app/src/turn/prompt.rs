@@ -155,6 +155,7 @@ pub(crate) fn session_system_prompt(
         cwd,
         extra_roots,
         user_home,
+        Some(home.root()),
         skill_settings,
     );
     if let Some(note) = mcp_note {
@@ -186,22 +187,24 @@ cwd.",
     system_prompt
 }
 
-/// Appends the skill catalog of `cwd`, the user-global tree, and the
-/// workspace folders the user added. The session and every subagent call
-/// this, so both see the same skills for the same folders.
+/// Appends the skill catalog of `cwd`, magpie's Library folder, the
+/// user-global tree, and the workspace folders the user added. The session
+/// and every subagent call this, so both see the same skills for the same
+/// folders.
 pub(crate) fn push_workspace_skills(
     prompt: &mut String,
     cwd: &std::path::Path,
     extras: &[std::path::PathBuf],
     user_home: Option<&std::path::Path>,
+    mycode_home: Option<&std::path::Path>,
     settings: &mycode_config::SkillsSettings,
 ) {
-    let mut skills = mycode_config::discover_skills(cwd, user_home);
+    let mut skills = mycode_config::discover_skills(cwd, user_home, mycode_home);
     // Any local process can write under the OS temp root; skills come only
     // from folders the user added.
     let (workspace_roots, _) = split_scratch_root(extras);
     for extra in workspace_roots {
-        for skill in mycode_config::discover_skills(extra, None) {
+        for skill in mycode_config::discover_skills(extra, None, None) {
             if skills.iter().any(|existing| existing.slug == skill.slug) {
                 continue;
             }

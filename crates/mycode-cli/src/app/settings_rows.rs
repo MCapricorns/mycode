@@ -89,7 +89,7 @@ pub(super) fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
             model_display_name(vm, provider, model)
         ),
         (_, Some(model)) => model.to_owned(),
-        _ => "none — Enter to pick".to_owned(),
+        _ => "none — install or start magpie (usemagpie.ai)".to_owned(),
     };
     rows.push(SettingRow::Item {
         item: SettingItem::Model,
@@ -163,30 +163,6 @@ pub(super) fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
         dim: false,
     });
 
-    rows.push(SettingRow::Header("Providers".to_owned()));
-    if let Some(settings) = settings {
-        for (index, provider) in settings.providers.iter().enumerate() {
-            let key = if settings.providers_with_keys.contains(&provider.id) {
-                " · key ✓"
-            } else {
-                ""
-            };
-            rows.push(SettingRow::Item {
-                item: SettingItem::Provider(index),
-                label: format!(
-                    "[{}] {}",
-                    if provider.enabled { "x" } else { " " },
-                    provider.id
-                ),
-                value: format!("{} · {} models{key}", provider.kind, provider.models.len()),
-                dim: !provider.enabled,
-            });
-        }
-        if settings.providers.is_empty() {
-            rows.push(SettingRow::Header("  (none configured)".to_owned()));
-        }
-    }
-
     rows.push(SettingRow::Header("MCP".to_owned()));
     if let Some(settings) = settings {
         for (index, server) in settings.mcp_servers.iter().enumerate() {
@@ -203,25 +179,6 @@ pub(super) fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
             });
         }
         if settings.mcp_servers.is_empty() {
-            rows.push(SettingRow::Header("  (none configured)".to_owned()));
-        }
-    }
-
-    rows.push(SettingRow::Header("Web search".to_owned()));
-    if let Some(settings) = settings {
-        for (index, backend) in settings.web_backends.iter().enumerate() {
-            rows.push(SettingRow::Item {
-                item: SettingItem::Web(index),
-                label: format!(
-                    "[{}] {}",
-                    if backend.enabled { "x" } else { " " },
-                    backend.id
-                ),
-                value: String::new(),
-                dim: !backend.enabled,
-            });
-        }
-        if settings.web_backends.is_empty() {
             rows.push(SettingRow::Header("  (none configured)".to_owned()));
         }
     }

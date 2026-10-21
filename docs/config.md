@@ -10,11 +10,11 @@
 
 | 文件（家目录下） | 内容 | 上限 |
 | --- | --- | --- |
-| `settings.json` | `AppSettings`：外观、代理、提供商、网页、MCP、子代理、技能 | 256 KiB |
-| `secrets.json` | `providerKeys`：provider id → API key，按 id 排序 | 64 KiB |
+| `settings.json` | `AppSettings`：外观、代理、magpie 网关、MCP、子代理、技能 | 256 KiB |
+| `secrets.json` | `mcpKeys`：MCP 服务器 id → API key，按 id 排序 | 64 KiB |
 | `ui.json` | 最近项目、工作区、会话绑定、模型钉选、窗口和面板状态 | 256 KiB |
 | `sessions/<项目键>/<id>/compaction.json` | 压缩检查点 | 256 KiB |
-| `catalog-cache.json` | models.dev 目录快照，`mycode-providers` 读写 | 32 MiB |
+| `AGENTS.md` / `mcp.json` / `skills/` | magpie Library 写入的规则、MCP 和技能（也可手写） | 规则 256 KiB、MCP 256 KiB、每份技能 32 KiB |
 | `agents/*.md` | 用户角色定义 | 每份 32 KiB |
 
 项目自己的文件在项目里，不在家目录：`.mycode/mcp.json`、`.mycode/agents/*.md`、`AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md` 和 `.agents` 下的技能。
@@ -57,16 +57,15 @@
 
 ## 设置
 
-`AppSettings` 是设置页的唯一文档。默认值：无提供商、三个内置网页后端均未启用、外观 `dark` / `auto` / `m`、无子代理和技能记录。
+`AppSettings` 是设置页的唯一文档。默认值：magpie 未启用、外观 `dark` / `auto` / `m`、无 MCP 服务器和技能记录。
 
 - **外观**：`appearance.theme` 为 `dark` 或 `light`；`language` 为 `auto`、`en`、`zh`；`fontSize` 为 `s`、`m`、`l`、`xl`，对应正文 12 / 14 / 16 / 18 像素，缺省 `m`。界面字体固定为操作系统界面字体。
 - **代理**：`proxy` 为空表示跟随系统（环境变量或系统代理设置；系统没有就直连，不探测本机端口）。也可写 `http` / `https` / `socks5` / `socks5h` 代理 URL；只写 `host:port` 按 `http` 处理。`auto`、`direct`、`system` 也按跟随系统读。设置页的测试请求 `https://www.google.com/generate_204`，显示线路（直连 / 系统代理 / 手动代理）、状态码和耗时。环回、`.local` 和私网地址始终直连。
-- **提供商**：`id` 是 1–128 字节的小写 portable id；`kind` 只有 `anthropic-messages`、`openai-completions`、`openai-responses`；`baseUrl` 必须是 `https://`；`models` 1–128 个，第一个是默认模型；`enabled` 控制模型选择器。非零的 `contextLimit` 优先于目录里的上下文长度；非零的 `maxOutput` 优先于目录的 `limit.output`，两者都没有时用 32000。`hiddenModels` 最多 2048 个，不出现在对话模型切换、最近使用推荐和命令面板，设置页仍会列出。密钥不写在这里。
+- **magpie**：`enabled` 表示网关可用；`baseUrl` 必须是 `http://` 回环地址或以 `/v1` 结尾的 `https://` 地址（本机默认 `http://127.0.0.1:3425/v1`）；`apiKey` 是 magpie 的 agent 插件写入的密钥；`model` 是 magpie 里选中的模型 id。可选 `hiddenModels` 最多 2048 个，不出现在对话模型切换、最近使用推荐和命令面板。MCode 不写这四个字段，插件负责写入和撤销；关掉网关后没有模型来源。
 - **推理强度**：`reasoningEffort` 可省略，可取 `off`、`none`、`on`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；`default` 不允许。会话里选的模型和强度不写这里，见 `ui.json`。
 - **Shell**：没有 shell 设置。解释器按操作系统自动选择，见 [tools.md](tools.md)。`MYCODE_SHELL` 为非 `auto` 的值时提示一次并忽略。
-- **网页**：后端 `kind` 只有 `querit`、`anysearch`、`exa`，`endpoint` 必须是 `https://`，最多一个 `enabled`。默认三行均未启用。密钥先读环境变量 `QUERIT_API_KEY` / `ANYSEARCH_API_KEY` / `EXA_API_KEY`，再读 `secrets.json` 的 `web-<id>`；Querit 和 Exa 必须有密钥，AnySearch 可以匿名。启用开关会先解析密钥，再对该行做一次真实搜索，成功才落为启用。没有启用的后端时，网页工具退到第一个有密钥的后端。
-- **MCP**：`transport` 为 `stdio`（`command` 是单个可执行文件，不接受 shell 字符串；最多 64 个 `args`，最多 32 个 `env`）或 `http`（`endpoint` 为 `https://`，`keyHeader` 只能是 `bearer` 或 `x-api-key`）。最多 64 台服务器。密钥用 `mcp-<id>`。内置目录有 context7 和 GitHub（`https://api.githubcopilot.com/mcp`，bearer）；添加的行默认禁用。启用开关对声明了 `keyHeader` 的行要求先有已存密钥，再做一次 `tools/list` 探测，成功才启用。
-- **子代理**：记录每个角色是否启用、provider/model 路由和思考强度；没写的角色默认启用并继承会话模型。路由必须同时给 provider 和 model，provider 必须已配置；`thinking` 除模型档位外还接受 `default`。每个父回合固定最多 8 个并发，不是设置项；子代理没有超时，取消回合、停止子代理或删除对话时结束。
+- **MCP**：`transport` 为 `stdio`（`command` 是单个可执行文件，不接受 shell 字符串；最多 64 个 `args`，最多 32 个 `env`）或 `http`（`endpoint` 为 `https://`，`keyHeader` 只能是 `bearer` 或 `x-api-key`，`headers` 最多 32 个自定义头）。最多 64 台服务器。密钥用 `mcp-<id>`。没有内置目录；magpie Library 的 `~/.mycode/mcp.json` 会作为只读托管行合并，自带 `headers`，与用户同 id 时用户行优先。启用开关对声明了 `keyHeader` 的行要求先有已存密钥，再做一次 `tools/list` 探测，成功才启用。
+- **子代理**：记录每个角色是否启用、provider/model 路由和思考强度；没写的角色默认启用并继承会话模型。路由必须同时给 provider 和 model，provider 固定为 `magpie`；`thinking` 除模型档位外还接受 `default`。每个父回合固定最多 8 个并发，不是设置项；子代理没有超时，取消回合、停止子代理或删除对话时结束。
 
 粘贴导入由 `mcp_import` 处理：接受 `mcpServers`、`servers`、单个服务器对象或数组，允许 JSONC 注释、尾随逗号和单个片段；id 会被规范化，`Authorization` / `x-api-key` 头会抽成密钥并去掉 `Bearer` 前缀。项目 `mcp.json` 复用同一解析器，但只取服务器行：上限 256 KiB，只加入启用的行；与用户设置同 id 的行会被跳过并给出警告，项目服务器不会读取也不会继承 `secrets.json` 里的密钥。
 
@@ -74,9 +73,8 @@
 
 | 范围 | 上限 |
 | --- | --- |
-| 提供商 | 64 个；每提供商模型 128 个、隐藏模型 2048 个 |
-| MCP | 64 台服务器；stdio 每条命令 64 个参数、32 个环境变量 |
-| 网页 | 16 个后端 |
+| magpie 隐藏模型 | 2048 个 |
+| MCP | 64 台服务器；stdio 每条命令 64 个参数、32 个环境变量；HTTP 32 个自定义头 |
 | 子代理 | 设置里 32 个角色；发现结果含内置最多 32 个；每个角色目录最多读 32 个文件 |
 | 密钥 | 64 个 provider，单把 key 16 KiB |
 | 技能 | 关闭列表 256 个 slug，每个 128 字节；system prompt 里最多 32 个 |
@@ -113,7 +111,7 @@
 
 | 角色 | 职责 |
 | --- | --- |
-| scout | 只读研究。隔离 `shared`，思考强度 `low`，工具 `read`、`grep`、`find`、`web_search`、`fetch_content`，同一条回复里可以并行；项目覆盖也加不进写工具 |
+| scout | 只读研究。隔离 `shared`，思考强度 `low`，工具 `read`、`grep`、`find`，以及 magpie MCP 里声明只读的工具；同一条回复里可以并行；项目覆盖也加不进写工具 |
 | artisan | 实现 brief 里的结果，检查与改动相称，不提交、不推送。隔离 `worktree`，思考强度 `high` |
 
 发现顺序是内置 → `<MYCODE_HOME>/agents/*.md` → `<项目>/.mycode/agents/*.md`，同名时后者覆盖前者。每份文件最多 32 KiB；每个目录最多读 32 个 `.md`；解析后的目录（含内置）最多 32 个角色。文件名必须等于 frontmatter 里的 `name`。frontmatter 只认 `name`、`description`、`isolation`（`shared` 或 `worktree`）、`thinking`、`tools` 五个键；未知键、缺字段、空正文、非 UTF-8 或超限文件会被跳过并打一行 stderr，不影响其他角色。启用状态、模型路由和思考覆盖写在设置里，不写进角色文件。
@@ -122,8 +120,10 @@
 
 技能从 `.agents` 和 `.agents/skills` 下发现：平铺的 `*.md`（扩展名不分大小写）或 `<目录>/SKILL.md`。工作区和 OS 用户主目录各扫一遍（会话 prompt 另扫用户添加的工作区文件夹，不含临时目录），同名 slug 工作区优先；发现不设上限，进入 system prompt 时最多 32 个。目录里列 slug、标题、描述和路径；描述取自 frontmatter，最多 300 字符（超出截断）。模型匹配后用 `read` 按路径读正文。OS 用户主目录的 `.agents` 和 `.agents/skills` 存在时是只读锚定根：`read` 可以按绝对路径读取，`edit` / `write` 拒绝。子代理（含 scout）拿到同一份技能目录。设置里的 `skills.disabled` 记录关闭的 slug（最多 256 个，不能重复）；关闭的技能先被过滤，不占 32 个名额；列表为空时不写入 `settings.json`。
 
+技能还从 magpie Library 的 `~/.mycode/skills` 发现（`<name>/SKILL.md`），与 `.agents` 的技能合并；magpie 的规则写到 `~/.mycode/AGENTS.md`，MCP 写到 `~/.mycode/mcp.json`。三处都是普通文件，可以手写；magpie 不运行时 MCode 仍读已有的文件。
+
 ## 不在这里
 
-- models.dev 的下载、校验和 `catalog-cache.json` 写入在 `mycode-providers`：缓存 32 MiB、版本 3，24 小时内直接使用，过期后条件请求刷新。
+- magpie 网关模型列表的请求在 `mycode-app::magpie`；目录只存在内存里，不落盘。
 - 跑回合、连接 MCP、导出/导入配置在 `mycode-app`。导出包包含 `settings`、`ui.json` 和一份明文密钥映射；`secrets.json` 本身仍然独立。
 - 会话账本和 `sessions.db` 归 `mycode-agent`，不走本文的文档恢复流程；整体结构见 [architecture.md](architecture.md)。

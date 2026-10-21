@@ -45,8 +45,8 @@ pub use self::projects::{
 };
 pub use self::reduce::{
     ComposerSubmit, PREPARING_ROW_PREFIX, close_floating_menus, composer_submit, is_preparing_row,
-    preferred_slash_index, preset_pick, reasoning_levels_for, reduce,
-    selected_model_supports_reasoning, selected_reasoning_levels,
+    preferred_slash_index, reasoning_levels_for, reduce, selected_model_supports_reasoning,
+    selected_reasoning_levels,
 };
 pub use self::state::{MAX_COMPOSER_CHARS, MAX_QUEUED_MESSAGES, WorkspaceState};
 pub use self::usage::{
@@ -56,8 +56,6 @@ pub use self::usage::{
 
 // Kept public API: the `FrontendAction` vocabulary is `pub`, so its payload
 // types must be too (`private_interfaces`).
-pub use self::settings::{
-    CopilotSignIn, McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry,
-};
+pub use self::settings::{McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry};
 pub use self::state::{FrontendAction, MainView, ProxyTestState, UpdateState};
 pub use self::usage::CacheBreak;

@@ -24,10 +24,8 @@ pub(super) enum SettingsOverlay {
         cursor: usize,
         filter: String,
     },
-    /// Single-line input for one provider's API key (masked).
+    /// Single-line input for one server's API key (masked).
     ApiKey { provider: String, buffer: String },
-    /// Single-line input for one provider's base URL.
-    BaseUrl { index: usize, buffer: String },
     /// Single-line input for the manual proxy URL.
     ProxyUrl { buffer: String },
 }
@@ -56,15 +54,9 @@ pub(super) enum SettingItem {
     AutoUpdate,
     /// Checks, downloads, or installs an update depending on state.
     Update,
-    /// Provider row index; Enter toggles, `a` edits the API key, `u` the
-    /// base URL.
-    Provider(usize),
     /// MCP server row index; Enter toggles (enable runs the probe), `a`
     /// edits its `mcp-<id>` key.
     Mcp(usize),
-    /// Web backend row index; Enter toggles (enable runs the probe), `a`
-    /// edits its `web-<id>` key.
-    Web(usize),
     /// Skill row index into `vm.skills`; Enter toggles it.
     Skill(usize),
 }
@@ -138,21 +130,6 @@ impl Tui {
                     self.open_key_editor(item);
                 }
             }
-            (KeyCode::Char('u'), false) => {
-                if let Some(SettingItem::Provider(index)) = items.get(self.settings_cursor)
-                    && let Some(provider) = self
-                        .driver
-                        .vm()
-                        .settings
-                        .as_ref()
-                        .and_then(|settings| settings.providers.get(*index))
-                {
-                    self.settings_overlay = Some(SettingsOverlay::BaseUrl {
-                        index: *index,
-                        buffer: provider.base_url.clone(),
-                    });
-                }
-            }
             _ => {}
         }
     }
@@ -183,15 +160,6 @@ impl Tui {
                     self.settings_overlay = Some(SettingsOverlay::ApiKey { provider, buffer });
                 }
             },
-            Some(SettingsOverlay::BaseUrl { index, mut buffer }) => {
-                match edit_line(&key, &mut buffer) {
-                    LineKey::Cancel => {}
-                    LineKey::Submit => self.submit_base_url(index, &buffer, effects),
-                    LineKey::Edited => {
-                        self.settings_overlay = Some(SettingsOverlay::BaseUrl { index, buffer });
-                    }
-                }
-            }
             Some(SettingsOverlay::ProxyUrl { mut buffer }) => match edit_line(&key, &mut buffer) {
                 LineKey::Cancel => {}
                 LineKey::Submit if self.submit_proxy_url(&buffer, effects) => {}
@@ -350,28 +318,6 @@ impl Tui {
         }
     }
 
-    /// Enter on the base-URL input for a provider row.
-    fn submit_base_url(&mut self, index: usize, buffer: &str, effects: &mut Vec<Effect>) {
-        let Some(id) = self
-            .driver
-            .vm()
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.providers.get(index))
-            .map(|provider| provider.id.clone())
-        else {
-            return;
-        };
-        self.driver.act(
-            FrontendAction::SettingsProviderBaseUrlChanged {
-                id,
-                base_url: buffer.trim().to_owned(),
-            },
-            effects,
-        );
-        self.driver.save_settings(effects);
-    }
-
     /// Enter on the manual proxy input. An empty value goes back to the
     /// system proxy; an invalid one keeps the input open. Returns whether
     /// the input should close.
@@ -483,20 +429,6 @@ impl Tui {
                 UpdateState::Checking | UpdateState::Downloading { .. } => {}
                 _ => self.driver.check_update(true, effects),
             },
-            SettingItem::Provider(index) => {
-                let enabled = self
-                    .driver
-                    .vm()
-                    .settings
-                    .as_ref()
-                    .and_then(|settings| settings.providers.get(index))
-                    .is_some_and(|provider| provider.enabled);
-                self.driver.act(
-                    FrontendAction::SettingsProviderToggled(index, !enabled),
-                    effects,
-                );
-                self.driver.save_settings(effects);
-            }
             SettingItem::Mcp(index) => {
                 let enabled = self
                     .driver
@@ -506,16 +438,6 @@ impl Tui {
                     .and_then(|settings| settings.mcp_servers.get(index))
                     .is_some_and(|server| server.enabled);
                 self.driver.toggle_mcp_server(index, !enabled, effects);
-            }
-            SettingItem::Web(index) => {
-                let enabled = self
-                    .driver
-                    .vm()
-                    .settings
-                    .as_ref()
-                    .and_then(|settings| settings.web_backends.get(index))
-                    .is_some_and(|backend| backend.enabled);
-                self.driver.toggle_web_backend(index, !enabled, effects);
             }
             SettingItem::Skill(index) => {
                 let Some(skill) = self.driver.vm().skills.get(index) else {
@@ -539,13 +461,6 @@ impl Tui {
     /// `a` on a row opens the right key input, when the row has a key id.
     fn open_key_editor(&mut self, item: &SettingItem) {
         let target = match item {
-            SettingItem::Provider(index) => self
-                .driver
-                .vm()
-                .settings
-                .as_ref()
-                .and_then(|settings| settings.providers.get(*index))
-                .map(|provider| provider.id.clone()),
             SettingItem::Mcp(index) => self
                 .driver
                 .vm()
@@ -553,13 +468,6 @@ impl Tui {
                 .as_ref()
                 .and_then(|settings| settings.mcp_servers.get(*index))
                 .map(|server| format!("mcp-{}", server.id)),
-            SettingItem::Web(index) => self
-                .driver
-                .vm()
-                .settings
-                .as_ref()
-                .and_then(|settings| settings.web_backends.get(*index))
-                .map(|backend| format!("web-{}", backend.id)),
             _ => None,
         };
         if let Some(provider) = target {

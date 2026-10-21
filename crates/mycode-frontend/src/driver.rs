@@ -342,8 +342,6 @@ pub struct FrontendDriver {
     pending_catalog_refresh: bool,
     /// MCP server ids whose enable switch waits on a successful tools probe.
     pending_mcp_enable: HashSet<String>,
-    /// Web backend ids whose enable switch waits on a successful probe.
-    pending_web_enable: HashSet<String>,
     /// The in-flight check was started by the user, so its result may toast.
     manual_update_check: bool,
     /// The staged payload's exit swap is already armed; staging the same
@@ -380,6 +378,8 @@ pub struct FrontendDriver {
     /// The `LoadUiState` reply landed (either way), so the remembered
     /// project no longer overwrites one the frontend picks.
     ui_state_loaded: bool,
+    /// The install-magpie notice has been shown; persisted in `ui.json`.
+    magpie_prompted: bool,
     /// Session opened while its turn was running. Events committed between
     /// the core reading that snapshot and the reply landing here were
     /// dropped as belonging to another chat, so the transcript reloads from
@@ -450,7 +450,6 @@ impl FrontendDriver {
             catalog_requested: false,
             pending_catalog_refresh: false,
             pending_mcp_enable: HashSet::new(),
-            pending_web_enable: HashSet::new(),
             manual_update_check: false,
             update_armed: false,
             applied_update: None,
@@ -465,6 +464,7 @@ impl FrontendDriver {
             agent_roles_project: None,
             agent_roles_stale: false,
             ui_state_loaded: false,
+            magpie_prompted: false,
             resync_on_turn_end: None,
             held_send: None,
             interrupt_after_compaction: None,
@@ -574,6 +574,35 @@ impl FrontendDriver {
     /// directory) waits for this, or the remembered project replaces it.
     pub fn ui_state_loaded(&self) -> bool {
         self.ui_state_loaded
+    }
+
+    /// Shows the one-time install notice when MCode has no magpie binding.
+    /// Persisted so a user who dismissed it is not told again on every start.
+    pub(crate) fn prompt_magpie_install(&mut self, out: &mut Vec<Effect>) {
+        if self.magpie_prompted || !self.ui_state_loaded {
+            return;
+        }
+        let active = self
+            .vm
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.magpie.is_active());
+        if active {
+            return;
+        }
+        self.magpie_prompted = true;
+        self.toast(
+            crate::i18n::t(
+                "Can't reach the magpie gateway. Install or start magpie (https://usemagpie.ai), \
+                 then run: magpie plugin add github:MCapricorns/magpie-mycode",
+                "连接不到 magpie 网关。请安装或启动 magpie（https://usemagpie.ai），\
+                 然后运行：magpie plugin add github:MCapricorns/magpie-mycode",
+            )
+            .to_owned(),
+            ToastKind::Warning,
+            out,
+        );
+        self.persist_ui_state();
     }
 
     /// The bundle waiting for the MCP-command confirmation, if any.

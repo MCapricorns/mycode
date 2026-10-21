@@ -2,10 +2,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mycode_config::{HomeLayout, UiState, locked_update_owned_file, replace_ui_state};
-use mycode_providers::catalog::store::{
-    CACHE_FORMAT_VERSION, CACHE_KIND, CATALOG_CACHE_PATH, MAX_CACHE_BYTES,
-};
+use mycode_config::{HomeLayout, UiState, replace_ui_state};
 
 use crate::{BranchId, BridgeCommand, BridgeReply, CoreBridge, HeadStamp, SessionId};
 
@@ -37,19 +34,6 @@ impl TestHome {
             },
         )
         .expect("disable automatic update checks");
-        // A fresh cache makes the production startup refresh network-free.
-        let cache = serde_json::json!({
-            "formatVersion": CACHE_FORMAT_VERSION,
-            "kind": CACHE_KIND,
-            "fetchedAt": crate::unix_now().as_secs().max(1),
-            "etag": null,
-            "document": mycode_providers::catalog::bundled(),
-        });
-        let bytes = serde_json::to_vec(&cache).expect("catalog cache bytes");
-        locked_update_owned_file(&home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES, |_| {
-            Ok(bytes.clone())
-        })
-        .expect("fresh catalog cache");
         Self(home)
     }
 }
@@ -235,6 +219,7 @@ async fn assert_failure_routes(failure: Failure) {
                 env: Default::default(),
                 endpoint: Some("https://example.invalid/mcp".to_owned()),
                 key_header: None,
+                headers: Default::default(),
             }),
         },
         failure,

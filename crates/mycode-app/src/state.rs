@@ -1,11 +1,12 @@
 //! Shared per-process core state owned by the bridge thread, plus the
-//! catalog and update-check background refreshes that run against it.
+//! gateway-model and update-check background refreshes that run against it.
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use mycode_agent::session::SessionId;
 use mycode_agent::session::SessionService;
@@ -13,7 +14,7 @@ use mycode_config::{
     DocumentRepair, HomeLayout, ProviderSettings, read_app_settings, read_ui_state,
     read_ui_state_with_repair,
 };
-use mycode_providers::catalog::{CachedCatalog, RefreshOutcome};
+use mycode_providers::catalog::CatalogDocument;
 use tokio_util::sync::CancellationToken;
 
 use crate::settings_io::render_config_error;
@@ -26,14 +27,13 @@ pub(crate) const UPDATE_USER_AGENT: &str = concat!("mycode-updates/", env!("CARG
 pub(crate) struct CoreState {
     pub(crate) service: SessionService,
     pub(crate) home: HomeLayout,
-    /// Resolved provider catalog; swapped in place by refreshes. The entry
-    /// keeps its raw cache bytes until the first `document()` call, so
-    /// startup never pays the multi-megabyte parse.
-    pub(crate) catalog: Arc<RwLock<CachedCatalog>>,
+    /// The model list magpie's gateway published, swapped on every refresh.
+    /// An empty document means the gateway has not answered yet.
+    pub(crate) catalog: Arc<RwLock<Arc<CatalogDocument>>>,
+    /// Unix seconds of the last successful gateway read; 0 before the first.
+    pub(crate) catalog_fetched_at: Arc<AtomicU64>,
     /// Per-session project directories for tool runs.
     pub(crate) projects: Arc<Mutex<HashMap<String, PathBuf>>>,
-    /// Cached short-lived Copilot bearer token and its unix expiry.
-    pub(crate) copilot: Arc<tokio::sync::Mutex<Option<(String, u64)>>>,
     /// Live turn and `/compact` tokens by session id; Escape targets these.
     pub(crate) turn_cancels: Arc<Mutex<HashMap<String, LiveWork>>>,
     /// One token per running subagent, keyed by `session_id:call_id`.
@@ -52,9 +52,6 @@ pub(crate) struct CoreState {
     /// finish last and overwrite the newer one. The tokio mutex is FIFO, so
     /// writes land in the order the frontend sent them.
     pub(crate) ui_state_writes: tokio::sync::Mutex<()>,
-    /// Bumped by every device-flow sign-in. A poll loop whose flow was
-    /// replaced stops quietly instead of reporting into the newer flow.
-    pub(crate) sign_in_generation: std::sync::atomic::AtomicU64,
 }
 
 /// One session's live work in [`CoreState::turn_cancels`]: the token a
@@ -79,11 +76,7 @@ pub(crate) enum WorkKind {
 }
 
 impl CoreState {
-    pub(crate) fn new(
-        home: HomeLayout,
-        cached: CachedCatalog,
-        mut startup_repairs: Vec<DocumentRepair>,
-    ) -> Self {
+    pub(crate) fn new(home: HomeLayout, mut startup_repairs: Vec<DocumentRepair>) -> Self {
         // Session→project bindings survive restarts through the durable UI
         // state; seed the in-memory map so tool working directories resolve
         // before the desktop re-binds anything. A damaged `ui.json` is reset
@@ -99,15 +92,12 @@ impl CoreState {
                 }
             }
         }
-        // The lazy source is published as-is: `catalog::active()` parses it
-        // on the first real lookup instead of at startup.
-        mycode_providers::catalog::install_active_cached(&cached);
         Self {
             service: SessionService::new(&home),
-            catalog: Arc::new(RwLock::new(cached)),
+            catalog: Arc::new(RwLock::new(Arc::new(CatalogDocument::default()))),
+            catalog_fetched_at: Arc::new(AtomicU64::new(0)),
             home,
             projects: Arc::new(Mutex::new(projects)),
-            copilot: Arc::new(tokio::sync::Mutex::new(None)),
             turn_cancels: Arc::new(Mutex::new(HashMap::new())),
             subagent_cancels: Arc::new(Mutex::new(HashMap::new())),
             steer_inboxes: Arc::new(Mutex::new(HashMap::new())),
@@ -115,7 +105,6 @@ impl CoreState {
             mcp_pool: Arc::new(tokio::sync::Mutex::new(None)),
             startup_repairs: Mutex::new(startup_repairs),
             ui_state_writes: tokio::sync::Mutex::new(()),
-            sign_in_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -163,6 +152,14 @@ impl CoreState {
             .cloned()
             .unwrap_or_else(|| self.home.root().join(mycode_config::SCRATCH_DIR))
     }
+
+    /// The model list the picker and the turn planner read.
+    pub(crate) fn models(&self) -> Arc<CatalogDocument> {
+        self.catalog
+            .read()
+            .map(|guard| Arc::clone(&guard))
+            .unwrap_or_default()
+    }
 }
 
 /// Validates and binds one project directory to a session.
@@ -184,75 +181,74 @@ pub(crate) fn set_project_dir(
     Ok(())
 }
 
-/// Materializes one cache entry into a reply-ready catalog. Call it from a
-/// blocking context: the first `document()` on a lazy entry runs the full
-/// multi-megabyte parse.
-pub(crate) fn catalog_info_from(cache: CachedCatalog) -> CatalogInfo {
+/// The catalog plus the time the gateway answered.
+pub(crate) fn catalog_info(state: &CoreState) -> CatalogInfo {
     CatalogInfo {
-        document: cache.document(),
-        fetched_at: cache.fetched_at,
+        document: state.models(),
+        fetched_at: state.catalog_fetched_at.load(Ordering::Relaxed),
     }
 }
 
-/// Refreshes the provider catalog and reports a successful swap.
+/// Reads magpie's `/v1/models` and publishes the new list.
+///
+/// A missing or disabled binding clears the list; an offline gateway keeps
+/// the previous one and reports why, so a running session is not emptied by
+/// a transient failure.
 pub(crate) async fn refresh_catalog(
     state: &CoreState,
     events: &crate::BridgeEventTx,
-    force: bool,
+    _force: bool,
 ) -> BridgeReply {
     let read_home = state.home.clone();
     let settings = match tokio::task::spawn_blocking(move || read_app_settings(&read_home)).await {
         Ok(Ok(settings)) => settings,
         Ok(Err(error)) => return BridgeReply::Catalog(Err(render_config_error(&error))),
-        Err(error) => return BridgeReply::Catalog(Err(format!("catalog task failed: {error}"))),
+        Err(error) => return BridgeReply::Catalog(Err(format!("settings task failed: {error}"))),
     };
-    // The catalog refresh can be the first request after launch.
     crate::settings_io::apply_network(&settings);
-    let outcome = mycode_providers::catalog::refresh(
-        &state.home,
-        &crate::user_agent::default_user_agent(),
-        force,
-        mycode_providers::catalog::DEFAULT_MAX_AGE_SECS,
-    )
-    .await;
-    match outcome {
-        RefreshOutcome::Fresh(cache)
-        | RefreshOutcome::NotModified(cache)
-        | RefreshOutcome::Updated(cache) => {
-            // A still-lazy cache materializes off the core thread: the
-            // reply carries a parsed document the UI can read directly.
-            let info = match tokio::task::spawn_blocking({
-                let cache = cache.clone();
-                move || catalog_info_from(cache)
-            })
-            .await
-            {
-                Ok(info) => info,
-                Err(error) => {
-                    return BridgeReply::Catalog(Err(format!("catalog task failed: {error}")));
-                }
-            };
-            let providers = info.document.providers.len();
-            let fetched_at = info.fetched_at;
-            mycode_providers::catalog::install_active(Arc::clone(&info.document));
+    if !settings.magpie.is_active() {
+        if let Ok(mut guard) = state.catalog.write() {
+            *guard = Arc::new(CatalogDocument::default());
+        }
+        state.catalog_fetched_at.store(0, Ordering::Relaxed);
+        let _ = events.send(BridgeEvent::CatalogUpdated {
+            providers: 0,
+            fetched_at: 0,
+        });
+        return BridgeReply::Catalog(Ok(catalog_info(state)));
+    }
+    let gateway = match crate::magpie::Gateway::from_settings(&settings.magpie) {
+        Ok(gateway) => gateway,
+        Err(message) => return BridgeReply::Catalog(Err(message)),
+    };
+    match gateway.fetch_models().await {
+        Ok(fetched) => {
+            let document = Arc::new(mycode_providers::catalog::magpie::document_from_provider(
+                fetched.provider,
+            ));
+            let providers = document.providers.len();
             if let Ok(mut guard) = state.catalog.write() {
-                *guard = cache;
+                *guard = Arc::clone(&document);
             }
+            state
+                .catalog_fetched_at
+                .store(fetched.fetched_at, Ordering::Relaxed);
             let _ = events.send(BridgeEvent::CatalogUpdated {
                 providers,
-                fetched_at,
+                fetched_at: fetched.fetched_at,
             });
-            BridgeReply::Catalog(Ok(info))
+            BridgeReply::Catalog(Ok(CatalogInfo {
+                document,
+                fetched_at: fetched.fetched_at,
+            }))
         }
-        RefreshOutcome::Unavailable(message) => BridgeReply::Catalog(Err(message)),
+        Err(message) => BridgeReply::Catalog(Err(message)),
     }
 }
 
-/// One background catalog refresh, queued once the UI reports ready. The
-/// cached document is the offline source: a cache younger than a day is
-/// reused without traffic, an older or missing one is revalidated or
-/// downloaded once. Every failure stays silent — the cache or the
-/// hand-maintained baseline rows still stand.
+/// One background gateway read, queued once the UI reports ready. A failure
+/// leaves the previous list in place and stays quiet: the Models page and the
+/// turn report the gateway error when they need it.
 pub(crate) fn spawn_catalog_refresh(state: Arc<CoreState>, events: crate::BridgeEventTx) {
     tokio::spawn(async move {
         refresh_catalog(&state, &events, false).await;
@@ -290,7 +286,7 @@ fn startup_update_event(
     }
 }
 
-/// Catalog or settings context window for compaction. Zero means the
+/// Gateway or settings context window for compaction. Zero means the
 /// Codex-style fallback threshold.
 pub(crate) fn model_context_window(
     state: &CoreState,
@@ -303,7 +299,7 @@ pub(crate) fn model_context_window(
 /// [`model_context_window`] against a catalog handle, for callers (a
 /// subagent host) that hold the catalog but not the whole core state.
 pub(crate) fn catalog_context_window(
-    catalog: &RwLock<CachedCatalog>,
+    catalog: &RwLock<Arc<CatalogDocument>>,
     provider: &ProviderSettings,
     model: &str,
 ) -> u64 {
@@ -314,7 +310,6 @@ pub(crate) fn catalog_context_window(
         return 0;
     };
     catalog
-        .document()
         .model_for_endpoint(&provider.id, Some(provider.base_url.as_str()), model)
         .map(|entry| entry.context)
         .filter(|context| *context > 0)
@@ -323,8 +318,8 @@ pub(crate) fn catalog_context_window(
 
 /// Output-token cap for one turn.
 ///
-/// A configured `maxOutput` wins, then models.dev `limit.output`, then the
-/// Messages fallback of 32_000 (`OUTPUT_TOKEN_MAX` in OpenCode).
+/// A configured `maxOutput` wins, then the gateway's `max_output_tokens`,
+/// then the Messages fallback of 32_000 (`OUTPUT_TOKEN_MAX` in OpenCode).
 pub(crate) fn model_output_limit(
     state: &CoreState,
     provider: &ProviderSettings,
@@ -335,7 +330,6 @@ pub(crate) fn model_output_limit(
     }
     if let Ok(catalog) = state.catalog.read()
         && let Some(limit) = catalog
-            .document()
             .model_for_endpoint(&provider.id, Some(provider.base_url.as_str()), model)
             .map(|entry| entry.output)
             .filter(|output| *output > 0)
@@ -376,89 +370,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_catalog_refresh_replaces_the_in_memory_catalog() {
-        use mycode_config::{HomeLayout, locked_update_owned_file};
-        use mycode_providers::catalog::store::{
-            CACHE_FORMAT_VERSION, CACHE_KIND, CATALOG_CACHE_PATH, MAX_CACHE_BYTES,
-        };
-        use mycode_providers::catalog::{CachedCatalog, bundled};
-
-        use super::{CoreState, refresh_catalog};
-
-        let root = std::env::temp_dir().join(format!(
-            "mycode-catalog-fresh-{}-{}",
-            std::process::id(),
-            crate::unix_now().as_nanos()
-        ));
-        std::fs::create_dir_all(&root).expect("root");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
-        }
-        let home = HomeLayout::from_root(&root).expect("home");
-        let fetched_at = crate::unix_now().as_secs().max(1);
-        let body = serde_json::json!({
-            "formatVersion": CACHE_FORMAT_VERSION,
-            "kind": CACHE_KIND,
-            "fetchedAt": fetched_at,
-            "etag": null,
-            "document": {
-                "providers": [{
-                    "id": "marker-fresh",
-                    "name": "Marker",
-                    "kind": "openai-completions",
-                    "baseUrl": "https://example.invalid/v1",
-                    "models": [{ "id": "marker-model", "name": "Marker Model" }]
-                }]
-            }
-        });
-        let mut bytes = serde_json::to_vec(&body).expect("json");
-        bytes.push(b'\n');
-        locked_update_owned_file(&home, CATALOG_CACHE_PATH, MAX_CACHE_BYTES, |_| {
-            Ok(bytes.clone())
-        })
-        .expect("cache");
-        let state = CoreState::new(
-            home,
-            CachedCatalog::from_document(bundled().clone(), 0, None),
-            Vec::new(),
-        );
-        assert!(
-            state
-                .catalog
-                .read()
-                .expect("catalog")
-                .document()
-                .provider("marker-fresh")
-                .is_none()
-        );
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let reply = refresh_catalog(&state, &tx, false).await;
-        let crate::BridgeReply::Catalog(Ok(info)) = reply else {
-            panic!("fresh refresh failed: {reply:?}");
-        };
-        assert!(info.document.provider("marker-fresh").is_some());
-        assert!(
-            state
-                .catalog
-                .read()
-                .expect("catalog")
-                .document()
-                .provider("marker-fresh")
-                .is_some()
-        );
-        let event = rx.try_recv().expect("catalog event");
-        assert!(matches!(event, crate::BridgeEvent::CatalogUpdated { .. }));
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
     async fn max_output_prefers_the_setting_then_the_catalog_then_32000() {
         use mycode_config::{HomeLayout, ProviderSettings};
-        use mycode_providers::catalog::{
-            CachedCatalog, CatalogDocument, CatalogModel, CatalogProvider,
-        };
+        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
 
         let root = std::env::temp_dir().join(format!(
             "mycode-max-output-{}-{}",
@@ -472,35 +386,24 @@ mod tests {
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
         }
         let home = HomeLayout::from_root(&root).expect("home");
-        let state = super::CoreState::new(
-            home,
-            CachedCatalog::from_document(
-                CatalogDocument {
-                    providers: vec![CatalogProvider {
-                        id: "lab".to_owned(),
-                        models: vec![CatalogModel {
-                            id: "listed".to_owned(),
-                            output: 8_000,
-                            ..CatalogModel::default()
-                        }],
-                        ..CatalogProvider::default()
-                    }],
-                },
-                0,
-                None,
-            ),
+        let state = super::CoreState::new(home, Vec::new());
+        *state.catalog.write().expect("catalog") = std::sync::Arc::new(CatalogDocument {
+            providers: vec![CatalogProvider {
+                id: "magpie".to_owned(),
+                models: vec![CatalogModel {
+                    id: "listed".to_owned(),
+                    output: 8_000,
+                    ..CatalogModel::default()
+                }],
+                ..CatalogProvider::default()
+            }],
+        });
+        let mut provider = ProviderSettings::magpie(
+            "http://127.0.0.1:3425/v1",
+            vec!["listed".to_owned(), "custom".to_owned()],
             Vec::new(),
         );
-        let mut provider = ProviderSettings {
-            id: "lab".to_owned(),
-            kind: "openai-completions".to_owned(),
-            base_url: "https://lab.example/v1".to_owned(),
-            models: vec!["listed".to_owned(), "custom".to_owned()],
-            enabled: true,
-            context_limit: None,
-            max_output: Some(4_096),
-            hidden_models: Vec::new(),
-        };
+        provider.max_output = Some(4_096);
         assert_eq!(
             super::model_output_limit(&state, &provider, "listed"),
             Some(4_096)

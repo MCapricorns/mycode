@@ -24,9 +24,7 @@ impl Tui {
             let line: String = text.chars().filter(|ch| !ch.is_control()).collect();
             match &mut self.settings_overlay {
                 Some(
-                    SettingsOverlay::ApiKey { buffer, .. }
-                    | SettingsOverlay::BaseUrl { buffer, .. }
-                    | SettingsOverlay::ProxyUrl { buffer },
+                    SettingsOverlay::ApiKey { buffer, .. } | SettingsOverlay::ProxyUrl { buffer },
                 ) => buffer.push_str(line.trim()),
                 Some(SettingsOverlay::Model { filter, cursor, .. }) => {
                     filter.push_str(&line);

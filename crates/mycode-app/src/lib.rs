@@ -1,7 +1,7 @@
 //! `mycode-app` — the application core, with no frontend dependency.
 //!
 //! Everything a MYCode frontend needs to drive is here: sessions, model
-//! turns, tools and their hosts, MCP servers, web search, provider
+//! turns, tools and their hosts, MCP servers, provider
 //! credentials, self-update, and the durable settings. A frontend owns none
 //! of it. It starts a [`CoreBridge`], sends [`BridgeCommand`]s, awaits
 //! [`BridgeReply`]s, and renders the [`BridgeEvent`] stream; the values in
@@ -22,12 +22,12 @@
 //!
 //! Module map: `dispatch` runs the command loop, `state` holds the shared
 //! core state, `ledger` reads and writes session ledgers, `turn` drives one
-//! model turn, `tool_hosts` bridges the host-backed tools, `oauth` runs the
-//! provider device flows, `settings_io` persists settings and secrets,
+//! model turn, `tool_hosts` bridges the host-backed tools, `magpie` reads the
+//! gateway's model list, `settings_io` persists settings and secrets,
 //! `projection` renders display entries, `search` backs the composer's
 //! `@` mention, `mcp_tools` bridges MCP servers, `subagent` hosts the `agent`
 //! tool, `user_agent` fixes the outbound identity, and `compaction`,
-//! `export`, `install`, `title`, `updates`, `web_client`, and `mcp_client`
+//! `export`, `install`, `title`, `updates`, and `mcp_client`
 //! round out the housekeeping and I/O seams.
 
 #[cfg(test)]
@@ -37,9 +37,9 @@ mod dispatch;
 mod export;
 pub mod install;
 mod ledger;
+mod magpie;
 mod mcp_client;
 mod mcp_tools;
-mod oauth;
 mod projection;
 pub mod protocol;
 
@@ -56,7 +56,6 @@ mod tool_hosts;
 mod turn;
 mod updates;
 mod user_agent;
-mod web_client;
 
 pub use mycode_providers::{ProxyTestReport, ProxyTestRoute};
 pub use protocol::{
@@ -125,13 +124,6 @@ pub enum BridgeCommand {
         provider_id: String,
         /// The key; empty clears the stored entry.
         api_key: String,
-    },
-    /// Start an OAuth device-flow sign-in for Copilot or Codex.
-    StartOAuthSignIn {
-        /// Catalog / settings provider id.
-        provider_id: String,
-        /// Model ids to bind to the provider once the sign-in succeeds.
-        models: Vec<String>,
     },
     /// Run one model turn over stored history and stream the reply. The
     /// turn reads the branch's durable head itself, so a snapshot that is
@@ -213,14 +205,6 @@ pub enum BridgeCommand {
         /// The server row to probe. The whole row travels, not just its id,
         /// so the settings form can test a binding before it is saved.
         server: Box<mycode_config::McpServerSettings>,
-    },
-    /// Probe one web-search backend: resolves its key (environment or
-    /// vault), then runs one bounded search. The settings page gates the
-    /// "enabled" switch on this, so a dead key can never silently turn a
-    /// backend on.
-    ProbeWebBackend {
-        /// The backend row to probe.
-        backend: Box<mycode_config::WebBackendSettings>,
     },
     /// Load one page of committed events older than `before`.
     ///
@@ -517,13 +501,6 @@ pub enum BridgeEvent {
         /// Short failure text. Not drawn as a full-width error in About.
         message: String,
     },
-    /// A device-flow sign-in (Copilot or Codex) completed.
-    CopilotSignedIn,
-    /// A device-flow sign-in failed or expired.
-    CopilotSignInFailed {
-        /// Rendered failure for the sign-in panel.
-        message: String,
-    },
     /// The next provider request follows a rewrite of the cached prefix.
     ///
     /// Sent before that request's [`BridgeEvent::UsageSnapshot`], including
@@ -637,14 +614,6 @@ pub enum BridgeReply {
         /// Listed tool names, or why the probe failed.
         outcome: Result<Vec<String>, String>,
     },
-    /// Web backend probe result. The backend id rides the reply even on
-    /// failure, so the settings page can attribute the error to its row.
-    WebBackendProbed {
-        /// Backend identity the probe ran against.
-        backend_id: String,
-        /// `Ok` means key resolution and a bounded search both succeeded.
-        outcome: Result<(), String>,
-    },
     /// Recall result: truncated conversation plus edited text. Workspace
     /// files are unchanged.
     Recalled(Result<(Box<ActiveConversation>, Option<String>), String>),
@@ -675,23 +644,9 @@ pub enum BridgeReply {
     /// Proxy test result. `Err` means the value on screen is not a proxy
     /// setting at all; a failed request still yields a report.
     ProxyTested(Result<ProxyTestReport, String>),
-    /// The device flow started; the user code is on screen.
-    CopilotSignInStarted(Result<CopilotSignInInfo, String>),
     /// Title-summarization acceptance; the result rides the event channel as
     /// [`BridgeEvent::SessionTitle`].
     TitleSummarized(Result<(), String>),
-}
-
-/// What the user needs to complete a device-flow sign-in.
-#[derive(Clone, Debug)]
-pub struct CopilotSignInInfo {
-    /// The provider this flow signs in (`github-copilot` or `openai-codex`),
-    /// so a shared OAuth panel can attribute the code.
-    pub provider_id: String,
-    /// Code the user types at the verification page.
-    pub user_code: String,
-    /// Verification page opened in the browser.
-    pub verification_uri: String,
 }
 
 /// The resolved provider catalog shared with the UI.

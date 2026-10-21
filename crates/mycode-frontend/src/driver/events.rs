@@ -225,20 +225,6 @@ impl FrontendDriver {
                 }
                 return;
             }
-            BridgeEvent::CopilotSignedIn => {
-                // The provider entry and key landed; refresh the settings
-                // projection so the row and keyed badge appear immediately.
-                // The catalog stays a lazy load: model picks read it anyway.
-                self.dispatch(BridgeCommand::LoadSettings);
-                if self.catalog_requested || self.vm.catalog.is_some() || self.catalog_needed() {
-                    self.catalog_requested = true;
-                    self.dispatch(BridgeCommand::GetCatalog);
-                }
-                FrontendAction::CopilotSignInFinished(Ok(()))
-            }
-            BridgeEvent::CopilotSignInFailed { message } => {
-                FrontendAction::CopilotSignInFinished(Err(message))
-            }
             BridgeEvent::UpdateAvailable { offer } => {
                 // A second offer must not knock a download or a staged
                 // package back to "available" — that both lies about the

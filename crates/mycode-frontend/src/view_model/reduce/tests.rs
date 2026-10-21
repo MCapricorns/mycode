@@ -10,7 +10,6 @@ fn a_proxy_edit_drops_the_previous_test_result() {
         settings: Some(crate::view_model::SettingsState::from_settings(
             &mycode_config::AppSettings::default(),
             1,
-            Vec::new(),
         )),
         ..WorkspaceState::default()
     };
@@ -36,45 +35,6 @@ fn a_proxy_edit_drops_the_previous_test_result() {
         },
     );
     assert_eq!(state.proxy_test, crate::view_model::ProxyTestState::Idle);
-}
-
-#[test]
-fn hiding_and_showing_models_edits_the_provider_hidden_list() {
-    let mut provider = mycode_config::ProviderSettings {
-        id: "openai".to_owned(),
-        kind: "openai-responses".to_owned(),
-        base_url: "https://api.openai.com/v1".to_owned(),
-        models: vec!["gpt".to_owned()],
-        enabled: true,
-        context_limit: None,
-        max_output: None,
-        hidden_models: Vec::new(),
-    };
-    let ids = |models: &[&str]| models.iter().map(|id| (*id).to_owned()).collect();
-    assert!(super::settings::set_models_shown(
-        &mut provider,
-        ids(&["a", "b", "a"]),
-        false
-    ));
-    assert_eq!(provider.hidden_models, ["a", "b"]);
-    assert!(!provider.shows_model("a"));
-    assert!(provider.shows_model("gpt"));
-    assert!(!super::settings::set_models_shown(
-        &mut provider,
-        ids(&["b"]),
-        false
-    ));
-    assert!(super::settings::set_models_shown(
-        &mut provider,
-        ids(&["a", "z"]),
-        true
-    ));
-    assert_eq!(provider.hidden_models, ["b"]);
-    assert!(!super::settings::set_models_shown(
-        &mut provider,
-        ids(&["z"]),
-        true
-    ));
 }
 
 fn user(id: &str, text: &str) -> ConversationEntry {
@@ -388,11 +348,8 @@ fn reasoning_pick_stays_on_the_session_and_does_not_dirty_settings() {
     use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
 
     let mut state = WorkspaceState::default();
-    let mut settings = crate::view_model::SettingsState::from_settings(
-        &mycode_config::AppSettings::default(),
-        1,
-        Vec::new(),
-    );
+    let mut settings =
+        crate::view_model::SettingsState::from_settings(&mycode_config::AppSettings::default(), 1);
     settings.saving = true;
     state.settings = Some(settings);
     state.catalog = Some(Arc::new(CatalogDocument {

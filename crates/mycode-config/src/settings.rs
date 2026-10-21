@@ -11,28 +11,25 @@
 //! rebuilt from defaults, so startup can continue without re-entering whole
 //! sections. Session ledgers are not part of this document.
 
+mod magpie;
 mod mcp;
 mod providers;
 mod proxy;
 mod skills;
 mod subagent_roles;
-mod web;
 
-pub(crate) use mcp::{MAX_MCP_ARGS, is_env_var_name};
+pub use magpie::{
+    DEFAULT_MAGPIE_BASE_URL, MAGPIE_KEY_PREFIX, MAGPIE_PROVIDER_ID, MAGPIE_PROVIDER_NAME,
+    MagpieSettings,
+};
+pub(crate) use mcp::{MAX_MCP_ARGS, MAX_MCP_HEADERS, is_env_var_name, is_header_name};
 pub use mcp::{
-    MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, builtin_mcp_servers, is_mcp_executable,
-    split_command_line,
+    MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, is_mcp_executable, split_command_line,
 };
-pub use providers::{
-    MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MODELS_PER_PROVIDER, MAX_PROVIDERS, ProviderSettings,
-};
+pub use providers::{MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MODELS_PER_PROVIDER, ProviderSettings};
 pub use proxy::{PROXY_SCHEMES, ProxyPreference};
 pub use skills::{MAX_DISABLED_SKILLS, SkillsSettings};
 pub use subagent_roles::{SUBAGENT_CONCURRENCY, SubagentRoleSettings, SubagentSettings};
-pub use web::{
-    MAX_WEB_BACKENDS, WebBackendSettings, WebSettings, builtin_web_backends, merged_web_backends,
-    web_key_env,
-};
 
 use serde::{Deserialize, Serialize};
 
@@ -112,16 +109,14 @@ pub struct AppSettings {
     /// See [`ProxyPreference`].
     #[serde(skip_serializing_if = "String::is_empty")]
     pub proxy: String,
-    /// Configured providers.
-    pub providers: Vec<ProviderSettings>,
-    /// Web search settings.
-    pub web: WebSettings,
+    /// The local magpie gateway, written by magpie's agent plugin.
+    #[serde(default, skip_serializing_if = "MagpieSettings::is_default")]
+    pub magpie: MagpieSettings,
     /// MCP servers.
     pub mcp_servers: Vec<McpServerSettings>,
     /// Appearance.
     pub appearance: AppearanceSettings,
-    /// Requested reasoning effort from models.dev options; absent keeps the
-    /// provider default.
+    /// Requested reasoning effort; absent keeps the provider default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     /// Subagent delegation settings.
@@ -171,8 +166,7 @@ impl AppSettings {
                 "reasoningEffort: must be a models.dev option (off, none, on, minimal, low, medium, high, xhigh, max)",
             ));
         }
-        self.validate_providers()?;
-        self.validate_web()?;
+        self.validate_magpie()?;
         self.validate_mcp()?;
         if !VALID_THEMES.contains(&self.appearance.theme.as_str()) {
             return Err(invalid("appearance.theme: must be dark or light"));
@@ -398,43 +392,11 @@ pub fn salvage_app_settings(document: &serde_json::Value) -> Option<AppSettings>
             probe.reasoning_effort = reasoning;
         });
     }
-    for provider in crate::document_repair::salvage_list::<ProviderSettings>(object, "providers") {
-        if settings.providers.len() >= MAX_PROVIDERS {
-            break;
-        }
-        if settings.providers.iter().any(|held| held.id == provider.id) {
-            continue;
-        }
+    if let Some(magpie) = crate::document_repair::salvage_field::<MagpieSettings>(object, "magpie")
+    {
         crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
-            probe.providers.push(provider);
+            probe.magpie = magpie;
         });
-    }
-    if let Some(web) = object.get("web").and_then(serde_json::Value::as_object) {
-        for backend in crate::document_repair::salvage_list::<WebBackendSettings>(web, "backends") {
-            if settings
-                .web
-                .backends
-                .iter()
-                .any(|held| held.id == backend.id)
-            {
-                // A stored row overlays its vendor slot, so an enabled flag
-                // or key hint the user saved survives the reset.
-                crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
-                    if let Some(slot) = probe
-                        .web
-                        .backends
-                        .iter_mut()
-                        .find(|held| held.id == backend.id)
-                    {
-                        *slot = backend;
-                    }
-                });
-            } else if settings.web.backends.len() < MAX_WEB_BACKENDS {
-                crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
-                    probe.web.backends.push(backend);
-                });
-            }
-        }
     }
     for server in crate::document_repair::salvage_list::<McpServerSettings>(object, "mcpServers") {
         if settings.mcp_servers.len() >= MAX_MCP_SERVERS {
@@ -495,6 +457,48 @@ pub(crate) fn is_https_url(value: &str) -> bool {
     let host = rest.split('/').next().unwrap_or_default();
     // Graphic ASCII already excludes whitespace, NUL, and other controls.
     !host.is_empty() && host.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
+/// Whether `value` is an `http://` URL on this machine.
+///
+/// magpie's gateway listens on loopback only, and its agent plugin writes
+/// `http://127.0.0.1:<port>/v1`. Nothing else may use plain http.
+pub(crate) fn is_local_http_url(value: &str) -> bool {
+    if bounded_text(value, MAX_URL_BYTES).is_err() {
+        return false;
+    }
+    let Some(rest) = value.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/');
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        let Some((host, port)) = rest.split_once(']') else {
+            return false;
+        };
+        (format!("[{host}]"), port.strip_prefix(':'))
+    } else if let Some((host, port)) = authority.rsplit_once(':') {
+        (host.to_owned(), Some(port))
+    } else {
+        (authority.to_owned(), None)
+    };
+    let host_ok = matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]");
+    let port_ok = port.is_none_or(|port| {
+        !port.is_empty() && port.len() <= 5 && port.bytes().all(|byte| byte.is_ascii_digit())
+    });
+    host_ok && port_ok
+}
+
+/// Whether `value` can name one gateway model (`provider/model`).
+pub(crate) fn is_portable_model_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && !value
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
 }
 
 #[cfg(test)]
@@ -561,31 +565,19 @@ mod tests {
             "appearance": { "theme": "nope", "language": "zh" },
             "userAgent": "custom-agent",
             "usage": { "enabled": true },
-            "providers": [
-                {
-                    "id": "openai",
-                    "kind": "openai-completions",
-                    "baseUrl": "https://api.openai.com/v1",
-                    "models": ["gpt-4o"],
-                    "enabled": true
-                },
-                { "id": "broken provider without the required fields" },
-                {
-                    "id": "openai",
-                    "kind": "openai-completions",
-                    "baseUrl": "https://duplicate.invalid/v1",
-                    "models": ["dup"],
-                    "enabled": true
-                }
-            ],
             "web": { "backends": [
-                { "id": "exa", "kind": "exa", "endpoint": "https://api.exa.ai", "enabled": true },
-                { "id": "mine", "kind": "custom", "endpoint": "https://api.mine.ai", "enabled": true }
+                { "id": "exa", "kind": "exa", "endpoint": "https://api.exa.ai", "enabled": true }
             ]},
+            "magpie": {
+                "enabled": true,
+                "baseUrl": "http://127.0.0.1:3425/v1",
+                "apiKey": "magpie-mycode",
+                "model": "deepseek/deepseek-chat"
+            },
             "subagents": {
                 "maxConcurrent": 4,
                 "roles": [
-                    { "role": "scout", "enabled": true, "provider": "openai", "model": "gpt-4o" },
+                    { "role": "scout", "enabled": true, "provider": "magpie", "model": "gpt-4o" },
                     { "role": "artisan", "enabled": true, "provider": "missing", "model": "x" }
                 ]
             },
@@ -600,27 +592,9 @@ mod tests {
         // The invalid theme fell back to the default; its language survived.
         assert_eq!(settings.appearance.theme, "dark");
         assert_eq!(settings.appearance.language, "zh");
-        // The healthy provider survived; the malformed row and the
-        // duplicate id were dropped.
-        assert_eq!(
-            settings
-                .providers
-                .iter()
-                .map(|provider| provider.id.as_str())
-                .collect::<Vec<_>>(),
-            ["openai"]
-        );
-        // The enabled vendor overlay survived; the retired `custom` kind
-        // did not, and the single-enabled rule was kept.
-        assert_eq!(
-            settings
-                .web
-                .backends
-                .iter()
-                .map(|backend| (backend.id.as_str(), backend.enabled))
-                .collect::<Vec<_>>(),
-            [("querit", false), ("anysearch", false), ("exa", true)]
-        );
+        // magpie's binding survived; the retired web family was dropped.
+        assert!(settings.magpie.enabled);
+        assert_eq!(settings.magpie.model, "deepseek/deepseek-chat");
         // Healthy subagent role routes and disabled skills survive retired
         // sibling keys and bad entries.
         assert_eq!(settings.subagents.roles.len(), 1);
@@ -628,7 +602,14 @@ mod tests {
         assert_eq!(settings.skills.disabled, ["review"]);
         // Removed keys are simply not read by the salvage.
         let encoded = serde_json::to_string(&settings).expect("encode");
-        for removed in ["userAgent", "usage", "tools", "palette", "fontFamily"] {
+        for removed in [
+            "userAgent",
+            "usage",
+            "tools",
+            "palette",
+            "fontFamily",
+            "web",
+        ] {
             assert!(!encoded.contains(removed), "{encoded}");
         }
     }

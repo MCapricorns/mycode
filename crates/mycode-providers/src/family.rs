@@ -544,7 +544,7 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
     // catalog and the bundled baseline both omit keeps the id-based token so
     // coding-plan ids such as `k3` and `k3-256k` keep working.
     if is_k3_model(model_id) {
-        if let Some(token) = kimi_effort_token(model_id, level, true) {
+        if let Some(token) = kimi_effort_token(level) {
             body["reasoning_effort"] = json!(token);
         }
         return;
@@ -559,124 +559,29 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
         return;
     }
     body["thinking"] = json!({ "type": "enabled" });
+    // The highspeed coding-plan row publishes thinking but no effort list:
+    // it accepts the toggle and rejects `reasoning_effort`.
+    if model_id.contains("kimi-for-coding-highspeed") {
+        return;
+    }
     // OpenCode `variants()` returns `{}` for an id containing `kimi`
     // (`packages/opencode/src/provider/transform.ts`) before the npm switch,
     // so that map never adds effort. When models.dev publishes an effort
     // list, `reasoningVariants` → `effortVariants` → `reasoningEffort` does.
     // `@ai-sdk/openai-compatible` returns `{ reasoningEffort }`, the wire
     // field `reasoning_effort`. The K2 toggle stays; the effort token is
-    // sent beside it. The live or cached catalog is consulted first, then
-    // the bundled baseline.
-    if let Some(token) = kimi_effort_token(model_id, level, false) {
+    // sent beside it.
+    if let Some(token) = kimi_effort_token(level) {
         body["reasoning_effort"] = json!(token);
     }
 }
 
 /// Effort token for a Kimi chat model.
 ///
-/// `fallback_when_absent`: when neither the active nor bundled catalog lists
-/// this model id, still send the id-based effort token. A row that lists a
-/// toggle or an effort list gates the token the same way as every other Kimi
-/// model.
-fn kimi_effort_token(
-    model_id: &str,
-    level: ReasoningLevel,
-    fallback_when_absent: bool,
-) -> Option<&'static str> {
-    let active = crate::catalog::active();
-    effort_against(
-        active.as_deref(),
-        crate::catalog::bundled(),
-        model_id,
-        level,
-        fallback_when_absent,
-    )
-}
-
-fn effort_against(
-    active: Option<&crate::catalog::CatalogDocument>,
-    bundled: &crate::catalog::CatalogDocument,
-    model_id: &str,
-    level: ReasoningLevel,
-    fallback_when_absent: bool,
-) -> Option<&'static str> {
-    let token = k3_effort(level)?;
-    let publication = kimi_publication_from(active, bundled, model_id);
-    match publication {
-        Some(publication) if publication.published => publication
-            .efforts
-            .iter()
-            .any(|effort| effort.eq_ignore_ascii_case(token))
-            .then_some(token),
-        _ if fallback_when_absent => Some(token),
-        _ => None,
-    }
-}
-
-struct KimiPublication {
-    efforts: Vec<String>,
-    published: bool,
-}
-
-/// Active catalog row when it names the model, otherwise the bundled row.
-///
-/// The first row that publishes a toggle or an effort list wins, the same
-/// preference as `CatalogDocument::model_for_endpoint`. The id matches in
-/// full, or as the last slash, colon, or backslash segment, so a capture
-/// proxy can prefix the model.
-fn kimi_publication_from(
-    active: Option<&crate::catalog::CatalogDocument>,
-    bundled: &crate::catalog::CatalogDocument,
-    model_id: &str,
-) -> Option<KimiPublication> {
-    if let Some(active) = active
-        && let Some(publication) = publication_in(active, model_id)
-    {
-        return Some(publication);
-    }
-    publication_in(bundled, model_id)
-}
-
-fn publication_in(
-    catalog: &crate::catalog::CatalogDocument,
-    model_id: &str,
-) -> Option<KimiPublication> {
-    let leaf = model_id.rsplit(['/', ':', '\\']).next().unwrap_or(model_id);
-    let mut exact_options: Option<&crate::catalog::CatalogModel> = None;
-    let mut leaf_options = None;
-    let mut exact_any = None;
-    let mut leaf_any = None;
-    for provider in &catalog.providers {
-        for model in &provider.models {
-            let exact = model.id.eq_ignore_ascii_case(model_id);
-            let leaf_hit = model.id.eq_ignore_ascii_case(leaf);
-            if !exact && !leaf_hit {
-                continue;
-            }
-            let published = model.reasoning_toggle || !model.reasoning_efforts.is_empty();
-            if exact {
-                if published && exact_options.is_none() {
-                    exact_options = Some(model);
-                }
-                if exact_any.is_none() {
-                    exact_any = Some(model);
-                }
-            }
-            if leaf_hit {
-                if published && leaf_options.is_none() {
-                    leaf_options = Some(model);
-                }
-                if leaf_any.is_none() {
-                    leaf_any = Some(model);
-                }
-            }
-        }
-    }
-    let model = exact_options.or(leaf_options).or(exact_any).or(leaf_any)?;
-    Some(KimiPublication {
-        published: model.reasoning_toggle || !model.reasoning_efforts.is_empty(),
-        efforts: model.reasoning_efforts.clone(),
-    })
+/// The app only sends a level the gateway catalog advertises for the model,
+/// so the id mapping decides the wire token.
+fn kimi_effort_token(level: ReasoningLevel) -> Option<&'static str> {
+    k3_effort(level)
 }
 
 fn apply_kimi_anthropic(body: &mut Value, level: ReasoningLevel) {
