@@ -7,7 +7,8 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE, HANDLE,
+    INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
@@ -20,7 +21,8 @@ use windows_sys::Win32::Security::{
     SECURITY_DESCRIPTOR_CONTROL, SetKernelObjectSecurity, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA, READ_CONTROL,
     ReOpenFile, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -42,7 +44,27 @@ struct AclEvidence {
     protected: bool,
     ace_count: u32,
     extra_aces: u32,
+    /// `ACCESS_ALLOWED` ACEs for another principal that grant write, delete, or
+    /// permission changes. A drifted DACL is repairable only while this is
+    /// zero: otherwise someone else could have written the bytes.
+    foreign_write: u32,
 }
+
+/// File rights that let another principal change the bytes or the ACL.
+/// `MAXIMUM_ALLOWED` is included because it asks the kernel for every right
+/// the DACL permits, so an ACE that grants only that mask still lets a
+/// foreign principal write.
+const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
+const WRITE_LIKE_ACCESS: u32 = FILE_WRITE_DATA
+    | FILE_APPEND_DATA
+    | FILE_WRITE_EA
+    | FILE_WRITE_ATTRIBUTES
+    | DELETE
+    | WRITE_DAC
+    | WRITE_OWNER
+    | GENERIC_WRITE
+    | GENERIC_ALL
+    | MAXIMUM_ALLOWED;
 
 pub(super) struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
 
@@ -94,6 +116,11 @@ pub(super) fn protected_descriptor() -> Result<SecurityDescriptor, ConfigError> 
 #[cfg(test)]
 pub(super) fn empty_dacl_descriptor() -> Result<SecurityDescriptor, ConfigError> {
     descriptor_from_sddl("D:")
+}
+
+#[cfg(test)]
+pub(super) fn descriptor_for_tests(sddl: &str) -> Result<SecurityDescriptor, ConfigError> {
+    descriptor_from_sddl(sddl)
 }
 
 fn protected_sddl(current_sid: &str) -> String {
@@ -214,6 +241,63 @@ pub(super) fn verify_fixed_descriptor(file: &File) -> Result<(), ConfigError> {
     }
 }
 
+/// Repairs a DACL that drifted from the exact owner+SYSTEM shape while this
+/// user still owned the file, and verifies the result.
+///
+/// A tool running as the same user (an agent's helper process, for example)
+/// creates a file in the owned home under its own token: the new file carries
+/// an inherited read-only logon-session ACE and drops `SE_DACL_PROTECTED`.
+/// Treating that as document damage made every such write reset the settings
+/// and report a repair. The repair is refused when a principal other than the
+/// owner or SYSTEM holds write access, so bytes someone else could have
+/// changed still fail the strict read.
+pub(super) fn repair_drifted_descriptor(file: &File) -> Result<(), ConfigError> {
+    let current_sid = current_user_sid_string()?;
+    let evidence = inspect_handle_with_sid(file, &current_sid)?;
+    if is_exact_fixed_descriptor(&evidence, &current_sid) {
+        return Ok(());
+    }
+    if !evidence.owner_allowed || evidence.foreign_write > 0 {
+        return Err(ConfigError::new(ConfigErrorKind::AccessControl));
+    }
+    // Read handles carry no WRITE_DAC, so the repair reopens the object.
+    let control = reopen_for_dacl(file)?;
+    let descriptor = protected_descriptor()?;
+    // SAFETY: `control` is live with WRITE_DAC and `descriptor` stays live for
+    // this synchronous call.
+    let updated = unsafe {
+        SetKernelObjectSecurity(
+            control.as_raw_handle(),
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            descriptor.as_ptr(),
+        )
+    };
+    if updated == 0 {
+        let error = io::Error::last_os_error();
+        return Err(ConfigError::new(ConfigErrorKind::AccessControl).with_io_kind(error.kind()));
+    }
+    verify_fixed_descriptor(&control)
+}
+
+fn reopen_for_dacl(file: &File) -> Result<File, ConfigError> {
+    // SAFETY: `file` is live. ReOpenFile returns a distinct owned handle or the
+    // documented INVALID_HANDLE_VALUE sentinel.
+    let handle = unsafe {
+        ReOpenFile(
+            file.as_raw_handle(),
+            READ_CONTROL | WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            0,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        let error = io::Error::last_os_error();
+        return Err(ConfigError::new(ConfigErrorKind::AccessControl).with_io_kind(error.kind()));
+    }
+    // SAFETY: ReOpenFile returned a fresh successful handle.
+    Ok(unsafe { File::from_raw_handle(handle) })
+}
+
 fn is_exact_fixed_descriptor(evidence: &AclEvidence, current_sid: &str) -> bool {
     evidence.owner_allowed
         && evidence.owner_current_user
@@ -280,6 +364,7 @@ fn inspect_descriptor(
         protected: control & SE_DACL_PROTECTED != 0,
         ace_count: ace_evidence.ace_count,
         extra_aces: ace_evidence.extra_aces,
+        foreign_write: ace_evidence.foreign_write,
     })
 }
 
@@ -288,15 +373,19 @@ struct AceEvidence {
     system: bool,
     ace_count: u32,
     extra_aces: u32,
+    foreign_write: u32,
 }
 
 fn inspect_aces(dacl: *mut ACL, current_sid: &str) -> AceEvidence {
     if dacl.is_null() {
+        // A NULL DACL grants everyone full access; treat it as an outside
+        // writer rather than as harmless drift.
         return AceEvidence {
             current_user: false,
             system: false,
             ace_count: 0,
             extra_aces: 1,
+            foreign_write: 1,
         };
     }
     // SAFETY: `dacl` aliases a live security descriptor.
@@ -304,26 +393,27 @@ fn inspect_aces(dacl: *mut ACL, current_sid: &str) -> AceEvidence {
     let mut current_user = false;
     let mut system = false;
     let mut extra_aces = 0u32;
+    let mut foreign_write = 0u32;
     for index in 0..ace_count {
         let mut raw_ace: *mut core::ffi::c_void = null_mut();
         // SAFETY: GetAce validates the index and writes `raw_ace` on success.
         let queried = unsafe { GetAce(dacl, index, &mut raw_ace) };
         if queried == 0 || raw_ace.is_null() {
             extra_aces = extra_aces.saturating_add(1);
+            foreign_write = foreign_write.saturating_add(1);
             continue;
         }
         // SAFETY: GetAce returned an ACE pointer in the live DACL.
         let header = unsafe { raw_ace.cast::<ACE_HEADER>().read() };
-        if header.AceType != ACCESS_ALLOWED_ACE_TYPE || header.AceFlags != 0 {
+        if header.AceType != ACCESS_ALLOWED_ACE_TYPE {
+            // Object, callback, deny, and unknown ACE types could carry
+            // rights this scan cannot attribute; keep the file untrusted.
             extra_aces = extra_aces.saturating_add(1);
+            foreign_write = foreign_write.saturating_add(1);
             continue;
         }
         // SAFETY: ACCESS_ALLOWED_ACE is the layout selected by AceType.
         let allowed = unsafe { raw_ace.cast::<ACCESS_ALLOWED_ACE>().read() };
-        if allowed.Mask != FILE_ALL_ACCESS {
-            extra_aces = extra_aces.saturating_add(1);
-            continue;
-        }
         // SAFETY: The SID begins at SidStart within ACCESS_ALLOWED_ACE.
         let sid_pointer = unsafe {
             std::ptr::addr_of!((*raw_ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart)
@@ -333,9 +423,23 @@ fn inspect_aces(dacl: *mut ACL, current_sid: &str) -> AceEvidence {
         };
         let Some(sid) = sid_string(sid_pointer) else {
             extra_aces = extra_aces.saturating_add(1);
+            foreign_write = foreign_write.saturating_add(1);
             continue;
         };
-        if sid == current_sid {
+        let foreign = sid != current_sid && sid != SYSTEM_SID;
+        // Inherited ACEs have non-zero flags; they still decide whether another
+        // principal could change the bytes, so check the mask before the exact
+        // shape is judged.
+        if foreign && allowed.Mask & WRITE_LIKE_ACCESS != 0 {
+            foreign_write = foreign_write.saturating_add(1);
+        }
+        if header.AceFlags != 0 || allowed.Mask != FILE_ALL_ACCESS {
+            extra_aces = extra_aces.saturating_add(1);
+            continue;
+        }
+        if foreign {
+            extra_aces = extra_aces.saturating_add(1);
+        } else if sid == current_sid {
             if current_user {
                 extra_aces = extra_aces.saturating_add(1);
             }
@@ -343,13 +447,11 @@ fn inspect_aces(dacl: *mut ACL, current_sid: &str) -> AceEvidence {
             if current_sid == SYSTEM_SID {
                 system = true;
             }
-        } else if sid == SYSTEM_SID {
+        } else {
             if system {
                 extra_aces = extra_aces.saturating_add(1);
             }
             system = true;
-        } else {
-            extra_aces = extra_aces.saturating_add(1);
         }
     }
     AceEvidence {
@@ -357,6 +459,7 @@ fn inspect_aces(dacl: *mut ACL, current_sid: &str) -> AceEvidence {
         system,
         ace_count,
         extra_aces,
+        foreign_write,
     }
 }
 
