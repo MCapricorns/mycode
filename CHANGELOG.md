@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- 终端版可以滚屏：鼠标滚轮与 `PageUp` / `PageDown` 都能翻看转录（滚轮一格三行），设置页的滚轮移动游标。之前只开备用屏幕、不收滚轮事件，滚轮什么也不做。开启鼠标上报后终端自己的划选要按住 `Shift` 拖选、再用 `Ctrl+Shift+C` 复制。
+
+### Fixed
+
+- 终端版设置页的 MCP 段不再只列 `settings.json` 里的服务器：magpie Library 写入 `~/.mycode/mcp.json` 的服务器也作为只读行显示（含地址或命令行），`mcp.json` 读不了时如实报错；两个来源都为空才显示「(none configured)」。之前只有 magpie 托管服务器时这一栏看起来一个都没配置，即使它们已经连上、工具可用。
+- `search_tool` 的 `"list"` 在工具全部直接注册时列出这些名字（`Direct tools are called by name: …`），在有延迟工具时把直接工具附在后面；之前只回一句「No deferred MCP tools」，看起来像 MCP 没有连上。
+
 ## [0.12.19] - 2026-10-21
 
 ### Added
@@ -13,12 +22,9 @@
 - 输入框支持拖放附件：图片按多模态内容直接发给模型，代码/文本文件以 `File: <名称>` 围栏块随消息发送，用户消息下方列出每个附件名称。上限为 4 张图片（每张 3.75 MB，base64 后 5 MiB，合计 base64 不超过 6 MiB）、8 个文件（每个 256 KiB、合计 512 KiB），二进制文件和非 UTF-8 文本会被拒绝并说明原因；图片只发给目录里声明了图像输入的模型，发送前再检查一次，其他模型会提示换模型或去掉图片。欢迎页只拖入附件也能直接发送，用户消息里的附件说明只出现一次。
 - 终端版也能附加图片：`Ctrl+V` 把剪贴板里的图片挂到下一次发送（Windows 读原生剪贴板，优先取应用发布的 PNG，否则把 DIB 重新编码为 PNG；macOS 通过 `osascript` 取剪贴板的 PNG，只有 TIFF 时用 `sips` 转成 PNG），粘贴内容只有一个图片路径或 `file://` URL 时也按图片附加，`Ctrl+X` 清除；输入框上方一行列出待发送的附件，图片同样受 4 张 / 3.75 MB / 合计 6 MiB 和模型是否支持图像输入的限制。
 - `read` 工具能读图片：按文件头识别 PNG、JPEG、GIF、WebP，并以图像块直接交给模型查看（截图存到磁盘后可以再读回来），不再报「不是 UTF-8」；`offset`/`limit` 只用于文本。Anthropic Messages、Chat Completions、Responses 三种协议都会把工具结果里的图片传给模型。
-- 终端版可以滚屏：鼠标滚轮与 `PageUp` / `PageDown` 都能翻看转录（滚轮一格三行），设置页的滚轮移动游标。之前只开备用屏幕、不收滚轮事件，滚轮什么也不做。开启鼠标上报后终端自己的划选要按住 `Shift` 拖选、再用 `Ctrl+Shift+C` 复制。
 
 ### Fixed
 
-- 终端版设置页的 MCP 段不再只列 `settings.json` 里的服务器：magpie Library 写入 `~/.mycode/mcp.json` 的服务器也作为只读行显示（含地址或命令行），`mcp.json` 读不了时如实报错；两个来源都为空才显示「(none configured)」。之前只有 magpie 托管服务器时这一栏看起来一个都没配置，即使它们已经连上、工具可用。
-- `search_tool` 的 `"list"` 在工具全部直接注册时列出这些名字（`Direct tools are called by name: …`），在有延迟工具时把直接工具附在后面；之前只回一句「No deferred MCP tools」，看起来像 MCP 没有连上。
 - 本机 magpie 网关的明文 `http://127.0.0.1` 不再被「requests must use https」拒绝：只有首跳、主机是回环名、且解析出的每个地址都是回环时才允许明文 http；公网主机、混合地址、以及从公网跳转过来的降级仍然拒绝。
 - Windows 上配置文件的 DACL 漂移（同用户工具写入时多出的只读 logon-session ACE）现在在读取时就地重装受保护 DACL 后继续，不再每次启动都「配置已重置」并弹修复提示；有其他主体可写、所有者为他人、DACL 为 NULL 或含无法解析的 ACE 时仍按损坏处理。
 - 设置 → Magpie 的模型列表收成一个下拉，状态行和下拉用同一个显示名（之前状态行显示原始模型 id）；输入框的模型条显示 `服务商 · 模型`，不再只显示模型名，两个服务商同名的模型也能分清。
