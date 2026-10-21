@@ -301,6 +301,44 @@ fn a_failed_send_puts_its_text_back_in_the_composer() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A failed send hands its attachments back too, not only the text.
+#[test]
+fn a_failed_send_puts_its_attachments_back() {
+    use mycode_app::{BranchId, BridgeReply, SessionId};
+
+    let (mut driver, root) = scratch_driver("failed-send-attachments");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    driver.vm.active = Some(conversation(&session, &branch));
+    let mut out = Vec::new();
+    let returned = driver.submit_with("look", code_attachment(), &mut out);
+    assert!(returned.is_none(), "the send took the attachments");
+    driver.on_reply(
+        ReplyScope::Session {
+            session: session.clone(),
+            branch: Some(branch.clone()),
+        },
+        BridgeReply::Sent {
+            session: session.clone(),
+            text: "look".to_owned(),
+            outcome: Err("disk full".to_owned()),
+        },
+        &mut out,
+    );
+    let restored = out
+        .iter()
+        .find_map(|effect| match effect {
+            super::Effect::AttachmentsRestored(attachments) => Some(attachments),
+            _ => None,
+        })
+        .expect("attachments restored");
+    assert_eq!(restored.files.len(), 1);
+    assert_eq!(restored.files[0].name, "main.rs");
+    assert!(driver.pending_send_attachments.is_empty());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// An interrupt while the turn summarizes for an automatic compaction stops
 /// the turn once the summary ends, not before: stopping it threw the
 /// summary away, and the send after it summarized the same history again.
@@ -586,6 +624,77 @@ fn steers_returned_to_a_chat_off_screen_wait_in_its_queue() {
         driver.vm.parked_queues,
         [(other, vec!["late steer".to_owned()])]
     );
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn code_attachment() -> mycode_core::Attachments {
+    let mut attachments = mycode_core::Attachments::default();
+    attachments
+        .push_file("main.rs", "fn main() {}")
+        .expect("text file");
+    attachments
+}
+
+/// A busy turn cannot take attachments with a queued follow-up, so the
+/// submit hands them back instead of dropping them.
+#[test]
+fn a_busy_turn_returns_attachments_to_the_composer() {
+    use mycode_app::{BranchId, SessionId};
+
+    let (mut driver, root) = scratch_driver("attach-busy");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    driver.vm.active = Some(conversation(&session, &branch));
+    driver.vm.sending = true;
+    let mut out = Vec::new();
+    let returned = driver.submit_with("look", code_attachment(), &mut out);
+    assert!(returned.is_some_and(|attachments| !attachments.is_empty()));
+    assert!(driver.vm.queued.is_empty(), "attachments do not queue");
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A welcome send already waiting for its new session owns the next message;
+/// a second submit keeps its attachments instead of losing them.
+#[test]
+fn a_held_welcome_send_returns_the_next_attachments() {
+    let (mut driver, root) = scratch_driver("attach-held");
+    driver.vm.pending_welcome_send = Some("first".to_owned());
+    let mut out = Vec::new();
+    let returned = driver.submit_with("second", code_attachment(), &mut out);
+    assert!(returned.is_some_and(|attachments| !attachments.is_empty()));
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Attachments alone on the welcome desk start a task, using their note as
+/// the prompt so the first message and the title keep a text anchor.
+#[test]
+fn attachments_alone_start_a_task_from_the_welcome_desk() {
+    let (mut driver, root) = scratch_driver("attach-welcome");
+    driver.vm.project_dir = Some(root.display().to_string());
+    let mut out = Vec::new();
+    let returned = driver.submit_with("", code_attachment(), &mut out);
+    assert!(returned.is_none(), "the send took the attachments");
+    assert_eq!(
+        driver.vm.pending_welcome_send.as_deref(),
+        Some("[file] main.rs")
+    );
+    assert!(!driver.welcome_attachments.is_empty());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// With no folder open the welcome desk cannot start a task, so the
+/// attachments stay with the user.
+#[test]
+fn a_welcome_submit_without_a_folder_returns_attachments() {
+    let (mut driver, root) = scratch_driver("attach-nofolder");
+    let mut out = Vec::new();
+    let returned = driver.submit_with("", code_attachment(), &mut out);
+    assert!(returned.is_some_and(|attachments| !attachments.is_empty()));
+    assert!(driver.vm.pending_welcome_send.is_none());
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }

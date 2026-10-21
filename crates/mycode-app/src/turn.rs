@@ -598,7 +598,7 @@ fn split_latest_user(
     history: Vec<Arc<Message>>,
 ) -> Result<(Vec<Arc<Message>>, mycode_core::UserMessage), String> {
     let Some(index) = history.iter().rposition(
-        |message| matches!(message.as_ref(), Message::User(user) if user_has_text(user)),
+        |message| matches!(message.as_ref(), Message::User(user) if user_has_content(user)),
     ) else {
         return Err("the turn has no user message to answer".to_owned());
     };
@@ -612,9 +612,37 @@ fn split_latest_user(
     Ok((prior, prompt))
 }
 
-fn user_has_text(user: &mycode_core::UserMessage) -> bool {
+/// Whether this message asks for an answer. A picture counts on its own: an
+/// attachments-only prompt has an empty text block but something to look at,
+/// and treating it as empty made the model answer the previous prompt again.
+fn user_has_content(user: &mycode_core::UserMessage) -> bool {
     user.content.iter().any(|block| match block {
         mycode_core::ContentBlock::Text(text) => !text.text.trim().is_empty(),
+        mycode_core::ContentBlock::Image(_) => true,
         _ => false,
     })
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use mycode_core::{BinaryData, ContentBlock, TextBlock, UserMessage};
+
+    use super::user_has_content;
+
+    #[test]
+    fn an_attachments_only_message_is_a_prompt() {
+        let images_only = UserMessage {
+            content: vec![
+                ContentBlock::Text(TextBlock::new("")),
+                ContentBlock::Image(BinaryData {
+                    data: "aGVsbG8=".to_owned(),
+                    mime_type: "image/png".to_owned(),
+                }),
+            ],
+        };
+        assert!(user_has_content(&images_only));
+        assert!(!user_has_content(&UserMessage::text("")));
+        assert!(!user_has_content(&UserMessage::text("  \n ")));
+        assert!(user_has_content(&UserMessage::text("hello")));
+    }
 }

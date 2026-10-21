@@ -27,6 +27,112 @@ use crate::i18n::t;
 use crate::view_model::{ConversationEntry, EntryKind};
 use crate::workspace::Workspace;
 
+/// Pictures and code files waiting to ride the next prompt, above the input.
+/// Each chip names one attachment and detaches it.
+pub(super) fn render_attachment_chips(
+    workspace: &Workspace,
+    cx: &Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    let mut chips: Vec<gpui_kit::AnyElement> = Vec::new();
+    for (index, image) in workspace.attachments.images.iter().enumerate() {
+        // Base64 grows by 4/3; the chip reads as the file the user dropped.
+        let bytes = image.data.len() * 3 / 4;
+        chips.push(attachment_chip(
+            format!("attach-image-{index}"),
+            gpui_kit::assets::IconName::FileImage,
+            image.name.clone(),
+            format_size(bytes),
+            move |workspace, cx| workspace.on_remove_attachment(Some(index), None, cx),
+            cx,
+        ));
+    }
+    for (index, file) in workspace.attachments.files.iter().enumerate() {
+        chips.push(attachment_chip(
+            format!("attach-file-{index}"),
+            gpui_kit::assets::IconName::FileText,
+            file.name.clone(),
+            format_size(file.text.len()),
+            move |workspace, cx| workspace.on_remove_attachment(None, Some(index), cx),
+            cx,
+        ));
+    }
+    div()
+        .id("composer-attachments")
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(px(6.))
+        .w_full()
+        .min_w_0()
+        .children(chips)
+        .into_any_element()
+}
+
+/// One attached file chip: icon, name, size, and a detach button.
+fn attachment_chip(
+    id: String,
+    icon: gpui_kit::assets::IconName,
+    name: String,
+    size: String,
+    on_remove: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
+    cx: &Context<Workspace>,
+) -> gpui_kit::AnyElement {
+    use gpui_kit::component::theme::Theme;
+
+    let theme: &Theme = cx.theme();
+    let remove_id = format!("attach-remove-{id}");
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .items_center()
+        .flex_shrink_1()
+        .gap(px(5.))
+        .min_w_0()
+        .max_w(px(240.))
+        .h(px(24.))
+        .px(px(8.))
+        .rounded(px(6.))
+        .bg(theme.secondary)
+        .text_xs()
+        .child(
+            gpui_kit::component::Icon::new(icon)
+                .xsmall()
+                .flex_shrink_0(),
+        )
+        .child(div().min_w_0().truncate().child(name))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .child(size),
+        )
+        .child(
+            div()
+                .id(remove_id)
+                .flex_shrink_0()
+                .cursor_pointer()
+                .text_color(theme.muted_foreground)
+                .hover(|this| this.text_color(theme.foreground))
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    on_remove(workspace, cx);
+                }))
+                .child(gpui_kit::component::Icon::new(gpui_kit::assets::IconName::X).xsmall()),
+        )
+        .into_any_element()
+}
+
+fn format_size(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{} KB", bytes.div_ceil(1024))
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 pub(super) fn render_chat(
     workspace: &mut Workspace,
     window: &mut Window,

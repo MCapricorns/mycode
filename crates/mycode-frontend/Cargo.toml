@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 mycode-app = { path = "../mycode-app" }
 mycode-config = { path = "../mycode-config" }
+mycode-core = { path = "../mycode-core" }
 mycode-providers = { path = "../mycode-providers" }
 mycode-tools = { path = "../mycode-tools" }
 # Sync primitives and the executor-agnostic reply futures: this crate never

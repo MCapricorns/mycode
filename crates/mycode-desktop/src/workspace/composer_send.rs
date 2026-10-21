@@ -9,13 +9,45 @@ use crate::view_model::FrontendAction;
 
 impl Workspace {
     pub(crate) fn on_send(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // A model can be switched after the picture was picked; the send is
+        // the last point where the promise "images only go to a vision
+        // model" can be kept.
+        if !self.attachments.images.is_empty() && !self.selected_model_takes_images() {
+            self.push_toast(
+                crate::i18n::t(
+                    "The selected model cannot see images; remove them or pick a vision model.",
+                    "当前模型看不了图片，请去掉图片或选择支持图片的模型。",
+                ),
+                super::toasts::ToastKind::Warning,
+                cx,
+            );
+            return;
+        }
         let draft = self.composer.read(cx).value().to_string();
-        self.driver_do(|d, fx| d.submit(&draft, fx), cx);
+        // The driver decides whether the message goes out and hands the
+        // attachments back when it does not, so a refused send (no folder,
+        // a held welcome send, a running turn) keeps the chips on screen.
+        let attachments = std::mem::take(&mut self.attachments);
+        let returned = self.driver_take(|d, fx| d.submit_with(&draft, attachments, fx), cx);
+        if let Some(attachments) = returned {
+            self.attachments = attachments;
+        }
     }
 
     /// Ctrl+G (Cmd+G on macOS): hands the draft to the running turn without
     /// stopping it. With no turn running it sends like Enter.
     pub(crate) fn on_steer_send(&mut self, cx: &mut Context<Self>) {
+        if !self.attachments.is_empty() {
+            self.push_toast(
+                crate::i18n::t(
+                    "Attachments can only go with a normal send.",
+                    "附件只能随普通发送一起发出。",
+                ),
+                super::toasts::ToastKind::Info,
+                cx,
+            );
+            return;
+        }
         let draft = self.composer.read(cx).value().to_string();
         self.driver_do(|d, fx| d.steer_send(&draft, fx), cx);
     }

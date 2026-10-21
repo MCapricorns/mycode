@@ -70,30 +70,28 @@ pub(super) fn render_composer(
     }
     let model_label: SharedString = model_button_label(workspace.vm()).into();
     let thinking_label: SharedString = thinking_button_label(workspace.vm()).into();
-    // The chip truncates a long model name; the tooltip keeps the provider
-    // prefix and the full name visible.
-    let model_tooltip: Option<SharedString> =
-        workspace.vm().selected_provider.as_deref().map(|provider| {
-            format!(
-                "{} · {}",
-                crate::ui::model_picker::provider_display_name(workspace.vm(), provider),
-                model_label
-            )
-            .into()
-        });
+    // The chip truncates a long label; the tooltip keeps the whole
+    // `Provider · Model` string visible once a model is picked.
+    let model_tooltip: Option<SharedString> = workspace
+        .vm()
+        .selected_provider
+        .as_deref()
+        .map(|_| model_label.clone());
     let show_thinking = selected_model_supports_reasoning(workspace.vm());
     let has_session = workspace.vm().active.is_some();
     // A manual compact is not a turn, but it locks the composer the same
     // way: Enter queues, Ctrl+Enter cancels it and sends the draft.
     let sending = workspace.vm().sending || workspace.vm().compacting;
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
+    let has_attachments = !workspace.attachments.is_empty();
     let has_queue = !workspace.vm().queued.is_empty();
     let can_send = if has_session {
-        has_draft || has_queue
+        has_draft || has_queue || has_attachments
     } else {
-        // A draft alone enables the arrow: `submit_from_welcome` answers a
-        // missing folder with a toast instead of leaving a dead button.
-        has_draft
+        // A draft or a dropped attachment alone enables the arrow:
+        // `submit_from_welcome` answers a missing folder with a toast
+        // instead of leaving a dead button.
+        has_draft || has_attachments
     };
     let steer_panel = (!workspace.vm().pending_steers.is_empty())
         .then(|| render_pending_steers(&workspace.vm().pending_steers, cx).into_any_element());
@@ -258,6 +256,17 @@ pub(super) fn render_composer(
                         .border_color(skin::glass_border(theme))
                         .bg(skin::popover(theme))
                         .shadow(composer_elevation(theme.is_dark()))
+                        // Dropping a picture or a code file attaches it to
+                        // the next prompt; folders still bind the project.
+                        .can_drop(|value, _, _| value.is::<gpui_kit::ExternalPaths>())
+                        .on_drop(cx.listener(
+                            |workspace, paths: &gpui_kit::ExternalPaths, _, cx| {
+                                workspace.on_drop_attachments(paths.paths(), cx);
+                            },
+                        ))
+                        .when(!workspace.attachments.is_empty(), |this| {
+                            this.child(super::render_attachment_chips(workspace, cx))
+                        })
                         .child(
                             div()
                                 .id("composer-input")

@@ -219,35 +219,61 @@ impl FrontendDriver {
     /// runs, a normal send, or an explicit send of the held queue on an
     /// empty draft. `draft` is the composer text the frontend just read.
     pub fn submit(&mut self, draft: &str, out: &mut Vec<Effect>) {
+        let _ = self.submit_with(draft, mycode_core::Attachments::default(), out);
+    }
+
+    /// [`Self::submit`] with images and code files picked in the composer.
+    ///
+    /// Returns the attachments when the message did not go out, so the
+    /// frontend can put them back instead of losing them. A busy turn queues
+    /// text only: attachments cannot ride the follow-up queue, so the submit
+    /// waits for the turn to end instead of silently dropping them.
+    pub fn submit_with(
+        &mut self,
+        draft: &str,
+        attachments: mycode_core::Attachments,
+        out: &mut Vec<Effect>,
+    ) -> Option<mycode_core::Attachments> {
         // The widget's text is the source of truth: mirror it so mentions,
         // the queue, and a later recall all work on what is on screen.
         if draft != self.vm.composer_draft {
             self.act(FrontendAction::ComposerChanged(draft.to_owned()), out);
         }
         if self.welcome_send_session.is_some() || self.vm.pending_welcome_send.is_some() {
-            return;
+            return Some(attachments);
         }
         if self.vm.active.is_none() {
-            self.submit_from_welcome(draft, out);
-            return;
+            return self.submit_from_welcome(draft, attachments, out);
         }
         if self.vm.sending || self.vm.compacting {
             // A submit on a busy turn or compact queues the follow-up;
             // the interrupt path is `interrupt_send`.
+            if !attachments.is_empty() {
+                self.toast(
+                    crate::i18n::t(
+                        "Attachments wait for the current turn to end.",
+                        "附件等当前回合结束后再发送。",
+                    ),
+                    ToastKind::Info,
+                    out,
+                );
+                return Some(attachments);
+            }
             if !draft.trim().is_empty() {
                 self.enqueue_follow_up(draft.to_owned(), out);
             }
-            return;
+            return None;
         }
-        if !draft.trim().is_empty() {
-            self.send_text(draft.to_owned(), true, out);
-            return;
+        if !draft.trim().is_empty() || !attachments.is_empty() {
+            let sent = self.send_text(draft.to_owned(), true, attachments.clone(), out);
+            return (!sent).then_some(attachments);
         }
         // Send with an empty composer is an explicit send of the queue,
         // so it also releases a queue held by a stop.
         self.queue_hold_on_return = false;
         self.act(FrontendAction::QueuePaused(false), out);
         self.pump_queued_send(out);
+        None
     }
 
     /// Interrupt-submit (Ctrl+Enter, Cmd+Enter on the macOS desktop): stop
@@ -342,18 +368,39 @@ impl FrontendDriver {
 
     /// Enter or send on the welcome desk starts a task with that text.
     ///
-    /// The session is created the same way as New task. The draft is sent
-    /// once that session's conversation is open.
-    fn submit_from_welcome(&mut self, draft: &str, out: &mut Vec<Effect>) {
+    /// The session is created the same way as New task. The draft and any
+    /// attachments are sent once that session's conversation is open.
+    /// Attachments alone start a task too: their note stands in for the
+    /// prompt so the title has a text anchor, while the durable message keeps
+    /// the note only in its attachment list.
+    fn submit_from_welcome(
+        &mut self,
+        draft: &str,
+        attachments: mycode_core::Attachments,
+        out: &mut Vec<Effect>,
+    ) -> Option<mycode_core::Attachments> {
         if self.vm.pending_welcome_send.is_some() {
-            return;
+            return Some(attachments);
         }
-        match crate::view_model::composer_submit(&self.vm, draft) {
+        let prompt = if draft.trim().is_empty() && !attachments.is_empty() {
+            attachments.transcript_note()
+        } else {
+            draft.to_owned()
+        };
+        match crate::view_model::composer_submit(&self.vm, &prompt) {
             crate::view_model::ComposerSubmit::StartTask(text) => {
+                self.welcome_attachments = attachments.clone();
+                // The note stands in for an empty draft so the first message
+                // has a title; the durable message adds the note itself.
+                self.welcome_send_is_note = draft.trim().is_empty() && !attachments.is_empty();
                 self.act(FrontendAction::WelcomeSendHeld(text), out);
                 if !self.new_session(out) {
+                    self.welcome_send_is_note = false;
+                    self.welcome_attachments = mycode_core::Attachments::default();
                     self.act(FrontendAction::WelcomeSendConsumed, out);
+                    return Some(attachments);
                 }
+                None
             }
             crate::view_model::ComposerSubmit::NeedFolder => {
                 self.toast(
@@ -361,8 +408,10 @@ impl FrontendDriver {
                     ToastKind::Info,
                     out,
                 );
+                Some(attachments)
             }
             crate::view_model::ComposerSubmit::Send | crate::view_model::ComposerSubmit::Ignore => {
+                Some(attachments)
             }
         }
     }
@@ -515,7 +564,16 @@ impl FrontendDriver {
         }
         let draft = self.vm.queued[0].clone();
         self.act(FrontendAction::QueuedMessageTaken, out);
-        self.send_text(draft, false, out);
+        let _ = self.send_text(draft, false, mycode_core::Attachments::default(), out);
+    }
+
+    /// Hands welcome attachments back when the start that held them failed.
+    pub(crate) fn return_welcome_attachments(&mut self, out: &mut Vec<Effect>) {
+        self.welcome_send_is_note = false;
+        let attachments = std::mem::take(&mut self.welcome_attachments);
+        if !attachments.is_empty() {
+            out.push(Effect::AttachmentsRestored(attachments));
+        }
     }
 
     /// Sends the welcome-desk draft once its new session is the open one.
@@ -525,6 +583,8 @@ impl FrontendDriver {
         }
         let Some(text) = self.vm.pending_welcome_send.clone() else {
             self.welcome_send_session = None;
+            self.welcome_attachments = mycode_core::Attachments::default();
+            self.welcome_send_is_note = false;
             return;
         };
         let ready = self.vm.active.as_ref().is_some_and(|conversation| {
@@ -536,19 +596,38 @@ impl FrontendDriver {
             return;
         }
         self.welcome_send_session = None;
+        let attachments = std::mem::take(&mut self.welcome_attachments);
+        let text = if self.welcome_send_is_note {
+            String::new()
+        } else {
+            text
+        };
+        self.welcome_send_is_note = false;
         self.act(FrontendAction::WelcomeSendConsumed, out);
         self.act(FrontendAction::ComposerChanged(String::new()), out);
         self.pending_composer_prefill = Some(String::new());
-        self.send_text(text, true, out);
+        let _ = self.send_text(text, true, attachments, out);
     }
 
-    fn send_text(&mut self, draft: String, clear_composer: bool, out: &mut Vec<Effect>) {
-        if draft.trim().is_empty() {
-            return;
+    fn send_text(
+        &mut self,
+        draft: String,
+        clear_composer: bool,
+        attachments: mycode_core::Attachments,
+        out: &mut Vec<Effect>,
+    ) -> bool {
+        if draft.trim().is_empty() && attachments.is_empty() {
+            return false;
         }
         let Some((session, branch, expected_head)) = self.open_turn_target() else {
-            return;
+            return false;
         };
+        if !attachments.is_empty() {
+            // The reply may come back as an error; keep the payload beside
+            // the session so the composer gets it back instead of a gap.
+            self.pending_send_attachments
+                .insert(session.to_string(), attachments.clone());
+        }
         self.queue_hold_on_return = false;
         self.act(FrontendAction::TurnArmed, out);
         if clear_composer {
@@ -563,6 +642,7 @@ impl FrontendDriver {
             branch,
             expected_head,
             text: draft,
+            attachments,
         };
         if self.reopen_in_flight() {
             // That reopen's snapshot predates this message. Its reply can
@@ -572,6 +652,7 @@ impl FrontendDriver {
         } else {
             self.dispatch(command);
         }
+        true
     }
 
     /// A reopen of the chat on screen is in flight.

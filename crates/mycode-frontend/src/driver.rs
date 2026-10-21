@@ -12,7 +12,7 @@
 //! executor can schedule a drain. Events keep their own channel so a
 //! frontend can pace streamed deltas (the desktop's typewriter frames)
 //! while control messages are handled immediately.
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -69,6 +69,9 @@ pub enum Effect {
         /// Move focus into the composer when true.
         focus: bool,
     },
+    /// Put picked attachments back in the composer after a send did not
+    /// take them: a failed send or a dropped welcome start.
+    AttachmentsRestored(mycode_core::Attachments),
     /// One ask-card free-text field was cleared (a choice replaced typing).
     AskTextCleared {
         /// Question row index.
@@ -306,6 +309,12 @@ pub struct FrontendDriver {
     home: HomeLayout,
     /// Session created to carry [`WorkspaceState::pending_welcome_send`].
     welcome_send_session: Option<String>,
+    /// Attachments that ride the held welcome draft. They are not in the
+    /// view model, so they live beside the session that will carry them.
+    welcome_attachments: mycode_core::Attachments,
+    /// The held welcome text is only the attachment note synthesized so the
+    /// first message has a title; the durable message must not repeat it.
+    welcome_send_is_note: bool,
     /// Session whose conversation-open is in flight. Conversation replies
     /// for anything else are dropped, so a parked desk stays parked.
     pending_open: Option<String>,
@@ -389,6 +398,9 @@ pub struct FrontendDriver {
     /// reopen's snapshot predates the message; applied after the send's
     /// reply, it would wipe the message off the screen.
     held_send: Option<BridgeCommand>,
+    /// Attachments of sends still waiting for their `Sent` reply, keyed by
+    /// session. A failed send hands them back instead of dropping them.
+    pending_send_attachments: BTreeMap<String, mycode_core::Attachments>,
     /// Session whose interrupt waits for its automatic compaction to end;
     /// see [`FrontendDriver::interrupt_send`].
     interrupt_after_compaction: Option<String>,
@@ -436,6 +448,8 @@ impl FrontendDriver {
             vm: WorkspaceState::default(),
             home,
             welcome_send_session: None,
+            welcome_attachments: mycode_core::Attachments::default(),
+            welcome_send_is_note: false,
             pending_open: None,
             pending_project: None,
             pending_composer_prefill: None,
@@ -467,6 +481,7 @@ impl FrontendDriver {
             magpie_prompted: false,
             resync_on_turn_end: None,
             held_send: None,
+            pending_send_attachments: BTreeMap::new(),
             interrupt_after_compaction: None,
             git: git::GitWatch::default(),
             ask_texts: Vec::new(),

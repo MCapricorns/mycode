@@ -18,6 +18,7 @@ use crate::ui::McpForm;
 use crate::view_model::{FrontendAction, MainView, WorkspaceState};
 
 mod appearance;
+mod attachments;
 mod composer_send;
 mod conversation;
 mod history;
@@ -239,6 +240,11 @@ pub struct Workspace {
     /// and every UI-agnostic decision. GPUI keeps only window state and
     /// the effects it alone can perform.
     driver: FrontendDriver,
+    /// Whether the Magpie settings page's model list is expanded. Collapsed
+    /// by default; the summary row keeps the count and the current name.
+    pub(crate) magpie_models_open: bool,
+    /// Pictures and code files waiting to ride the next prompt.
+    pub(crate) attachments: mycode_core::Attachments,
     /// Root focus so key events (Escape) reach the workspace node even when
     /// no input holds focus.
     focus_handle: gpui_kit::FocusHandle,
@@ -342,6 +348,8 @@ impl Workspace {
         focus_handle.focus(window, cx);
         let workspace = cx.new(|_| Self {
             driver,
+            magpie_models_open: false,
+            attachments: mycode_core::Attachments::default(),
             focus_handle,
             composer,
             composer_busy: false,
@@ -523,6 +531,9 @@ impl Workspace {
                     self.pending_composer_set = Some((text, focus));
                     cx.notify();
                 }
+                Effect::AttachmentsRestored(attachments) => {
+                    self.on_attachments_restored(attachments, cx);
+                }
                 Effect::AskTextCleared { index } => {
                     self.ask_text_cleared.insert(index);
                 }
@@ -622,9 +633,23 @@ impl Workspace {
                 // a plain Enter queues the follow-up inside `submit`.
                 let sending = self.vm().sending || self.vm().compacting;
                 if *secondary && sending {
+                    if !self.attachments.is_empty() {
+                        // A send-now is text only; the chips wait for the
+                        // next normal send instead of riding this one.
+                        self.push_toast(
+                            crate::i18n::t(
+                                "Attachments wait for the next send.",
+                                "附件等下一次发送再带上。",
+                            ),
+                            ToastKind::Info,
+                            cx,
+                        );
+                    }
                     self.driver_do(|d, fx| d.interrupt_send(&draft, fx), cx);
                 } else {
-                    self.driver_do(|d, fx| d.submit(&draft, fx), cx);
+                    // Enter takes the same path as the send arrow so the
+                    // waiting attachments ride this message.
+                    self.on_send(window, cx);
                 }
             }
             InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}
@@ -650,6 +675,16 @@ impl Workspace {
         run: impl FnOnce(&mut FrontendDriver, &mut Vec<Effect>),
         cx: &mut Context<Self>,
     ) {
+        self.driver_take(run, cx);
+    }
+
+    /// [`Self::driver_do`] for a driver call that hands a value back, such as
+    /// a submit returning attachments the send did not take.
+    pub(crate) fn driver_take<T>(
+        &mut self,
+        run: impl FnOnce(&mut FrontendDriver, &mut Vec<Effect>) -> T,
+        cx: &mut Context<Self>,
+    ) -> T {
         // Decide from the scroll position before this update. New text has
         // not been laid out yet, so the handle still describes the frame the
         // user is looking at.
@@ -659,12 +694,13 @@ impl Workspace {
         let subagent_before = self.subagent_window_mark();
         let menus_before = self.menu_navigation_mark();
         let mut effects = Vec::new();
-        run(&mut self.driver, &mut effects);
+        let value = run(&mut self.driver, &mut effects);
         self.apply_effects(effects, cx);
         self.reset_menu_navigation_after(menus_before);
         self.follow_subagent_window(subagent_before);
         self.ensure_job_tick(cx);
         cx.notify();
+        value
     }
 
     /// While a turn or a subagent runs, repaint once a second so each

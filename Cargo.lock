@@ -4766,12 +4766,16 @@ dependencies = [
 name = "mycode-cli"
 version = "0.12.17"
 dependencies = [
+ "base64 0.23.1",
  "crossterm",
+ "image",
  "mycode-app",
  "mycode-config",
+ "mycode-core",
  "mycode-frontend",
  "ratatui",
  "tui-textarea-2",
+ "windows-sys 0.61.2",
  "winresource",
 ]
 
@@ -4805,10 +4809,12 @@ dependencies = [
 name = "mycode-desktop"
 version = "0.12.17"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "gpui-kit",
  "mycode-app",
  "mycode-config",
+ "mycode-core",
  "mycode-frontend",
  "mycode-providers",
  "mycode-tools",
@@ -4825,6 +4831,7 @@ version = "0.12.17"
 dependencies = [
  "mycode-app",
  "mycode-config",
+ "mycode-core",
  "mycode-providers",
  "mycode-tools",
  "notify",
