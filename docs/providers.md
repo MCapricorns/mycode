@@ -34,7 +34,7 @@ MCode 的本地 magpie 网关是回环地址，因此 `proxy` 对 `127.0.0.1` / 
 - Chat Completions：以 `/chat/completions` 结尾原样使用，否则补上。
 - Responses：以 `/responses` 结尾原样使用，否则补上。
 
-请求头先放调用方的 `user-agent`，再放 `x-api-key` + `anthropic-version: 2023-06-01`，或 `authorization: Bearer <key>`。`kind` 未知或模型不在 `settings.models` 里时返回 `Rejected`，不发请求。调用前先跑 `Request::validate`；请求体序列化失败时用空 body。
+请求头先放调用方的 `user-agent`，再放 `x-api-key` + `anthropic-version: 2023-06-01`，或 `authorization: Bearer <key>`。会话请求还带 `x-magpie-session: <会话 id>`（与 `prompt_cache_key` 同值），magpie 的 Sessions 页按它把请求归到同一个对话，并据此列出、录制和删除；标题生成这类不属于对话的请求不带这个头。列表和用量不依赖录制开关，但 magpie 只在用户打开「录制对话」时保留对话正文，关闭时只能看到会话本身。`kind` 未知或模型不在 `settings.models` 里时返回 `Rejected`，不发请求。调用前先跑 `Request::validate`；请求体序列化失败时用空 body。
 
 ## 传输、取消、重试
 
