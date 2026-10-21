@@ -4,10 +4,12 @@
 //! them changes driver state.
 
 use mycode_frontend::driver::ToastKind;
-use mycode_frontend::view_model::{MainView, elapsed_label, provider_display_name};
+use mycode_frontend::view_model::{
+    MainView, elapsed_label, open_session_is_empty, provider_display_name,
+};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::prelude::Frame;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
@@ -17,11 +19,14 @@ use super::render::{
 };
 use super::settings::PickerRow;
 use super::settings_rows::{SettingRow, settings_rows};
-use super::{CRAB, MENU_ROWS, PICKER_ROWS, Tui};
+use super::{MENU_ROWS, PICKER_ROWS, Tui};
 use crate::reply::push_reply;
 
 impl Tui {
     pub(super) fn draw(&mut self, frame: &mut Frame) {
+        // The Theme row changes ink, and the settings document is the only
+        // source; refresh here so a change shows on the next frame.
+        self.palette = super::theme::Palette::of(self.driver.vm());
         let area = frame.area();
         if self.driver.vm().view == MainView::Settings {
             let vertical =
@@ -36,15 +41,20 @@ impl Tui {
             return;
         }
         let composer_height = (self.composer.lines().len() as u16 + 2).clamp(3, 8);
+        let attachment_rows = u16::from(!self.attachments.is_empty());
         let vertical = Layout::vertical([
             Constraint::Min(3),
+            Constraint::Length(attachment_rows),
             Constraint::Length(composer_height),
             Constraint::Length(1),
         ])
         .split(area);
         self.draw_transcript(frame, vertical[0]);
-        self.draw_composer(frame, vertical[1]);
-        self.draw_status(frame, vertical[2]);
+        if attachment_rows > 0 {
+            self.draw_attachments(frame, vertical[1]);
+        }
+        self.draw_composer(frame, vertical[2]);
+        self.draw_status(frame, vertical[3]);
         if self.driver.vm().pending_ask.is_some() {
             self.draw_ask(frame, area);
         } else {
@@ -52,15 +62,45 @@ impl Tui {
         }
     }
 
+    /// One line above the composer naming what will be attached. The names
+    /// are what the transcript note will show; `Ctrl+X` clears them.
+    fn draw_attachments(&self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
+        let mut spans = Vec::new();
+        for image in &self.attachments.images {
+            spans.push(Span::styled(
+                format!(" [image] {} ", image.name),
+                Style::default().fg(palette.info),
+            ));
+        }
+        for file in &self.attachments.files {
+            spans.push(Span::styled(
+                format!(" [file] {} ", file.name),
+                Style::default().fg(palette.info),
+            ));
+        }
+        spans.push(Span::styled(
+            " · Ctrl+X clears",
+            Style::default().fg(palette.dim),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
     /// Frameless transcript: `❯` user, `⏺` assistant, `⚒` tool calls,
     /// dim tool results, the live stream, queued follow-ups, the red
     /// turn alert, all as one wrapped flow.
     fn draw_transcript(&mut self, frame: &mut Frame, area: Rect) {
         let vm = self.driver.vm();
+        let palette = self.palette;
         let mut lines: Vec<Line> = Vec::new();
-        if let Some(active) = &vm.active {
+        // `/new` and Ctrl+N open an empty session rather than no session;
+        // the greeting says the composer is a fresh task either way.
+        let welcome = vm.active.is_none() || open_session_is_empty(vm);
+        if welcome {
+            lines.extend(welcome_lines(env!("CARGO_PKG_VERSION"), palette));
+        } else if let Some(active) = &vm.active {
             for entry in &active.entries {
-                render_entry(entry, &mut lines, vm.thinking_collapsed);
+                render_entry(entry, &mut lines, vm.thinking_collapsed, palette);
                 // A running subagent says what it is doing under its call;
                 // only jobs still in `live_jobs` are running.
                 if entry.kind == mycode_app::EntryKind::ToolCall
@@ -76,7 +116,7 @@ impl Tui {
                             first_line(&step),
                             elapsed_label(job.elapsed_ms())
                         ),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(palette.dim),
                     )));
                 }
             }
@@ -86,7 +126,7 @@ impl Tui {
                 let elapsed = elapsed_suffix(vm);
                 if !stream.thinking.is_empty() {
                     let thinking = Style::default()
-                        .fg(Color::Magenta)
+                        .fg(palette.thinking)
                         .add_modifier(Modifier::ITALIC);
                     if vm.thinking_collapsed {
                         lines.push(Line::from(Span::styled(
@@ -98,11 +138,17 @@ impl Tui {
                     }
                 }
                 if !stream.text.is_empty() {
-                    push_reply(&mut lines, "⏺ ", Style::default().fg(CRAB), &stream.text);
+                    push_reply(
+                        &mut lines,
+                        "⏺ ",
+                        Style::default().fg(palette.accent),
+                        &stream.text,
+                        palette,
+                    );
                 } else if !stream.status.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("  {}{elapsed}", stream.status),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(palette.dim),
                     )));
                 }
             }
@@ -111,30 +157,30 @@ impl Tui {
                 push_wrapped(
                     &mut lines,
                     "… ",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette.dim),
                     first_line(&call.text),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette.dim),
                 );
             }
-        } else {
-            lines.extend(welcome_lines(env!("CARGO_PKG_VERSION")));
         }
         for steer in &vm.pending_steers {
             lines.push(Line::from(Span::styled(
                 format!("  steering: {}", first_line(steer)),
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(palette.thinking),
             )));
         }
         for queued in &vm.queued {
             lines.push(Line::from(Span::styled(
                 format!("  queued: {}", first_line(queued)),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette.warning),
             )));
         }
         if let Some(alert) = &vm.turn_alert {
             lines.push(Line::from(Span::styled(
                 format!("✖ {alert}"),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(palette.error)
+                    .add_modifier(Modifier::BOLD),
             )));
         }
 
@@ -170,6 +216,7 @@ impl Tui {
     /// cursor row reversed, scrolls to keep the cursor visible.
     fn draw_settings(&mut self, frame: &mut Frame, area: Rect) {
         let vm = self.driver.vm();
+        let palette = self.palette;
         let rows = settings_rows(vm);
         let mut item_index = 0usize;
         let mut cursor_line = 0usize;
@@ -186,7 +233,7 @@ impl Tui {
                     lines.push(Line::from(Span::styled(
                         format!(" {title}"),
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(palette.info)
                             .add_modifier(Modifier::BOLD),
                     )));
                 }
@@ -197,11 +244,11 @@ impl Tui {
                     let style = if selected {
                         Style::default().add_modifier(Modifier::REVERSED)
                     } else if *dim {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(palette.dim)
                     } else {
                         Style::default()
                     };
-                    let value_style = Style::default().fg(Color::DarkGray);
+                    let value_style = Style::default().fg(palette.dim);
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!(" {} {:<24}", if selected { "❯" } else { " " }, label),
@@ -217,7 +264,7 @@ impl Tui {
                 SettingRow::Info { label, value } => {
                     lines.push(Line::from(vec![
                         Span::raw(format!("   {label:<24}")),
-                        Span::styled(format!(" {value}"), Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!(" {value}"), Style::default().fg(palette.dim)),
                     ]));
                 }
             }
@@ -226,7 +273,7 @@ impl Tui {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 format!(" ✖ {error}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(palette.error),
             )));
         }
         let height = usize::from(area.height);
@@ -245,6 +292,7 @@ impl Tui {
 
     /// The settings overlay (model pick / key input) centered on screen.
     fn draw_settings_overlay(&self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
         let Some(overlay) = &self.settings_overlay else {
             return;
         };
@@ -260,7 +308,7 @@ impl Tui {
                 if provider.is_some() {
                     lines.push(Line::from(Span::styled(
                         " ← providers",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(palette.dim),
                     )));
                 }
                 for (index, row) in rows.iter().enumerate().skip(first).take(PICKER_ROWS) {
@@ -299,7 +347,7 @@ impl Tui {
                 if rows.is_empty() {
                     lines.push(Line::from(Span::styled(
                         "  no matches",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(palette.dim),
                     )));
                 }
                 lines.push(Line::from(Span::styled(
@@ -316,7 +364,7 @@ impl Tui {
                             "select "
                         }
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette.dim),
                 )));
                 let title = match provider {
                     Some(id) => format!(" {} ", provider_display_name(self.driver.vm(), id)),
@@ -332,7 +380,7 @@ impl Tui {
                         Line::from(Span::styled(format!(" {masked}▌"), Style::default())),
                         Line::from(Span::styled(
                             " Enter save · Esc cancel",
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(palette.dim),
                         )),
                     ],
                 )
@@ -343,11 +391,11 @@ impl Tui {
                     Line::from(Span::styled(format!(" {buffer}▌"), Style::default())),
                     Line::from(Span::styled(
                         " http / https / socks5 / socks5h · host:port reads as http",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(palette.dim),
                     )),
                     Line::from(Span::styled(
                         " Enter save · empty = follow system · Esc cancel",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(palette.dim),
                     )),
                 ],
             ),
@@ -367,7 +415,7 @@ impl Tui {
             Paragraph::new(lines).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(palette.dim))
                     .title(title),
             ),
             popup,
@@ -377,6 +425,7 @@ impl Tui {
     /// The main layout's only bordered widget: the composer.
     fn draw_composer(&mut self, frame: &mut Frame, area: Rect) {
         let vm = self.driver.vm();
+        let palette = self.palette;
         let title = if vm.sending {
             " ❯ (running — Enter queues · Ctrl+Enter interrupts · Ctrl+G steers · Esc stops) "
         } else {
@@ -385,7 +434,7 @@ impl Tui {
         self.composer.set_block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
+                .border_style(Style::default().fg(palette.dim))
                 .title(title),
         );
         frame.render_widget(&self.composer, area);
@@ -395,11 +444,12 @@ impl Tui {
     /// the newest notice painted over it.
     fn draw_status(&mut self, frame: &mut Frame, area: Rect) {
         let vm = self.driver.vm();
+        let palette = self.palette;
         if let Some(notice) = self.notices.last() {
             let color = match notice.kind {
-                ToastKind::Error => Color::Red,
-                ToastKind::Warning => Color::Yellow,
-                ToastKind::Info => Color::Cyan,
+                ToastKind::Error => palette.error,
+                ToastKind::Warning => palette.warning,
+                ToastKind::Info => palette.info,
             };
             frame.render_widget(
                 Paragraph::new(Span::styled(
@@ -421,7 +471,7 @@ impl Tui {
             let status =
                 format!(" {saving}↑↓ move · Enter/←→ change · a api key · u base url · Esc back ");
             frame.render_widget(
-                Paragraph::new(Span::styled(status, Style::default().fg(Color::DarkGray))),
+                Paragraph::new(Span::styled(status, Style::default().fg(palette.dim))),
                 area,
             );
             return;
@@ -448,13 +498,14 @@ impl Tui {
         });
         let status = format!(" {} ", segments.join(" · "));
         frame.render_widget(
-            Paragraph::new(Span::styled(status, Style::default().fg(Color::DarkGray))),
+            Paragraph::new(Span::styled(status, Style::default().fg(palette.dim))),
             area,
         );
     }
 
     /// The open `/`/`@` menu, docked to the bottom of the transcript area.
     fn draw_menu(&self, frame: &mut Frame, area: Rect) {
+        let palette = self.palette;
         let Some(mention) = &self.driver.vm().mention else {
             return;
         };
@@ -477,10 +528,7 @@ impl Tui {
                 };
                 Line::from(vec![
                     Span::styled(format!(" {} ", item.insert), style),
-                    Span::styled(
-                        format!(" {}", item.label),
-                        Style::default().fg(Color::DarkGray),
-                    ),
+                    Span::styled(format!(" {}", item.label), Style::default().fg(palette.dim)),
                 ])
             })
             .collect();
@@ -496,7 +544,7 @@ impl Tui {
             Paragraph::new(lines).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray)),
+                    .border_style(Style::default().fg(palette.dim)),
             ),
             popup,
         );
@@ -505,6 +553,7 @@ impl Tui {
     /// Ask card: centered overlay listing the current question and choices.
     fn draw_ask(&mut self, frame: &mut Frame, area: Rect) {
         let vm = self.driver.vm();
+        let palette = self.palette;
         let Some(asks) = &vm.pending_ask else {
             return;
         };
@@ -541,7 +590,7 @@ impl Tui {
         };
         lines.push(Line::from(Span::styled(
             hint,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette.dim),
         )));
         let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(4));
         // `max` before `min`: on a terminal narrower than 34 columns a

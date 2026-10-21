@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use mycode_frontend::driver::Effect;
+use mycode_frontend::driver::{Effect, ToastKind};
 use mycode_frontend::view_model::{FrontendAction, MainView, MentionKind, preferred_slash_index};
 use tui_textarea::{CursorMove, Input, Key as TextareaKey, TextArea};
 
@@ -35,6 +35,12 @@ impl Tui {
             return;
         }
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        // A path to a picture is the picture, not text: terminals turn a
+        // dragged file into its path, and a copied `C:\Shots\a.png` is almost
+        // always meant as the image.
+        if self.attach_pasted_image(&text) {
+            return;
+        }
         self.composer.insert_str(text);
         let mut effects = Vec::new();
         self.sync_draft(&mut effects);
@@ -98,6 +104,10 @@ impl Tui {
             }
             (KeyCode::Enter, true, false) => self.interrupt_send_current(&mut effects),
             (KeyCode::Char('g'), true, false) => self.steer_current(&mut effects),
+            // Clipboard pictures: Ctrl+V attaches the image itself (a
+            // terminal's own paste chord still types text), Ctrl+X drops it.
+            (KeyCode::Char('v'), true, false) => self.attach_clipboard_image(),
+            (KeyCode::Char('x'), true, false) => self.clear_attachments(),
             // Newline: terminals that report Shift/Alt+Enter land here; the
             // rest use Ctrl+J, which crossterm maps from LF.
             (KeyCode::Enter, _, _) | (KeyCode::Char('j'), true, false) => {
@@ -164,6 +174,16 @@ impl Tui {
     /// The composer is cleared by the driver's own `ComposerSet` effects, so
     /// a draft the driver refuses (no folder yet, a full queue) stays put.
     fn submit_current(&mut self, effects: &mut Vec<Effect>) {
+        // The model may have changed after the picture was attached; the
+        // send is the last place the vision gate can hold.
+        if !self.attachments.images.is_empty() && !self.takes_images() {
+            self.push_notice(
+                ToastKind::Warning,
+                "The selected model cannot see images; remove them or pick a vision model."
+                    .to_owned(),
+            );
+            return;
+        }
         let text = self.composer.lines().join("\n");
         if let Some(asks) = &self.driver.vm().pending_ask {
             let index = self.driver.ask_index().min(asks.len().saturating_sub(1));
@@ -197,7 +217,11 @@ impl Tui {
             self.driver.accept_mention(index, effects);
             return;
         }
-        self.driver.submit(&text, effects);
+        let attachments = std::mem::take(&mut self.attachments);
+        if let Some(attachments) = self.driver.submit_with(&text, attachments, effects) {
+            // No turn took them: the chips stay so the next Enter sends them.
+            self.attachments = attachments;
+        }
         self.scroll = 0;
     }
 
@@ -207,6 +231,14 @@ impl Tui {
         if !self.turn_busy() || self.driver.vm().pending_ask.is_some() || self.menu_len() > 0 {
             self.submit_current(effects);
             return;
+        }
+        if !self.attachments.is_empty() {
+            // A send-now carries text only; the chips keep their place for
+            // the next message instead of riding this one silently.
+            self.push_notice(
+                ToastKind::Info,
+                "Attachments wait for the next send.".to_owned(),
+            );
         }
         let text = self.composer.lines().join("\n");
         self.driver.interrupt_send(&text, effects);
@@ -219,6 +251,13 @@ impl Tui {
     fn steer_current(&mut self, effects: &mut Vec<Effect>) {
         if self.driver.vm().pending_ask.is_some() || self.menu_len() > 0 {
             self.submit_current(effects);
+            return;
+        }
+        if !self.attachments.is_empty() {
+            self.push_notice(
+                ToastKind::Warning,
+                "Attachments can only go with a normal send.".to_owned(),
+            );
             return;
         }
         let text = self.composer.lines().join("\n");

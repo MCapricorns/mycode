@@ -1,6 +1,7 @@
 use super::input::choice_numbers;
 use super::render::render_entry;
 use super::settings_rows::{SettingRow, settings_items, settings_rows};
+use super::theme::Palette;
 use mycode_app::{ConversationEntry, EntryKind};
 use mycode_frontend::view_model::WorkspaceState;
 
@@ -18,7 +19,7 @@ fn only_the_interruption_line_renders_as_an_error_row() {
         thinking: String::new(),
     };
     let mut lines = Vec::new();
-    render_entry(&entry, &mut lines, false);
+    render_entry(&entry, &mut lines, false, Palette::DARK);
     let rows: Vec<String> = lines
         .iter()
         .map(|line| {
