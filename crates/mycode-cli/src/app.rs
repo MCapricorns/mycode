@@ -14,13 +14,15 @@
 //! a partial command like `/se` resolves to `/settings`) and queues while a
 //! turn runs, `Ctrl+Enter` stops the turn and sends now, `Ctrl+G` steers the
 //! running turn, `Shift+Enter`/`Alt+Enter`/`Ctrl+J` inserts a newline,
-//! `Up`/`Down` move through an open `/`/`@` menu or the settings list, `Esc`
-//! dismisses the topmost layer, closes the settings page, or cancels a
-//! running turn, `Ctrl+C` cancels the turn and quits when idle, `Ctrl+N`
-//! starts a new task, `Ctrl+O` folds or expands every thinking trace,
-//! `PageUp`/`PageDown` scroll. The settings page lists them from the shared
-//! table. A terminal that cannot report `Ctrl+Enter` (common outside
-//! Windows) sends `Enter` or `Ctrl+J` instead.
+//! `Ctrl+V` attaches the clipboard picture, `Ctrl+X` drops the waiting
+//! attachments, `Up`/`Down` move through an open `/`/`@` menu or the settings
+//! list, `Esc` dismisses the topmost layer, closes the settings page, or
+//! cancels a running turn, `Ctrl+C` cancels the turn and quits when idle,
+//! `Ctrl+N` starts a new task (the empty session keeps the welcome greeting),
+//! `Ctrl+O` folds or expands every thinking trace, `PageUp`/`PageDown` scroll.
+//! The settings page lists them from the shared table. A terminal that cannot
+//! report `Ctrl+Enter` (common outside Windows) sends `Enter` or `Ctrl+J`
+//! instead.
 //!
 //! The terminal's working directory is the project: once the remembered UI
 //! state has loaded, it replaces the folder a previous session left behind,
@@ -32,10 +34,13 @@
 //! pickers in [`settings`] and [`settings_rows`], frame painting in [`ui`],
 //! and transcript line construction in [`render`].
 
+mod attachments;
+mod clipboard;
 mod input;
 mod render;
 mod settings;
 mod settings_rows;
+pub(crate) mod theme;
 mod ui;
 
 #[cfg(test)]
@@ -87,6 +92,12 @@ struct Notice {
 struct Tui {
     driver: FrontendDriver,
     composer: TextArea<'static>,
+    /// Pictures and files waiting to ride the next send. `Ctrl+V` adds the
+    /// clipboard picture, `Ctrl+X` drops them.
+    attachments: mycode_core::Attachments,
+    /// Ink for the chosen appearance, refreshed from settings every frame so
+    /// the Theme row takes effect the moment it changes.
+    palette: theme::Palette,
     /// Rows of transcript hidden below the viewport bottom; `0` pins to tail.
     scroll: usize,
     /// Something on screen may have changed since the last frame. Painting
@@ -190,6 +201,8 @@ impl Tui {
         Self {
             driver,
             composer: new_composer(TextArea::default()),
+            attachments: mycode_core::Attachments::default(),
+            palette: theme::Palette::DARK,
             scroll: 0,
             dirty: true,
             at_top: false,
@@ -339,6 +352,7 @@ impl Tui {
             match effect {
                 Effect::Toast { kind, text } => self.push_notice(kind, text),
                 Effect::ComposerSet { text, focus: _ } => self.set_composer_text(&text),
+                Effect::AttachmentsRestored(attachments) => self.restore_attachments(attachments),
                 // Focus, window chrome, and paging anchors are GPUI
                 // concerns; a terminal frame is always focused.
                 Effect::Quit => self.quit = true,

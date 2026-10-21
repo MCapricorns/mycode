@@ -146,13 +146,35 @@ pub fn shortcuts(surface: Surface) -> Vec<Shortcut> {
                 )),
             ),
         ]),
-        Surface::Terminal => list.extend([
-            compose(
-                "Shift+Enter / Ctrl+J".to_owned(),
-                t("New line", "换行"),
-                None,
-            ),
-            navigate(
+        Surface::Terminal => {
+            list.extend([
+                compose(
+                    "Shift+Enter / Ctrl+J".to_owned(),
+                    t("New line", "换行"),
+                    None,
+                ),
+            ]);
+            // A picture paste needs a real clipboard reader; the stubs on
+            // other platforms always answer "no picture".
+            if cfg!(any(windows, target_os = "macos")) {
+                list.extend([
+                    compose(
+                        "Ctrl+V".to_owned(),
+                        t("Attach the clipboard picture", "附加剪贴板里的图片"),
+                        Some(t(
+                            "A paste that is only an image path attaches that file",
+                            "粘贴内容只有图片路径时附加该文件",
+                        )),
+                    ),
+                    compose(
+                        "Ctrl+X".to_owned(),
+                        t("Drop the waiting attachments", "清除待发送的附件"),
+                        None,
+                    ),
+                ]);
+            }
+            list.extend([
+                navigate(
                 "Esc".to_owned(),
                 t("Close the topmost menu or page", "关闭最上层菜单或页面"),
                 Some(t(
@@ -179,7 +201,8 @@ pub fn shortcuts(surface: Surface) -> Vec<Shortcut> {
                 t("Scroll the transcript", "滚动对话"),
                 None,
             ),
-        ]),
+            ]);
+        }
     }
     list
 }
@@ -206,6 +229,25 @@ mod tests {
         let list = shortcuts(Surface::Terminal);
         assert_eq!(list[1].keys, "Ctrl+Enter");
         assert_eq!(list[2].keys, "Ctrl+G");
+    }
+
+    #[test]
+    fn only_the_terminal_lists_the_clipboard_picture_keys() {
+        let terminal: Vec<String> = shortcuts(Surface::Terminal)
+            .into_iter()
+            .map(|shortcut| shortcut.keys)
+            .collect();
+        let desktop: Vec<String> = shortcuts(Surface::Desktop)
+            .into_iter()
+            .map(|shortcut| shortcut.keys)
+            .collect();
+        if cfg!(any(windows, target_os = "macos")) {
+            assert!(terminal.iter().any(|keys| keys == "Ctrl+V"));
+            assert!(terminal.iter().any(|keys| keys == "Ctrl+X"));
+        } else {
+            assert!(!terminal.iter().any(|keys| keys == "Ctrl+V"));
+        }
+        assert!(!desktop.iter().any(|keys| keys == "Ctrl+V"));
     }
 
     #[test]

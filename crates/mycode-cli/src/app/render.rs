@@ -3,11 +3,11 @@
 
 use mycode_app::{ConversationEntry, EntryKind};
 use mycode_frontend::view_model::{WorkspaceState, elapsed_label};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use tui_textarea::TextArea;
 
-use super::CRAB;
+use super::theme::Palette;
 use crate::reply::push_reply;
 
 /// Applies the composer's fixed styling to a fresh textarea.
@@ -19,9 +19,9 @@ pub(super) fn new_composer(mut composer: TextArea<'static>) -> TextArea<'static>
 }
 
 /// The crab greeting on an empty transcript — "hi ferris".
-pub(super) fn welcome_lines(version: &str) -> Vec<Line<'static>> {
-    let crab = Style::default().fg(CRAB);
-    let dim = Style::default().fg(Color::DarkGray);
+pub(super) fn welcome_lines(version: &str, palette: Palette) -> Vec<Line<'static>> {
+    let crab = Style::default().fg(palette.accent);
+    let dim = Style::default().fg(palette.dim);
     vec![
         Line::from(Span::styled("    ▄  ▄▄▄▄▄▄▄  ▄", crab)),
         Line::from(vec![
@@ -44,7 +44,12 @@ pub(super) fn welcome_lines(version: &str) -> Vec<Line<'static>> {
     ]
 }
 
-pub(super) fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>, collapsed: bool) {
+pub(super) fn render_entry(
+    entry: &ConversationEntry,
+    lines: &mut Vec<Line<'_>>,
+    collapsed: bool,
+    palette: Palette,
+) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     match entry.kind {
         // A compaction summary rides a user message but is not the user's
@@ -53,7 +58,7 @@ pub(super) fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>,
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  ≡ earlier context compacted into a summary",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette.dim),
             )));
         }
         EntryKind::UserMessage => {
@@ -62,7 +67,7 @@ pub(super) fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>,
                 lines,
                 "❯ ",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(palette.user)
                     .add_modifier(Modifier::BOLD),
                 &entry.text,
                 bold,
@@ -70,7 +75,7 @@ pub(super) fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>,
         }
         EntryKind::AssistantMessage => {
             let thinking = Style::default()
-                .fg(Color::Magenta)
+                .fg(palette.thinking)
                 .add_modifier(Modifier::ITALIC);
             if !entry.thinking.is_empty() {
                 if collapsed {
@@ -88,14 +93,16 @@ pub(super) fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>,
             // Interruption lines the agent committed stay visible but read
             // as errors, not as answer text. A quoted `[error]` build line
             // is not one of them.
-            let marker = Style::default().fg(CRAB);
-            let error = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+            let marker = Style::default().fg(palette.accent);
+            let error = Style::default()
+                .fg(palette.error)
+                .add_modifier(Modifier::BOLD);
             let mut normal: Vec<&str> = Vec::new();
             for line in entry.text.lines() {
                 if line.starts_with(mycode_app::INTERRUPTED_RESPONSE_PREFIX) {
                     if !normal.is_empty() {
                         let joined = normal.join("\n");
-                        push_reply(lines, "⏺ ", marker, &joined);
+                        push_reply(lines, "⏺ ", marker, &joined, palette);
                         normal.clear();
                     }
                     push_wrapped(lines, "✖ ", error, line, error);
@@ -105,25 +112,25 @@ pub(super) fn render_entry(entry: &ConversationEntry, lines: &mut Vec<Line<'_>>,
             }
             if !normal.is_empty() {
                 let joined = normal.join("\n");
-                push_reply(lines, "⏺ ", marker, &joined);
+                push_reply(lines, "⏺ ", marker, &joined, palette);
             }
         }
         EntryKind::ToolCall => {
             push_wrapped(
                 lines,
                 "⚒ ",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(palette.info),
                 first_line(&entry.text),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(palette.info),
             );
         }
         EntryKind::ToolResult => {
             push_wrapped(
                 lines,
                 "  ⎿ ",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette.dim),
                 first_line(&entry.text),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette.dim),
             );
         }
     }

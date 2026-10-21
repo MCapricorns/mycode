@@ -7,9 +7,17 @@ use mycode_frontend::highlight::{TokenKind, fence_language, highlight};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::app::theme::Palette;
+
 /// `marker` plus the reply body: the first line carries the marker in
 /// `marker_style`, later lines indent under the text.
-pub(crate) fn push_reply(lines: &mut Vec<Line<'_>>, marker: &str, marker_style: Style, text: &str) {
+pub(crate) fn push_reply(
+    lines: &mut Vec<Line<'_>>,
+    marker: &str,
+    marker_style: Style,
+    text: &str,
+    palette: Palette,
+) {
     let indent = " ".repeat(marker.chars().count());
     let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
     let mut source = text.lines().peekable();
@@ -18,7 +26,7 @@ pub(crate) fn push_reply(lines: &mut Vec<Line<'_>>, marker: &str, marker_style: 
             rows.push(vec![Span::raw(line.to_owned())]);
             continue;
         };
-        let dim = Style::default().fg(Color::DarkGray);
+        let dim = Style::default().fg(palette.dim);
         rows.push(vec![Span::styled(line.to_owned(), dim)]);
         let mut code = Vec::new();
         let mut closing = None;
@@ -30,7 +38,7 @@ pub(crate) fn push_reply(lines: &mut Vec<Line<'_>>, marker: &str, marker_style: 
             code.push(line);
         }
         if !code.is_empty() {
-            rows.extend(code_rows(&code.join("\n"), fence.lang.as_deref()));
+            rows.extend(code_rows(&code.join("\n"), fence.lang.as_deref(), palette));
         }
         if let Some(line) = closing {
             rows.push(vec![Span::styled(line.to_owned(), dim)]);
@@ -88,7 +96,7 @@ fn fence_body(line: &str) -> Option<&str> {
 }
 
 /// One row of spans per code line, split at the lexer's token edges.
-fn code_rows(code: &str, lang: Option<&str>) -> Vec<Vec<Span<'static>>> {
+fn code_rows(code: &str, lang: Option<&str>, palette: Palette) -> Vec<Vec<Span<'static>>> {
     let tokens = highlight(code, lang);
     let mut rows = Vec::new();
     let mut first = 0;
@@ -112,7 +120,10 @@ fn code_rows(code: &str, lang: Option<&str>) -> Vec<Vec<Span<'static>>> {
             if from > at {
                 spans.push(Span::raw(code[at..from].to_owned()));
             }
-            spans.push(Span::styled(code[from..to].to_owned(), style(*kind)));
+            spans.push(Span::styled(
+                code[from..to].to_owned(),
+                style(*kind, palette),
+            ));
             at = to;
         }
         if at < end {
@@ -124,14 +135,14 @@ fn code_rows(code: &str, lang: Option<&str>) -> Vec<Vec<Span<'static>>> {
     rows
 }
 
-fn style(kind: TokenKind) -> Style {
+fn style(kind: TokenKind, palette: Palette) -> Style {
     let color = match kind {
         TokenKind::Keyword => Color::Magenta,
         TokenKind::Type | TokenKind::Variable => Color::Cyan,
         TokenKind::Function | TokenKind::Meta => Color::Blue,
         TokenKind::String | TokenKind::Inserted => Color::Green,
         TokenKind::Number => Color::Yellow,
-        TokenKind::Comment => Color::DarkGray,
+        TokenKind::Comment => palette.dim,
         TokenKind::Property => Color::LightBlue,
         TokenKind::Macro | TokenKind::Tag => Color::LightRed,
         TokenKind::Deleted => Color::Red,
@@ -147,6 +158,7 @@ fn style(kind: TokenKind) -> Style {
 #[cfg(test)]
 mod tests {
     use super::push_reply;
+    use crate::app::theme::Palette;
     use ratatui::style::{Color, Style};
     use ratatui::text::Line;
 
@@ -161,7 +173,7 @@ mod tests {
     fn fenced_code_is_colored_and_prose_keeps_its_text() {
         let mut lines = Vec::new();
         let reply = "Run this:\n```rust\nfn main() {} // go\n```\nDone";
-        push_reply(&mut lines, "⏺ ", Style::default(), reply);
+        push_reply(&mut lines, "⏺ ", Style::default(), reply, Palette::DARK);
         let rendered: Vec<String> = lines.iter().map(text).collect();
         assert_eq!(
             rendered,
@@ -189,7 +201,13 @@ mod tests {
     #[test]
     fn an_open_fence_still_colors_the_streamed_code() {
         let mut lines = Vec::new();
-        push_reply(&mut lines, "⏺ ", Style::default(), "```py\nx = \"s\nmore");
+        push_reply(
+            &mut lines,
+            "⏺ ",
+            Style::default(),
+            "```py\nx = \"s\nmore",
+            Palette::DARK,
+        );
         assert_eq!(lines.len(), 3);
         assert_eq!(text(&lines[2]), "  more");
         let string = lines[1]
@@ -203,7 +221,7 @@ mod tests {
     #[test]
     fn an_empty_reply_still_shows_its_marker() {
         let mut lines = Vec::new();
-        push_reply(&mut lines, "⏺ ", Style::default(), "");
+        push_reply(&mut lines, "⏺ ", Style::default(), "", Palette::DARK);
         assert_eq!(lines.len(), 1);
         assert_eq!(text(&lines[0]), "⏺ ");
     }
