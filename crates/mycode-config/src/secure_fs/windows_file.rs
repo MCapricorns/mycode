@@ -338,7 +338,11 @@ fn open_existing_regular(
     };
     windows_acl::require_current_owner(&opened.file)?;
     if require_private_dacl {
-        windows_acl::verify_fixed_descriptor(&opened.file)?;
+        // A same-user writer that created the file under its own token leaves
+        // an inherited logon-session ACE behind. That is ACL drift, not
+        // document damage: repair it in place and read the bytes, instead of
+        // quarantining a healthy document.
+        windows_acl::repair_drifted_descriptor(&opened.file)?;
     }
     reject_wrong_case(parent, name)?;
     Ok(Some(opened.file))
@@ -723,5 +727,67 @@ mod tests {
 
         let loaded = read_app_settings(&home).expect("reread");
         assert_eq!(loaded.appearance.font_size, "l");
+    }
+
+    /// A same-user tool (an agent's helper process, for example) creates
+    /// `settings.json` under its own token: the new file carries an extra
+    /// read-only ACE and no protected DACL. The strict read repairs that drift
+    /// in place instead of quarantining a healthy document and reporting it.
+    #[test]
+    fn a_drifted_dacl_is_repaired_without_discarding_the_document() {
+        let tree = TempTree::new("dacl-drift");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).expect("home");
+        let home = HomeLayout::from_root(&root).expect("layout");
+        let path = root.join("settings.json");
+        fs::write(
+            &path,
+            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"mcpServers":[],"appearance":{"theme":"dark"}}"#,
+        )
+        .expect("write");
+        let sid = super::windows_acl::current_user_sid_string().expect("sid");
+        let sddl = format!("O:{sid}D:(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FR;;;WD)");
+        set_dacl(
+            &path,
+            &super::windows_acl::descriptor_for_tests(&sddl).expect("descriptor"),
+        );
+
+        let settings = read_app_settings(&home).expect("drifted ACL is repaired on read");
+        assert_eq!(settings.appearance.theme, "dark");
+        let reopened = fs::File::open(&path).expect("republished file");
+        super::windows_acl::verify_fixed_descriptor(&reopened).expect("protected DACL");
+        assert!(
+            !fs::read_dir(&root)
+                .expect("home")
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains(".broken-")),
+            "a repaired ACL must not be reported as a damaged document"
+        );
+    }
+
+    /// When another principal holds write access, the bytes could have been
+    /// changed by someone else: the strict read still refuses them.
+    #[test]
+    fn a_dacl_another_principal_can_write_is_still_damage() {
+        let tree = TempTree::new("foreign-writer");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).expect("home");
+        let home = HomeLayout::from_root(&root).expect("layout");
+        let path = root.join("settings.json");
+        fs::write(
+            &path,
+            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"mcpServers":[],"appearance":{"theme":"dark"}}"#,
+        )
+        .expect("write");
+        let sid = super::windows_acl::current_user_sid_string().expect("sid");
+        let sddl = format!("O:{sid}D:(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;WD)");
+        set_dacl(
+            &path,
+            &super::windows_acl::descriptor_for_tests(&sddl).expect("descriptor"),
+        );
+
+        let refused =
+            crate::read_owned_file(&home, "settings.json", 4096).expect_err("strict read");
+        assert_eq!(refused.kind(), crate::ConfigErrorKind::AccessControl);
     }
 }
