@@ -47,6 +47,10 @@ const OPENAI_COMPLETIONS_PATH: &str = "/chat/completions";
 const OPENAI_RESPONSES_PATH: &str = "/responses";
 /// Anthropic protocol version header value.
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// magpie's header naming the conversation a request belongs to: its
+/// Sessions page groups gateway conversations by it, and only a request that
+/// names one is listed (and recordable) there.
+const MAGPIE_SESSION_HEADER: &str = "x-magpie-session";
 
 /// One resolved streaming provider endpoint.
 #[derive(Clone)]
@@ -180,13 +184,7 @@ impl WireProvider {
             ),
         };
         let retryable = replays_thinking || cache::has_prompt_cache_key(&body);
-        let mut headers = self.resolved.headers.clone();
-        if let Some(header) = cache::openrouter_session_header(
-            &self.resolved.endpoint,
-            request.prompt_cache_key.as_deref(),
-        ) {
-            headers.push(header);
-        }
+        let headers = request_headers(&self.resolved, request);
         let encoded = serde_json::to_vec(&body).map_err(|_| {
             ProviderError::with_message(ProviderErrorKind::Protocol, "request encoding failed")
         })?;
@@ -197,6 +195,27 @@ impl WireProvider {
         };
         Ok((call, retryable))
     }
+}
+
+/// Headers one request carries: the resolved endpoint's own, the session
+/// magpie groups conversations by, and the prompt-cache session header
+/// openrouter asks for.
+fn request_headers(resolved: &ResolvedProvider, request: &Request) -> Vec<(String, String)> {
+    let mut headers = resolved.headers.clone();
+    if let Some(key) = request
+        .prompt_cache_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        headers.push((MAGPIE_SESSION_HEADER.to_owned(), key.to_owned()));
+    }
+    if let Some(header) =
+        cache::openrouter_session_header(&resolved.endpoint, request.prompt_cache_key.as_deref())
+    {
+        headers.push(header);
+    }
+    headers
 }
 
 fn reducer_for(kind: &str) -> Box<dyn driver::FrameReducer + Send> {
@@ -232,5 +251,52 @@ impl Provider for WireProvider {
             });
             Ok(stream)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAGPIE_SESSION_HEADER, ResolvedProvider, request_headers};
+    use mycode_config::ProviderSettings;
+    use mycode_core::Request;
+
+    fn resolved() -> ResolvedProvider {
+        let settings = ProviderSettings::magpie(
+            "http://127.0.0.1:3425/v1",
+            vec!["opendesign/deepseek-v4.1-flash".to_owned()],
+            Vec::new(),
+        );
+        ResolvedProvider::resolve(
+            &settings,
+            "opendesign/deepseek-v4.1-flash",
+            "gateway-key",
+            "MYCode-Agent/0.12.18",
+        )
+        .expect("resolved gateway row")
+    }
+
+    fn session_header(request: &Request) -> Option<String> {
+        request_headers(&resolved(), request)
+            .into_iter()
+            .find(|(name, _)| name == MAGPIE_SESSION_HEADER)
+            .map(|(_, value)| value)
+    }
+
+    #[test]
+    fn the_session_header_names_the_magpie_conversation() {
+        let mut request = Request::new();
+        request.prompt_cache_key = Some("sess-20261021-170501-0123abcd".to_owned());
+        assert_eq!(
+            session_header(&request).as_deref(),
+            Some("sess-20261021-170501-0123abcd")
+        );
+    }
+
+    #[test]
+    fn a_request_without_a_session_sends_no_session_header() {
+        assert_eq!(session_header(&Request::new()), None);
+        let mut blank = Request::new();
+        blank.prompt_cache_key = Some("   ".to_owned());
+        assert_eq!(session_header(&blank), None);
     }
 }
