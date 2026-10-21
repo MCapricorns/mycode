@@ -45,6 +45,36 @@ pub(super) fn line_range_planned(
     })
 }
 
+/// Locates `expected` as a unique block after the requested line range moved
+/// or the model counted lines from an older read. Returns `None` when the
+/// text is absent or ambiguous, so a stale range still fails closed.
+pub(super) fn planned_for_expected_text(
+    body: &str,
+    expected: &str,
+    replacement: &str,
+    bom_len: usize,
+) -> Option<Planned> {
+    if expected.is_empty() {
+        return None;
+    }
+    let mut found = body.match_indices(expected);
+    let (start, _) = found.next()?;
+    if found.next().is_some() {
+        return None;
+    }
+    let end = start + expected.len();
+    let terminator = trailing_terminator(&body[start..end]);
+    let mut replacement = replacement.to_owned();
+    if !replacement.is_empty() && !replacement.ends_with(['\n', '\r']) {
+        replacement.push_str(terminator);
+    }
+    Some(Planned {
+        start: start + bom_len,
+        end: end + bom_len,
+        replacement,
+    })
+}
+
 /// The CR, LF, or CRLF that ends `range`, or `""` for a final line without one.
 fn trailing_terminator(range: &str) -> &str {
     if range.ends_with("\r\n") {

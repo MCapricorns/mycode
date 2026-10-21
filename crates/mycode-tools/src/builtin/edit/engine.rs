@@ -32,6 +32,7 @@ pub(super) fn edit_result(
     path_key: &str,
     revision: &str,
     applied: &Applied,
+    notes: &[String],
     detached_hardlink: bool,
 ) -> ToolResult {
     let mut text = format!(
@@ -41,6 +42,10 @@ pub(super) fn edit_result(
         applied.bytes_before,
         applied.bytes_after,
     );
+    for note in notes {
+        text.push_str("\nnote: ");
+        text.push_str(note);
+    }
     if detached_hardlink {
         text.push_str(" (detached_hardlink=true: this directory entry now names a new inode)");
     }
@@ -81,7 +86,7 @@ pub(super) enum PreparedOp {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Pick {
     Unique,
     All,
@@ -350,14 +355,26 @@ struct Found {
     pattern_id: usize,
 }
 
+#[cfg(test)]
 pub(super) fn plan_edits(
     snapshot: &str,
     ops: &[PreparedOp],
     cancel: &CancellationToken,
 ) -> Result<Vec<Planned>, ToolError> {
+    plan_edits_with_notes(snapshot, ops, cancel).map(|(planned, _)| planned)
+}
+
+/// Plans edits and reports any compatibility repair that was applied, so the
+/// model learns when its pattern was matched approximately.
+pub(super) fn plan_edits_with_notes(
+    snapshot: &str,
+    ops: &[PreparedOp],
+    cancel: &CancellationToken,
+) -> Result<(Vec<Planned>, Vec<String>), ToolError> {
     let (had_bom, body) = strip_bom(snapshot);
     let bom_len = if had_bom { UTF8_BOM.len() } else { 0 };
     let mut planned = Vec::new();
+    let mut notes = Vec::new();
     let mut replacement_bytes = 0usize;
     for (index, op) in ops.iter().enumerate() {
         check_cancel(cancel)?;
@@ -366,12 +383,13 @@ pub(super) fn plan_edits(
             op,
             bom_len,
             &mut planned,
+            &mut notes,
             &mut replacement_bytes,
             cancel,
         )
         .map_err(|error| tag_op_error(index, ops.len(), error))?;
     }
-    Ok(planned)
+    Ok((planned, notes))
 }
 
 /// Plans one prepared operation onto the pending replacement list.
@@ -380,6 +398,7 @@ fn plan_op(
     op: &PreparedOp,
     bom_len: usize,
     planned: &mut Vec<Planned>,
+    notes: &mut Vec<String>,
     replacement_bytes: &mut usize,
     cancel: &CancellationToken,
 ) -> Result<(), ToolError> {
@@ -390,6 +409,47 @@ fn plan_op(
             pick,
         } => {
             let mut matches = literal_matches(body, patterns)?;
+            if matches.is_empty() && patterns.len() == 1 {
+                // Models often reproduce a block from an older read with
+                // different indentation or trailing spaces. Match the same
+                // lines ignoring only whitespace before giving up.
+                matches = relaxed_literal_matches(body, &patterns[0]);
+                if !matches.is_empty() {
+                    notes.push(format!(
+                        "literal pattern matched ignoring whitespace/indentation: {}",
+                        snippet(&patterns[0])
+                    ));
+                }
+            }
+            if matches.is_empty()
+                && patterns.len() == 1
+                && *pick == Pick::Unique
+                && !patterns[0].trim().is_empty()
+            {
+                // A one-character difference (typo, renamed local, quote
+                // style) still has one close site. Fuzzy commits only a
+                // unique best match at distance 1.
+                if super::fuzzy::plan_fuzzy_fallback(
+                    body,
+                    super::fuzzy::FuzzyPlan {
+                        pattern: &patterns[0],
+                        replacement: &replacements[0],
+                        max_distance: 1,
+                    },
+                    bom_len,
+                    planned,
+                    replacement_bytes,
+                    cancel,
+                )
+                .is_ok()
+                {
+                    notes.push(format!(
+                        "literal pattern not found; applied a unique fuzzy match at distance 1: {}",
+                        snippet(&patterns[0])
+                    ));
+                    return Ok(());
+                }
+            }
             if matches.is_empty() {
                 return Err(literal_miss_error(body, patterns));
             }
@@ -430,7 +490,7 @@ fn plan_op(
             expected_hash,
             replacement,
         } => {
-            let range = super::line::line_range_planned(
+            let range = match super::line::line_range_planned(
                 body,
                 *start_line,
                 *end_line,
@@ -438,7 +498,30 @@ fn plan_op(
                 expected_hash.as_deref(),
                 replacement,
                 bom_len,
-            )?;
+            ) {
+                Ok(range) => range,
+                Err(error) => {
+                    let Some(expected) =
+                        expected_text.as_deref().filter(|_| expected_hash.is_none())
+                    else {
+                        return Err(error);
+                    };
+                    let Some(range) = super::line::planned_for_expected_text(
+                        body,
+                        expected,
+                        replacement,
+                        bom_len,
+                    ) else {
+                        return Err(error);
+                    };
+                    notes.push(format!(
+                        "line_range {start_line}-{end_line} no longer matches; edited the unique \
+                         expected_text block instead: {}",
+                        snippet(expected)
+                    ));
+                    range
+                }
+            };
             reserve_planned(
                 planned,
                 replacement_bytes,
@@ -540,6 +623,72 @@ fn strip_bom(text: &str) -> (bool, &str) {
     } else {
         (false, text)
     }
+}
+
+/// Line-window match that ignores indentation, trailing spaces, and runs of
+/// internal whitespace. Only used after an exact literal miss, and only for
+/// one pattern. The replacement still covers the original bytes.
+fn relaxed_literal_matches(body: &str, pattern: &str) -> Vec<Found> {
+    let include_terminator = pattern.ends_with('\n');
+    let mut needle: Vec<String> = pattern.split('\n').map(normalize_line).collect();
+    if include_terminator {
+        needle.pop();
+    }
+    while needle.last().is_some_and(String::is_empty) {
+        needle.pop();
+    }
+    if needle.is_empty() || needle.iter().all(String::is_empty) {
+        return Vec::new();
+    }
+    let mut lines: Vec<(usize, usize, &str)> = Vec::new();
+    let mut offset = 0usize;
+    for line in body.split_inclusive('\n') {
+        let start = offset;
+        offset += line.len();
+        let content = line
+            .strip_suffix('\n')
+            .unwrap_or(line)
+            .strip_suffix('\r')
+            .unwrap_or_else(|| line.strip_suffix('\n').unwrap_or(line));
+        lines.push((start, line.len(), content));
+    }
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let width = needle.len();
+    let mut found = Vec::new();
+    for first in 0..lines.len() {
+        let last = first + width - 1;
+        if last >= lines.len() {
+            break;
+        }
+        let matches = needle
+            .iter()
+            .enumerate()
+            .all(|(index, wanted)| normalize_line(lines[first + index].2) == *wanted);
+        if !matches {
+            continue;
+        }
+        let start = lines[first].0;
+        let mut end = lines[last].0 + lines[last].1;
+        if !include_terminator {
+            let content_len = lines[last].2.len();
+            end = lines[last].0 + content_len;
+        }
+        found.push(Found {
+            start,
+            end,
+            pattern_id: 0,
+        });
+    }
+    // Overlapping windows mean the relaxed match is not a unique block; only
+    // keep non-overlapping candidates so a repeated line cannot fan out.
+    found.dedup_by(|next, previous| next.start < previous.end);
+    found
+}
+
+fn normalize_line(line: &str) -> String {
+    line.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn literal_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, ToolError> {

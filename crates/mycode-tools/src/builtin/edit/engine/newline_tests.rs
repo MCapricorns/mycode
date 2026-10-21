@@ -32,9 +32,10 @@ fn trailing_spaces_the_copy_dropped_still_match() {
     let updated = apply(body, "a = 1;\nb = 2;", "a = 3;\nb = 4;").expect("crlf edit");
     assert_eq!(updated, "a = 3;\r\nb = 4;\r\n");
 
-    // Indentation is not trailing whitespace and still has to match.
+    // Indentation is repaired by the relaxed pass, not by the exact matcher.
     let body = "if x {\n    go();\n}\n";
-    assert!(apply(body, "if x {\ngo();", "if y {\ngo();").is_err());
+    let updated = apply(body, "if x {\ngo();", "if y {\ngo();").expect("indentation edit");
+    assert_eq!(updated, "if y {\ngo();\n}\n");
 }
 
 #[test]
