@@ -28,15 +28,26 @@ pub(super) enum SettingRow {
     },
 }
 
+/// What one `mcp.json` stat told us. `Unknown` is a file that exists but
+/// whose stamp could not be read; it re-reads every time so a permission
+/// change shows up without a restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stamp {
+    Missing,
+    Known(std::time::SystemTime, u64),
+    Unknown,
+}
+
 /// magpie's shared servers, re-read only when `~/.mycode/mcp.json` changed.
 ///
 /// The settings page repaints every frame while a turn streams and reads the
 /// rows again on every key and wheel notch; parsing a small file on each of
-/// those is wasted work. The stamp is (modified time, length), so magpie
-/// rewriting the file still shows up on the next paint.
+/// those is wasted work. The stamp is (modified time, length); a same-length
+/// rewrite that keeps the same timestamp is the one change this misses.
 #[derive(Debug, Default)]
 pub(super) struct SharedServers {
-    stamp: Option<(std::time::SystemTime, u64)>,
+    /// `None` until the first read.
+    stamp: Option<Stamp>,
     servers: Vec<McpServerSettings>,
     error: Option<String>,
 }
@@ -45,11 +56,20 @@ impl SharedServers {
     /// The shared servers and the error that stopped the last read, if any.
     fn read(&mut self, home: &HomeLayout) -> (&[McpServerSettings], Option<&str>) {
         let file = home.root().join("mcp.json");
-        let stamp = std::fs::metadata(&file)
-            .ok()
-            .and_then(|meta| meta.modified().ok().map(|modified| (modified, meta.len())));
-        if stamp != self.stamp {
-            self.stamp = stamp;
+        let stamp = match std::fs::metadata(&file) {
+            Ok(meta) => meta.modified().ok().map_or(Stamp::Unknown, |modified| {
+                Stamp::Known(modified, meta.len())
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Stamp::Missing,
+            // A file we cannot stat is retried on every paint.
+            Err(_) => Stamp::Unknown,
+        };
+        let changed = match self.stamp {
+            Some(held) => held != stamp || stamp == Stamp::Unknown,
+            None => true,
+        };
+        if changed {
+            self.stamp = Some(stamp);
             match mycode_config::global_mcp_servers(home) {
                 Ok(servers) => {
                     self.servers = servers;

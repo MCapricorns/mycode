@@ -13,7 +13,7 @@
 
 ### Fixed
 
-- 终端版设置页的 MCP 段不再只列 `settings.json` 里的服务器：magpie Library 写入 `~/.mycode/mcp.json` 的服务器也作为只读行显示（含地址或命令行），`mcp.json` 读不了时如实报错；两个来源都为空才显示「(none configured)」。之前只有 magpie 托管服务器时这一栏看起来一个都没配置，即使它们已经连上、工具可用。
+- 终端版设置页的 MCP 段不再只列 `settings.json` 里的服务器：magpie Library 写入 `~/.mycode/mcp.json` 的服务器也作为只读行显示（含地址或命令行），magpie 侧已禁用的行标 `· off`，`mcp.json` 读不了时如实报错；两个来源都为空才显示「(none configured)」。之前只有 magpie 托管服务器时这一栏看起来一个都没配置，即使它们已经连上、工具可用。
 - `search_tool` 的 `"list"` 在工具全部直接注册时列出这些名字（`Direct tools are called by name: …`），在有延迟工具时把直接工具附在后面；之前只回一句「No deferred MCP tools」，看起来像 MCP 没有连上。
 
 ## [0.12.19] - 2026-10-21
