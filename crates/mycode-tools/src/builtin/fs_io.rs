@@ -146,7 +146,7 @@ use types::{ChildOpen, FileIdentity, FileKind, FileMeta, OpenedChild, PreparedIn
 
 // Crate-public surface kept at the historical `fs_io` paths.
 pub use prepare::prepare_file_async;
-pub use read::{read_file_async, read_file_snapshot_async};
+pub use read::{ReadOutcome, read_any_async, read_file_snapshot_async};
 
 pub(crate) use prepare::anchor_file_path;
 pub(crate) use write::write_file_with_lease;

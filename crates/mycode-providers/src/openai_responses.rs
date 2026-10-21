@@ -64,17 +64,39 @@ fn convert_tool(tool: &ToolSpec) -> Value {
     })
 }
 
-/// Converts one message for the Responses API. Image blocks are dropped:
-/// the only Responses preset is the Codex backend, whose tool surface this
-/// adapter targets, and image input is not wired through it.
+/// Converts one message for the Responses API. Text stays a single
+/// `input_text` part; a picture becomes an `input_image` data URL beside it.
 fn convert_message(message: &Message, input: &mut Vec<Value>) {
     match message {
         Message::User(user) => {
-            let text = join_text(&user.content);
+            let has_image = user
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Image(_)));
+            let content = if has_image {
+                user.content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text(text) => {
+                            Some(json!({"type": "input_text", "text": text.text}))
+                        }
+                        ContentBlock::Image(image) => Some(json!({
+                            "type": "input_image",
+                            "image_url": format!(
+                                "data:{};base64,{}",
+                                image.mime_type, image.data
+                            ),
+                        })),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                vec![json!({"type": "input_text", "text": join_text(&user.content)})]
+            };
             input.push(json!({
                 "type": "message",
                 "role": "user",
-                "content": [{"type": "input_text", "text": text}],
+                "content": content,
             }));
         }
         Message::Assistant(assistant) => {
@@ -103,7 +125,38 @@ fn convert_message(message: &Message, input: &mut Vec<Value>) {
             }
         }
         Message::ToolResult(result) => {
-            let output = join_text(&result.content);
+            // The only Responses preset is the Codex backend, which has not
+            // been verified to accept an array of output parts here; this is
+            // the shape the Responses schema allows for images. Text-only
+            // results keep the plain-string form below, so the common path
+            // stays exactly as it was.
+            let has_image = result
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Image(_)));
+            let output = if has_image {
+                json!(
+                    result
+                        .content
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::Text(text) => {
+                                Some(json!({"type": "input_text", "text": text.text}))
+                            }
+                            ContentBlock::Image(image) => Some(json!({
+                                "type": "input_image",
+                                "image_url": format!(
+                                    "data:{};base64,{}",
+                                    image.mime_type, image.data
+                                ),
+                            })),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                )
+            } else {
+                json!(join_text(&result.content))
+            };
             input.push(json!({
                 "type": "function_call_output",
                 "call_id": result.tool_call_id,
@@ -625,5 +678,49 @@ mod tests {
         assert!(message.text().contains("partial answer"));
         assert!(message.text().contains("response.completed"));
         assert_eq!(message.stop_reason, StopReason::Error);
+    }
+
+    #[test]
+    fn images_ride_the_user_message_and_the_function_call_output() {
+        use mycode_core::{BinaryData, TextBlock, ToolResultMessage, UserMessage};
+        use std::sync::Arc;
+
+        let image = BinaryData {
+            data: "aGVsbG8=".to_owned(),
+            mime_type: "image/png".to_owned(),
+        };
+        let request = mycode_core::Request {
+            messages: vec![
+                Arc::new(mycode_core::Message::User(UserMessage {
+                    content: vec![
+                        ContentBlock::Text(TextBlock::new("look")),
+                        ContentBlock::Image(image.clone()),
+                    ],
+                })),
+                Arc::new(mycode_core::Message::ToolResult(ToolResultMessage {
+                    tool_call_id: "call-1".to_owned(),
+                    content: vec![
+                        ContentBlock::Text(TextBlock::new("Image: shot.png")),
+                        ContentBlock::Image(image),
+                    ],
+                    is_error: false,
+                    details: None,
+                })),
+            ],
+            ..mycode_core::Request::default()
+        };
+        let body = super::build_body(
+            "gpt-5.6-sol",
+            "https://chatgpt.com/backend-api/codex/responses",
+            &request,
+        );
+        let input = body["input"].as_array().expect("input");
+        assert_eq!(input[0]["content"][1]["type"], "input_image");
+        assert_eq!(
+            input[0]["content"][1]["image_url"],
+            "data:image/png;base64,aGVsbG8="
+        );
+        assert_eq!(input[1]["type"], "function_call_output");
+        assert_eq!(input[1]["output"][1]["type"], "input_image");
     }
 }

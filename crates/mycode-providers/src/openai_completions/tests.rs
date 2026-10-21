@@ -555,3 +555,96 @@ fn each_streamed_call_announces_its_name_once_before_its_arguments() {
         ]
     );
 }
+
+#[test]
+fn a_tool_returned_image_waits_for_the_tool_batch() {
+    use mycode_core::{BinaryData, TextBlock, ToolCall, ToolResultMessage, UserMessage};
+    use std::sync::Arc;
+
+    let result = |id: &str, image: bool| {
+        let mut content = vec![ContentBlock::Text(TextBlock::new(format!(
+            "Image: {id}.png"
+        )))];
+        if image {
+            content.push(ContentBlock::Image(BinaryData {
+                data: "aGVsbG8=".to_owned(),
+                mime_type: "image/png".to_owned(),
+            }));
+        }
+        Arc::new(Message::ToolResult(ToolResultMessage {
+            tool_call_id: id.to_owned(),
+            content,
+            is_error: false,
+            details: None,
+        }))
+    };
+    let request = Request {
+        messages: vec![
+            Arc::new(Message::User(UserMessage::text("go"))),
+            Arc::new(Message::Assistant(AssistantMessage {
+                blocks: vec![
+                    ContentBlock::ToolCall(ToolCall::new("a", "read", serde_json::json!({}))),
+                    ContentBlock::ToolCall(ToolCall::new("b", "read", serde_json::json!({}))),
+                ],
+                usage: None,
+                stop_reason: StopReason::ToolUse,
+            })),
+            result("a", true),
+            result("b", false),
+        ],
+        ..Request::default()
+    };
+    let body = build_body(
+        "gpt-5",
+        "https://api.openai.com/v1/chat/completions",
+        &request,
+    );
+    let messages = body["messages"].as_array().expect("messages");
+    let roles: Vec<_> = messages
+        .iter()
+        .map(|message| message["role"].as_str().unwrap_or_default())
+        .collect();
+    // Both tool messages stay together; the picture follows the batch.
+    assert_eq!(roles, ["user", "assistant", "tool", "tool", "user"]);
+    let image = &messages[4]["content"][1];
+    assert_eq!(image["type"], "image_url");
+    assert_eq!(image["image_url"]["url"], "data:image/png;base64,aGVsbG8=");
+}
+
+#[test]
+fn a_text_only_tool_result_keeps_the_plain_string() {
+    use mycode_core::{ToolCall, ToolResultMessage};
+    use std::sync::Arc;
+
+    let request = Request {
+        messages: vec![
+            Arc::new(Message::User(UserMessage::text("go"))),
+            Arc::new(Message::Assistant(AssistantMessage {
+                blocks: vec![ContentBlock::ToolCall(ToolCall::new(
+                    "a",
+                    "read",
+                    serde_json::json!({}),
+                ))],
+                usage: None,
+                stop_reason: StopReason::ToolUse,
+            })),
+            Arc::new(Message::ToolResult(ToolResultMessage {
+                tool_call_id: "a".to_owned(),
+                content: vec![ContentBlock::Text(TextBlock::new("plain text"))],
+                is_error: false,
+                details: None,
+            })),
+        ],
+        ..Request::default()
+    };
+    let body = build_body(
+        "gpt-5",
+        "https://api.openai.com/v1/chat/completions",
+        &request,
+    );
+    let messages = body["messages"].as_array().expect("messages");
+    // A result without a picture stays the string form, so the request bytes
+    // (and the provider's prefix cache) are exactly what they were before.
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["content"], "plain text");
+}
