@@ -31,14 +31,14 @@ MYCode 是一个本地编码代理，有桌面版和终端版。两个前端共�
 | | |
 | --- | --- |
 | **工作目录** | 最多同时挂 8 个目录，可以拖进来（从旧版合并的列表可能暂时更多，新增时保持现有数量）。会话绑定到一个目录；切换目录不会把当前会话改绑。改动面板跟随文件系统事件读 `git status`，不按固定间隔轮询。 |
-| **模型** | 模型列表来自 [models.dev](https://models.dev) 云端目录，缓存 24 小时。GitHub Copilot 和 OpenAI Codex 用设备码登录；其它服务商（含 xAI、自定义网关）粘贴 API key。 |
+| **模型** | 只通过本机 [magpie](https://usemagpie.ai) 网关请求模型。模型列表实时读取网关的 `GET /v1/models`；在 magpie 的 Agents 页给 MCode 选模型，密钥和地址由 magpie 的 agent 插件写进 `~/.mycode/settings.json`。 |
 | **思考强度** | 只列模型实际公布的档位。每个会话单独记住自己的模型和强度，不影响别的会话。 |
-| **子代理** | `scout` 只读，适合宽范围代码搜索、网页检索和查文档；`artisan` 在独立的 git worktree 里改代码，结束时回传 diff，不自动合回、不提交。每个回合最多同时跑 8 个，没有超时；取消回合、单独停止或删除对话都会结束它们。也可以在 `agents/` 里加自定义角色。 |
-| **技能** | 从 `.agents` 和 `.agents/skills` 发现 `SKILL.md`，`/` 菜单可插入；设置里每个技能可以单独关闭。 |
-| **MCP** | 支持 stdio 和 Streamable HTTP，最多 64 台服务器。工具不超过 4 个、且每个 schema 不超过 2048 字节的小服务直接注册成普通工具，其余走 `search_tool` / `use_tool`。 |
-| **网页** | 内置 Querit、AnySearch、Exa 三种搜索/抓取后端，结果有数量和字节上限。 |
+| **子代理** | `scout` 只读，适合宽范围代码搜索和查文档（可用 magpie 下发的只读 MCP 工具）；`artisan` 在独立的 git worktree 里改代码，结束时回传 diff，不自动合回、不提交。每个回合最多同时跑 8 个，没有超时；取消回合、单独停止或删除对话都会结束它们。也可以在 `agents/` 里加自定义角色。 |
+| **技能** | 从 `.agents`、`.agents/skills` 和 magpie Library 的 `~/.mycode/skills` 发现 `SKILL.md`，`/` 菜单可插入；设置里每个技能可以单独关闭。 |
+| **MCP** | 支持 stdio 和 Streamable HTTP，最多 64 台服务器。工具不超过 4 个、且每个 schema 不超过 2048 字节的小服务直接注册成普通工具，其余走 `search_tool` / `use_tool`。magpie Library 写入的 `~/.mycode/mcp.json` 会自动合并。 |
+| **网页** | 没有内置搜索；联网检索由 magpie Library 下发的 MCP 服务提供（例如 anysearch）。 |
 | **界面** | 中英双语、深色/浅色、四档字号，`Ctrl-K` / `Cmd-K` 打开命令面板。 |
-| **终端版** | `mycode-cli` 和桌面版共用同一个驱动、会话和设置；`/settings` 里可以选模型、填密钥、开关 MCP、检查更新。 |
+| **终端版** | `mycode-cli` 和桌面版共用同一个驱动、会话和设置；`/settings` 里可以选模型、开关 MCP、检查更新。 |
 | **代理** | 跟随系统代理，或手动填写 `http` / `socks5` 地址。设置页的「测试」会请求 `google.com/generate_204` 并显示线路、状态码和耗时。 |
 
 ## 安装
@@ -73,9 +73,10 @@ cargo build --release -p mycode-desktop -p mycode-cli
 
 ## 快速开始
 
-1. 打开设置 → 模型。登录 Copilot / Codex，或粘贴任意服务商的 API key。
-2. 打开一个目录。
-3. 在输入框里描述你要做的事。
+1. 安装 [magpie](https://usemagpie.ai)，在本仓库运行 `magpie plugin add github:MCapricorns/magpie-mycode`（或在 magpie 的 Plugins 页填同样的 `github:` 地址）。
+2. 在 magpie 的 Agents 页给 **MCode** 选一个模型。MCode 启动新会话时读取网关地址和密钥。
+3. 打开一个目录。
+4. 在输入框里描述你要做的事。
 
 | 操作 | 方式 |
 | --- | --- |
@@ -92,10 +93,12 @@ cargo build --release -p mycode-desktop -p mycode-cli
 
 ```text
 ~/.mycode/
-├─ settings.json        提供商、MCP、网页、外观、代理、子代理、技能开关（不含密钥）
-├─ secrets.json         API 密钥与 OAuth 令牌
+├─ settings.json        magpie 网关、MCP、外观、代理、子代理、技能开关（密钥在 magpie 里）
+├─ AGENTS.md            magpie Library 写入的全局规则（也可手写）
+├─ mcp.json             magpie Library 写入的 MCP 服务器
+├─ skills/              magpie Library 写入的技能
+├─ secrets.json         MCP 密钥
 ├─ ui.json              最近目录、会话归属、每个会话的模型与思考档位、窗口状态
-├─ catalog-cache.json   models.dev 目录缓存
 ├─ sessions.db          会话索引
 ├─ sessions/            会话账本（JSONL、payloads、compaction.json）
 ├─ agents/              自定义子代理角色
@@ -134,12 +137,11 @@ cargo build --release -p mycode-desktop -p mycode-cli
 | [docs/architecture.md](docs/architecture.md) | crate 分层、消息生命周期、家目录、运行时边界 |
 | [docs/core.md](docs/core.md) | 共享消息、事件、工具规格和 Provider 端口 |
 | [docs/config.md](docs/config.md) | 家目录、设置、密钥、界面状态和恢复规则 |
-| [docs/providers.md](docs/providers.md) | 三种协议、流式传输、思考强度、缓存、目录和 OAuth |
-| [docs/tools.md](docs/tools.md) | 内置工具、搜索边界、进程工具、宿主工具和 MCP |
+| [docs/providers.md](docs/providers.md) | 三种协议、流式传输、思考强度、缓存，以及 magpie 网关 |
+| [docs/tools.md](docs/tools.md) | 内置工具、进程工具、宿主工具和 MCP |
 | [docs/agent.md](docs/agent.md) | 回合循环、取消、工具分发和会话账本 |
-| [docs/app.md](docs/app.md) | 桥、回合装配、压缩、子代理、MCP、OAuth、更新 |
+| [docs/app.md](docs/app.md) | 桥、回合装配、压缩、子代理、MCP、更新 |
 | [docs/desktop.md](docs/desktop.md) | 桌面与终端界面、视图模型、和核心的节拍 |
-| [docs/model-catalog-updates.md](docs/model-catalog-updates.md) | Codex / OpenDesign 模型表的维护流程 |
 
 ## 社区
 

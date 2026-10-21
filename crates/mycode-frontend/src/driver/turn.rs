@@ -281,15 +281,25 @@ impl FrontendDriver {
         self.interrupt_queued(index, out);
     }
 
-    /// Steer-submit (Ctrl+G, Cmd+G on the macOS desktop): hands this draft
-    /// to the running turn without stopping it. The model reads it before
-    /// its next step; until the ledger has it, it shows as pending. A turn
-    /// that ends before reading it hands it back to the queue. With no turn
-    /// running it is a plain submit.
+    /// Steer-submit (Ctrl+G, Cmd+G on the macOS desktop): hands this draft to
+    /// the running turn without stopping it. The model reads it before its
+    /// next step; until the ledger has it, it shows as pending. A turn that
+    /// ends before reading it hands it back to the queue. With no turn
+    /// running it does not fall back to send: a submit here could queue the
+    /// draft behind a compaction, which reads as "Ctrl+G queued it".
     pub fn steer_send(&mut self, draft: &str, out: &mut Vec<Effect>) {
         let session_id = self.open_session_id();
         let Some(session_id) = session_id.filter(|_| self.vm.sending) else {
-            self.submit(draft, out);
+            if !draft.trim().is_empty() {
+                out.push(Effect::Toast {
+                    kind: ToastKind::Warning,
+                    text: crate::i18n::t(
+                        "Nothing is running to steer. Press Enter to send.",
+                        "没有正在运行的任务可引导。按回车发送。",
+                    )
+                    .to_owned(),
+                });
+            }
             return;
         };
         if draft.trim().is_empty() {

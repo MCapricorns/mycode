@@ -74,7 +74,7 @@ impl Workspace {
         self.composer.update(cx, |state, cx| {
             state.set_placeholder(composer_placeholder, window, cx);
         });
-        let pairs: [(&Option<Entity<InputState>>, &str); 5] = [
+        let pairs: [(&Option<Entity<InputState>>, &str); 3] = [
             (
                 &self.session_filter_input,
                 crate::i18n::t("Search sessions", "搜索会话"),
@@ -86,14 +86,6 @@ impl Workspace {
             (
                 &self.model_picker_input,
                 crate::i18n::t("Filter by name or id", "按名称或 id 筛选"),
-            ),
-            (
-                &self.preset_model_search_input,
-                crate::i18n::t("Filter models", "筛选模型"),
-            ),
-            (
-                &self.preset_search_input,
-                crate::i18n::t("Filter providers…", "筛选服务商…"),
             ),
         ];
         for (input, placeholder) in pairs {

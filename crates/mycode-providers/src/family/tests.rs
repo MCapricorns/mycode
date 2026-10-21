@@ -198,89 +198,19 @@ fn unknown_provider_uses_generic_openai_fields() {
     assert!(!super::omits_prompt_cache_key(endpoint));
 }
 
-fn catalog_with(model_id: &str, efforts: &[&str]) -> crate::catalog::CatalogDocument {
-    use crate::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
-    CatalogDocument {
-        providers: vec![CatalogProvider {
-            id: "moonshot".to_owned(),
-            name: "Moonshot".to_owned(),
-            models: vec![CatalogModel {
-                id: model_id.to_owned(),
-                reasoning: true,
-                reasoning_toggle: true,
-                reasoning_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
-                ..CatalogModel::default()
-            }],
-            ..CatalogProvider::default()
-        }],
-    }
-}
-
 #[test]
-fn kimi_effort_prefers_the_active_catalog_and_falls_back_when_absent() {
-    let active = catalog_with("kimi-active-probe", &["low"]);
-    let bundled = catalog_with("kimi-active-probe", &["low", "high", "max"]);
-    let empty = crate::catalog::CatalogDocument::default();
-    assert_eq!(
-        super::effort_against(
-            Some(&active),
-            &bundled,
-            "kimi-active-probe",
-            ReasoningLevel::Low,
-            false,
-        ),
-        Some("low")
-    );
-    assert!(
-        super::effort_against(
-            Some(&active),
-            &bundled,
-            "kimi-active-probe",
-            ReasoningLevel::High,
-            false,
-        )
-        .is_none()
-    );
-    assert_eq!(
-        super::effort_against(
-            None,
-            &bundled,
-            "kimi-active-probe",
-            ReasoningLevel::High,
-            false,
-        ),
-        Some("high")
-    );
-    assert_eq!(
-        super::effort_against(None, &empty, "k3-256k", ReasoningLevel::Max, true),
-        Some("max")
-    );
-    let narrowed = catalog_with("k3-256k", &["low"]);
-    assert!(
-        super::effort_against(
-            Some(&narrowed),
-            &empty,
-            "k3-256k",
-            ReasoningLevel::Max,
-            true,
-        )
-        .is_none()
-    );
-    assert_eq!(
-        super::effort_against(
-            Some(&narrowed),
-            &empty,
-            "k3-256k",
-            ReasoningLevel::Low,
-            true
-        ),
-        Some("low")
-    );
-    crate::catalog::install_kimi_fixture();
+fn kimi_effort_follows_the_id_mapping() {
+    for (level, token) in [
+        (ReasoningLevel::Low, "low"),
+        (ReasoningLevel::Medium, "high"),
+        (ReasoningLevel::Max, "max"),
+    ] {
+        assert_eq!(super::kimi_effort_token(level), Some(token));
+    }
     let mut body = json!({});
     super::apply_chat_thinking(
         &mut body,
-        "kimi-installed-probe",
+        "kimi-for-coding",
         "http://127.0.0.1:9/v1/chat/completions",
         ReasoningLevel::Max,
         ThinkingWire::Completions,

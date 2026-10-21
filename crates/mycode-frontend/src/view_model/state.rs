@@ -7,9 +7,7 @@ use mycode_app::{
 };
 
 use super::chat::{ComposerMention, LiveJob};
-use super::settings::{
-    CopilotSignIn, McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry,
-};
+use super::settings::{McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry};
 use super::usage::{CacheAlert, CacheBreak, CacheWatch, TurnStats};
 
 /// The main area view: chat or full-page settings.
@@ -169,10 +167,6 @@ pub struct WorkspaceState {
     pub cache_alert: Option<CacheAlert>,
     /// Active composer mention autocomplete, when a trigger is typed.
     pub mention: Option<ComposerMention>,
-    /// In-flight Copilot device-flow sign-in, when any.
-    pub copilot_sign_in: Option<CopilotSignIn>,
-    /// The last Copilot sign-in failure, shown in the sign-in panel.
-    pub copilot_error: Option<String>,
     /// The editable settings projection.
     pub settings: Option<SettingsState>,
     /// Last terminal error surfaced to the user.
@@ -236,12 +230,8 @@ pub struct WorkspaceState {
     pub picker_query: String,
     /// Models picked from the session picker, newest first.
     pub recent_models: Vec<mycode_config::ModelPin>,
-    /// Provider id open on the Models page, when the user drilled in.
-    pub provider_detail: Option<String>,
     /// Filter text for the settings navigation.
     pub settings_query: String,
-    /// Filter text for the add-from-catalog model checklist.
-    pub preset_model_query: String,
     /// Whether the thinking-effort submenu is open.
     pub reasoning_menu_open: bool,
     /// Open Agents-page model picker: (role name, field). The field is
@@ -249,21 +239,10 @@ pub struct WorkspaceState {
     pub subagent_menu: Option<(String, String)>,
     /// Whether the General page's language dropdown is open.
     pub language_menu_open: bool,
-    /// Filter text for the provider preset picker.
-    pub preset_search: String,
-    /// The catalog provider currently being added, when any.
-    pub active_preset: Option<String>,
-    /// Models checked in the active preset form; empty means the catalog's
-    /// first model is used as the sole default.
-    pub preset_models: Vec<String>,
     /// The Models settings sub-page.
     pub models_subview: ModelsSubview,
-    /// Vendor backend open on the Web page, when the user drilled in.
-    pub web_detail: Option<String>,
     /// The MCP settings sub-page.
     pub mcp_subview: McpSubview,
-    /// Whether the custom provider form's protocol dropdown is open.
-    pub provider_kind_menu_open: bool,
     /// Whether the custom MCP form's transport dropdown is open.
     pub mcp_transport_menu_open: bool,
     /// Whether the global command palette is open.
@@ -364,33 +343,6 @@ pub enum FrontendAction {
         /// Whether the URL field produced it.
         typed: bool,
     },
-    /// The settings editor toggled a provider row's enabled flag.
-    SettingsProviderToggled(usize, bool),
-    /// The provider page showed or hid models in the chat model picker.
-    SettingsModelsShown {
-        /// Provider id.
-        provider: String,
-        /// Model ids to change.
-        models: Vec<String>,
-        /// `true` shows them, `false` hides them.
-        shown: bool,
-    },
-    /// The settings editor replaced one provider endpoint.
-    ///
-    /// The value is the trimmed base URL. API keys are not part of this edit.
-    SettingsProviderBaseUrlChanged {
-        /// Provider id whose endpoint changed.
-        id: String,
-        /// New base URL, already accepted by settings validation.
-        base_url: String,
-    },
-    /// The settings editor added a provider row, or replaced the row that
-    /// has the same id.
-    SettingsProviderAdded(mycode_config::ProviderSettings),
-    /// The settings editor removed a provider row.
-    SettingsProviderRemoved(usize),
-    /// The settings editor toggled a web backend.
-    SettingsBackendToggled(usize, bool),
     /// The settings editor changed subagent role routes.
     SettingsSubagentsChanged(mycode_config::SubagentSettings),
     /// The Skills page switched one skill on or off.
@@ -444,10 +396,6 @@ pub enum FrontendAction {
     SkillsLoaded(Vec<SkillEntry>),
     /// File matches for the active `@` mention arrived from the bridge.
     MentionFiles(Vec<String>),
-    /// The Copilot device flow started; show the user code.
-    CopilotSignInStarted(CopilotSignIn),
-    /// The Copilot device flow finished; `Err` keeps the panel with a message.
-    CopilotSignInFinished(Result<(), String>),
     /// Live token counts for the turn that is still running.
     UsageSnapshot {
         model: String,
@@ -496,10 +444,8 @@ pub enum FrontendAction {
     /// A settings save failed. The document stays dirty and a chat turn's
     /// `sending` flag is left alone.
     SettingsSaveFailed(String),
-    /// One provider's API key was stored or cleared; refreshes key markers.
+    /// One MCP server's API key was stored or cleared; refreshes key markers.
     ProviderKeySaved {
-        /// Provider ids with a stored key.
-        provider_keys: Vec<String>,
         /// MCP server ids with a stored key.
         mcp_keys: Vec<String>,
     },
@@ -660,8 +606,7 @@ pub enum FrontendAction {
     RecentRemoved(String),
     /// The model picker selected a provider.
     ProviderSelected(String),
-    /// The model picker selected a model; an unknown model joins the
-    /// provider row so the next turn can use it.
+    /// The model picker selected a model.
     ModelSelected(String),
     /// The model picker opened or closed. Opening starts on the provider step.
     ModelMenuToggled(bool),
@@ -672,10 +617,6 @@ pub enum FrontendAction {
     PickerQueryChanged(String),
     /// The settings navigation filter changed.
     SettingsQueryChanged(String),
-    /// The Models page opened or closed one provider's detail.
-    ProviderDetailOpened(Option<String>),
-    /// The add-from-catalog model checklist filter changed.
-    PresetModelQueryChanged(String),
     /// The thinking-effort submenu opened or closed.
     ReasoningMenuToggled(bool),
     /// The composer's thinking-effort pick. Stored on the open session's
@@ -683,20 +624,10 @@ pub enum FrontendAction {
     /// chip matches. This action does not mark the document dirty and does
     /// not change the reasoning effort that a later settings save writes.
     SettingsReasoningChanged(String),
-    /// The preset picker filter changed.
-    PresetSearchChanged(String),
-    /// A preset form opened or closed.
-    ActivePresetChanged(Option<String>),
-    /// The active preset form toggled one model's checkbox.
-    PresetModelToggled(String),
     /// The Models settings sub-page changed.
     ShowModelsSubview(ModelsSubview),
-    /// The Web page opened or closed one vendor's detail.
-    WebDetailOpened(Option<String>),
     /// The MCP settings sub-page changed.
     ShowMcpSubview(McpSubview),
-    /// The custom provider form's protocol dropdown opened or closed.
-    ProviderKindMenuToggled(bool),
     /// The custom MCP form's transport dropdown opened or closed.
     McpTransportMenuToggled(bool),
     /// Self-update progress changed.

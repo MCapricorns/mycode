@@ -167,18 +167,10 @@ impl Workspace {
             match settings_back_target(
                 self.vm().settings_section,
                 self.vm().models_subview,
-                self.vm().provider_detail.is_some(),
-                self.vm().active_preset.is_some(),
-                self.vm().web_detail.is_some(),
                 self.vm().mcp_subview,
             ) {
-                SettingsBack::CloseProviderDetail => self.on_close_provider_detail(cx),
-                SettingsBack::ClosePreset => self.on_close_preset(cx),
                 SettingsBack::ModelsList => {
                     self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
-                }
-                SettingsBack::WebList => {
-                    self.on_close_web_detail(cx);
                 }
                 SettingsBack::McpList => {
                     self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
@@ -279,15 +271,5 @@ impl Workspace {
     /// Probes one MCP server for its tool list.
     pub(crate) fn on_list_mcp_tools(&mut self, server_id: &str, cx: &mut Context<Self>) {
         self.driver_do(|d, fx| d.list_mcp_tools(server_id, fx), cx);
-    }
-
-    /// Adds a catalog-listed MCP server; a pasted key arms the enable probe.
-    pub(crate) fn on_add_builtin_mcp(
-        &mut self,
-        server: mycode_config::McpServerSettings,
-        api_key: &str,
-        cx: &mut Context<Self>,
-    ) {
-        self.driver_do(|d, fx| d.add_builtin_mcp(server, api_key, fx), cx);
     }
 }

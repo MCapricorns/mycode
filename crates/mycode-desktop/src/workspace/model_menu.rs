@@ -84,17 +84,6 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn on_open_provider_detail(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.apply_action(
-            FrontendAction::ProviderDetailOpened(Some(id.to_owned())),
-            cx,
-        );
-    }
-
-    pub(crate) fn on_close_provider_detail(&mut self, cx: &mut Context<Self>) {
-        self.apply_action(FrontendAction::ProviderDetailOpened(None), cx);
-    }
-
     pub(crate) fn on_toggle_reasoning_menu(&mut self, open: bool, cx: &mut Context<Self>) {
         self.apply_action(FrontendAction::ReasoningMenuToggled(open), cx);
     }

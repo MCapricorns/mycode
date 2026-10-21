@@ -65,6 +65,8 @@ pub struct HttpChannelOptions {
     pub key_header: KeyHeader,
     /// API key, when the server requires one.
     pub api_key: Option<String>,
+    /// Extra headers (magpie's Library keeps vendor headers here).
+    pub headers: Vec<(String, String)>,
     /// Per-request timeout.
     pub timeout: Duration,
 }
@@ -123,6 +125,7 @@ impl HttpChannel {
                 KeyHeader::XApiKey => headers.push(("x-api-key".to_owned(), key.to_owned())),
             }
         }
+        headers.extend(self.options.headers.iter().cloned());
         let response = mycode_providers::send_pinned(mycode_providers::PinnedRequest {
             method: reqwest::Method::POST,
             url: self.endpoint.clone(),

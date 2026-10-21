@@ -19,8 +19,8 @@ use super::{
 };
 
 pub use self::models::{
-    preset_pick, reasoning_levels_for, selected_model_supports_reasoning,
-    selected_reasoning_levels, strongest_reasoning_level,
+    reasoning_levels_for, selected_model_supports_reasoning, selected_reasoning_levels,
+    strongest_reasoning_level,
 };
 
 pub use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index};
@@ -31,15 +31,15 @@ use self::jobs::{
     tool_progress, tool_started,
 };
 use self::models::{
-    active_preset_changed, apply_session_model, assign_fresh_session_model, ensure_model_selection,
-    model_selected, provider_selected, remember_active_session_model, remember_session_model,
+    apply_session_model, assign_fresh_session_model, ensure_model_selection, model_selected,
+    provider_selected, remember_active_session_model, remember_session_model,
     restore_live_reasoning,
 };
 use self::projects::{
     bind_session_project, session_bindings_forgotten, session_project_bound, workspace_root_added,
     workspace_root_removed,
 };
-use self::settings::{edit_settings, mark_settings_dirty};
+use self::settings::edit_settings;
 use self::streaming::{append_streaming, set_streaming_status};
 use self::usage::{arm_cache_watch, clear_session_usage, observe_cache_hit};
 
@@ -201,9 +201,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
     let touches_providers = matches!(
         action,
         FrontendAction::SettingsLoaded(_)
-            | FrontendAction::SettingsProviderAdded(_)
-            | FrontendAction::SettingsProviderRemoved(_)
-            | FrontendAction::SettingsProviderToggled(_, _)
             | FrontendAction::SettingsSaved { .. }
             | FrontendAction::UiStateLoaded { .. }
     );
@@ -408,14 +405,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                     })
                     .collect();
             }
-        }
-        FrontendAction::CopilotSignInStarted(info) => {
-            state.copilot_sign_in = Some(info);
-            state.copilot_error = None;
-        }
-        FrontendAction::CopilotSignInFinished(outcome) => {
-            state.copilot_sign_in = None;
-            state.copilot_error = outcome.err();
         }
         FrontendAction::MessageQueued(text) => {
             queue_message(state, text);
@@ -781,29 +770,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                 true
             });
         }
-        FrontendAction::SettingsModelsShown {
-            provider,
-            models,
-            shown,
-        } => settings::models_shown(state, &provider, models, shown),
-        FrontendAction::SettingsProviderToggled(index, enabled) => {
-            edit_settings(state, |settings| {
-                settings.providers.get_mut(index).is_some_and(|provider| {
-                    provider.enabled = enabled;
-                    true
-                })
-            });
-        }
-        FrontendAction::SettingsProviderBaseUrlChanged { id, base_url } => {
-            settings::provider_base_url_changed(state, &id, base_url);
-        }
-        FrontendAction::SettingsProviderAdded(provider) => {
-            settings::provider_added(state, provider)
-        }
-        FrontendAction::SettingsProviderRemoved(index) => settings::provider_removed(state, index),
-        FrontendAction::SettingsBackendToggled(index, enabled) => {
-            settings::backend_toggled(state, index, enabled);
-        }
         FrontendAction::SettingsSubagentsChanged(subagents) => {
             edit_settings(state, |settings| {
                 settings.subagents = subagents;
@@ -835,12 +801,8 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             }
             state.error = Some(message);
         }
-        FrontendAction::ProviderKeySaved {
-            provider_keys,
-            mcp_keys,
-        } => {
+        FrontendAction::ProviderKeySaved { mcp_keys } => {
             if let Some(settings) = state.settings.as_mut() {
-                settings.providers_with_keys = provider_keys;
                 settings.mcp_with_keys = mcp_keys;
             }
         }
@@ -869,19 +831,11 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::ShowMainView(view) => {
             state.view = view;
-            state.provider_detail = None;
-            state.web_detail = None;
             // Crossing views closes every floating menu so no stale layer
             // renders above the destination view.
             close_floating_menus(state);
         }
         FrontendAction::ShowSettingsSection(section) => {
-            if section != super::SettingsSection::Models {
-                state.provider_detail = None;
-            }
-            if section != super::SettingsSection::Web {
-                state.web_detail = None;
-            }
             state.model_menu_open = false;
             state.model_menu_browse = None;
             state.picker_query.clear();
@@ -893,15 +847,8 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             document,
             fetched_at,
         } => {
-            let had_catalog = state.catalog.is_some();
             state.catalog = Some(document);
             state.catalog_fetched_at = fetched_at;
-            if let Some(preset) = state.active_preset.clone()
-                && (!had_catalog && state.preset_models.is_empty()
-                    || preset == mycode_providers::OPENAI_CODEX_PROVIDER_ID)
-            {
-                active_preset_changed(state, Some(preset));
-            }
         }
         FrontendAction::UiStateLoaded {
             recents,
@@ -1016,13 +963,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::PickerQueryChanged(query) => state.picker_query = query,
         FrontendAction::SettingsQueryChanged(query) => state.settings_query = query,
-        FrontendAction::ProviderDetailOpened(provider) => {
-            state.provider_detail = provider;
-            state.model_menu_open = false;
-            state.model_menu_browse = None;
-            state.picker_query.clear();
-        }
-        FrontendAction::PresetModelQueryChanged(query) => state.preset_model_query = query,
         FrontendAction::ReasoningMenuToggled(open) => {
             state.reasoning_menu_open = open;
             if open {
@@ -1050,30 +990,13 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             state.default_reasoning = picked;
             remember_active_session_model(state);
         }
-        FrontendAction::PresetSearchChanged(text) => state.preset_search = text,
-        FrontendAction::ActivePresetChanged(preset) => active_preset_changed(state, preset),
-        FrontendAction::PresetModelToggled(model) => {
-            if let Some(position) = state.preset_models.iter().position(|m| *m == model) {
-                state.preset_models.remove(position);
-            } else {
-                state.preset_models.push(model);
-            }
-        }
         FrontendAction::ShowModelsSubview(view) => {
             state.models_subview = view;
-            state.provider_kind_menu_open = false;
-            state.mcp_transport_menu_open = false;
-            state.provider_detail = None;
-            // The OAuth page carries no preset form: signing in binds the
-            // catalog row's models, edited later on the provider detail.
-            active_preset_changed(state, None);
         }
-        FrontendAction::WebDetailOpened(backend) => state.web_detail = backend,
         FrontendAction::ShowMcpSubview(view) => {
             state.mcp_subview = view;
             state.mcp_transport_menu_open = false;
         }
-        FrontendAction::ProviderKindMenuToggled(open) => state.provider_kind_menu_open = open,
         FrontendAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
         FrontendAction::LanguageMenuToggled(open) => state.language_menu_open = open,
         FrontendAction::UpdateStateChanged(update) => state.update = update,
@@ -1168,7 +1091,6 @@ pub fn close_floating_menus(state: &mut WorkspaceState) -> bool {
         || state.model_menu_open
         || state.reasoning_menu_open
         || state.subagent_menu.is_some()
-        || state.provider_kind_menu_open
         || state.mcp_transport_menu_open
         || state.language_menu_open
         || state.mention.is_some();
@@ -1178,7 +1100,6 @@ pub fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.picker_query.clear();
     state.reasoning_menu_open = false;
     state.subagent_menu = None;
-    state.provider_kind_menu_open = false;
     state.mcp_transport_menu_open = false;
     state.language_menu_open = false;
     state.mention = None;

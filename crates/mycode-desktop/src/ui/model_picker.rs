@@ -25,9 +25,8 @@ pub(crate) use crate::view_model::{model_display_name, provider_display_name};
 use crate::workspace::Workspace;
 use mycode_frontend::picker::{ModelChoice, current_provider, enabled_providers, recent_pins};
 pub(crate) use mycode_frontend::picker::{
-    ModelPickerTarget, ProviderChoice, all_provider_model_choices, filter_model_choices,
-    preferred_index, provider_choices, provider_model_choices, provider_scroll_index,
-    selected_in_provider, selected_model_label,
+    ModelPickerTarget, ProviderChoice, filter_model_choices, preferred_index, provider_choices,
+    provider_model_choices, provider_scroll_index, selected_in_provider, selected_model_label,
 };
 
 /// Fixed height of one virtualized model row.

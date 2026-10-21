@@ -1,10 +1,8 @@
 //! Model-picker and reasoning transitions: keeping the selection on a model
-//! that exists, clamping the stored thinking pick to the catalog, and the
-//! preset form's pre-checked model list.
+//! that exists and clamping the stored thinking pick to the gateway's list.
 
 use super::usage::arm_cache_watch;
-use crate::i18n::t;
-use crate::view_model::{CacheBreak, WorkspaceState, rank_model_ids};
+use crate::view_model::{CacheBreak, WorkspaceState};
 
 /// The `ProviderSelected` transition: the model picker selected a provider.
 pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
@@ -50,45 +48,8 @@ pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
     remember_active_session_model(state);
 }
 
-/// The `ModelSelected` transition: the model picker selected a model; an
-/// unknown model joins the provider row so the next turn can use it.
+/// The `ModelSelected` transition: the model picker selected a model.
 pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
-    // Picking a catalog model the provider row does not carry yet
-    // appends it to the row: turn resolution validates against that
-    // list, so an unpersisted selection would silently fall back to
-    // the first model.
-    let provider_id = state.selected_provider.clone();
-    let mut capped = false;
-    if let Some(settings) = state.settings.as_mut()
-        && let Some(provider) = provider_id
-            .as_deref()
-            .and_then(|id| settings.providers.iter_mut().find(|p| p.id == id))
-    {
-        let known = provider.models.contains(&model);
-        if !known {
-            if provider.models.len() < mycode_config::MAX_MODELS_PER_PROVIDER {
-                provider.models.push(model.clone());
-                super::mark_settings_dirty(settings);
-            } else {
-                capped = true;
-            }
-        }
-    }
-    if capped {
-        // The row is at the settings cap: storing the pick would
-        // leave a selection the next turn silently drops, so refuse
-        // the pick and say why.
-        state.error = Some(format!(
-            "{}{}{}",
-            t("this provider is at its ", "该服务商已达到 "),
-            mycode_config::MAX_MODELS_PER_PROVIDER,
-            t(
-                "-model limit \u{2014} remove one in Settings \u{2192} Models before switching to an unlisted model",
-                " 个模型的上限 \u{2014} 请先在设置 \u{2192} 模型中移除一个，再切换到未列出的模型",
-            ),
-        ));
-        return;
-    }
     if let Some(provider) = state.selected_provider.clone() {
         mycode_config::remember_model(&mut state.recent_models, &provider, &model);
     }
@@ -107,69 +68,6 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
     // `selected_reasoning_level`), and switching back to a model that
     // supports it restores the pick without asking the user again.
     remember_active_session_model(state);
-}
-
-/// The catalog row's model ids in ranked order.
-fn listed_models(state: &WorkspaceState, provider_id: &str) -> Vec<String> {
-    state
-        .catalog
-        .as_ref()
-        .and_then(|catalog| catalog.provider(provider_id))
-        .map(|provider| {
-            rank_model_ids(provider.models.iter().map(|model| model.id.clone()))
-                .into_iter()
-                .take(mycode_config::MAX_MODELS_PER_PROVIDER)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// The model ids an OAuth sign-in binds for `provider_id`: the configured
-/// picks that still exist in the catalog row, else the whole row (or the
-/// configured list when the catalog row is not loaded yet).
-#[must_use]
-pub fn preset_pick(state: &WorkspaceState, provider_id: &str) -> Vec<String> {
-    let listed = listed_models(state, provider_id);
-    let configured: Vec<String> = state
-        .settings
-        .as_ref()
-        .and_then(|settings| settings.providers.iter().find(|p| p.id == provider_id))
-        .map(|provider| {
-            if listed.is_empty() {
-                provider.models.clone()
-            } else {
-                listed
-                    .iter()
-                    .filter(|model| provider.models.contains(model))
-                    .cloned()
-                    .collect()
-            }
-        })
-        .unwrap_or_default();
-    if configured.is_empty() {
-        listed
-    } else {
-        configured
-    }
-}
-
-/// The `ActivePresetChanged` transition: a preset form opened or closed.
-pub(super) fn active_preset_changed(state: &mut WorkspaceState, preset: Option<String>) {
-    state.active_preset = preset.clone();
-    state.preset_model_query.clear();
-    // OpenDesign and the device-OAuth providers are updated in place, so
-    // their forms start from the models already configured; checking
-    // everything would replace that list on the next Add. Every other
-    // preset adds a new row and pre-checks the whole list, strongest first.
-    state.preset_models = match preset.as_deref() {
-        Some(
-            id @ (mycode_providers::catalog::opendesign::PROVIDER_ID
-            | mycode_providers::COPILOT_PROVIDER_ID
-            | mycode_providers::OPENAI_CODEX_PROVIDER_ID),
-        ) => preset_pick(state, id),
-        Some(id) => listed_models(state, id),
-        None => Vec::new(),
-    };
 }
 
 /// Keeps the model picker on a provider/model that actually exists.
@@ -443,80 +341,12 @@ mod tests {
     use super::selected_reasoning_levels;
     use crate::view_model::{SettingsState, WorkspaceState};
 
-    #[test]
-    fn the_opendesign_preset_form_opens_on_the_configured_models() {
-        use mycode_providers::catalog::opendesign;
-
-        let mut document = mycode_providers::catalog::CatalogDocument::default();
-        opendesign::attach(&mut document);
-        let settings = mycode_config::AppSettings {
-            providers: vec![mycode_config::ProviderSettings {
-                id: opendesign::PROVIDER_ID.to_owned(),
-                kind: "openai-completions".to_owned(),
-                base_url: opendesign::BASE_URL.to_owned(),
-                models: vec!["glm-5.3-flash".to_owned(), "retired-model".to_owned()],
-                enabled: true,
-                context_limit: None,
-                max_output: None,
-                hidden_models: Vec::new(),
-            }],
-            ..mycode_config::AppSettings::default()
-        };
-        let mut state = WorkspaceState {
-            catalog: Some(std::sync::Arc::new(document)),
-            settings: Some(SettingsState::from_settings(&settings, 1, Vec::new())),
-            ..WorkspaceState::default()
-        };
-        super::active_preset_changed(&mut state, Some(opendesign::PROVIDER_ID.to_owned()));
-        assert_eq!(
-            state.preset_models,
-            ["glm-5.3-flash"],
-            "configured models stay checked; ids the list lacks are not invented"
-        );
-
-        // Nothing configured yet: the whole list starts checked.
-        state.settings = Some(SettingsState::from_settings(
-            &mycode_config::AppSettings::default(),
-            1,
-            Vec::new(),
-        ));
-        super::active_preset_changed(&mut state, Some(opendesign::PROVIDER_ID.to_owned()));
-        assert_eq!(
-            state.preset_models.len(),
-            opendesign::curated_models().len()
-        );
-
-        // Opening the preset before the lazy catalog arrives still
-        // populates the checklist once `CatalogLoaded` lands.
-        let mut lazy = WorkspaceState {
-            catalog: None,
-            settings: Some(SettingsState::from_settings(
-                &mycode_config::AppSettings::default(),
-                1,
-                Vec::new(),
-            )),
-            ..WorkspaceState::default()
-        };
-        super::active_preset_changed(&mut lazy, Some(opendesign::PROVIDER_ID.to_owned()));
-        assert!(lazy.preset_models.is_empty());
-        let mut doc = mycode_providers::catalog::CatalogDocument::default();
-        opendesign::attach(&mut doc);
-        crate::view_model::reduce(
-            &mut lazy,
-            crate::view_model::FrontendAction::CatalogLoaded {
-                document: std::sync::Arc::new(doc),
-                fetched_at: 1,
-            },
-        );
-        assert_eq!(lazy.preset_models.len(), opendesign::curated_models().len());
-    }
-
     /// A catalog provider with one reasoning model advertising only `low`.
     fn low_rung_catalog() -> std::sync::Arc<mycode_providers::catalog::CatalogDocument> {
         use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
         std::sync::Arc::new(CatalogDocument {
             providers: vec![CatalogProvider {
-                id: "zai".to_owned(),
+                id: mycode_config::MAGPIE_PROVIDER_ID.to_owned(),
                 models: vec![CatalogModel {
                     id: "glm".to_owned(),
                     reasoning: true,
@@ -528,6 +358,20 @@ mod tests {
         })
     }
 
+    /// An active magpie binding for one model.
+    fn magpie_settings(model: &str) -> mycode_config::AppSettings {
+        mycode_config::AppSettings {
+            magpie: mycode_config::MagpieSettings {
+                enabled: true,
+                base_url: "http://127.0.0.1:3425/v1".to_owned(),
+                api_key: "magpie-mycode".to_owned(),
+                model: model.to_owned(),
+                hidden_models: Vec::new(),
+            },
+            ..mycode_config::AppSettings::default()
+        }
+    }
+
     #[test]
     fn a_custom_model_keeps_the_stored_effort() {
         let mut state = WorkspaceState::default();
@@ -535,7 +379,7 @@ mod tests {
             reasoning_effort: Some("high".to_owned()),
             ..mycode_config::AppSettings::default()
         };
-        state.settings = Some(SettingsState::from_settings(&document, 1, Vec::new()));
+        state.settings = Some(SettingsState::from_settings(&document, 1));
         state.selected_provider = Some("zhipu".to_owned());
         state.selected_model = Some("glm-4.7".to_owned());
         let settings = state.settings.as_ref().expect("settings");
@@ -548,31 +392,19 @@ mod tests {
 
     #[test]
     fn a_provider_pick_lands_on_a_model_the_row_can_run() {
-        // The catalog lists `glm` first; the row only carries `glm-air`.
+        // The catalog lists `glm`; the row carries `glm-air` only.
         let mut state = state_with_low_rung_model(None);
         if let Some(settings) = state.settings.as_mut() {
             settings.providers[0].models = vec!["glm-air".to_owned()];
         }
-        super::provider_selected(&mut state, "zai".to_owned());
+        super::provider_selected(&mut state, mycode_config::MAGPIE_PROVIDER_ID.to_owned());
         assert_eq!(state.selected_model.as_deref(), Some("glm-air"));
     }
 
     fn state_with_low_rung_model(default_reasoning: Option<&str>) -> WorkspaceState {
-        let document = mycode_config::AppSettings {
-            providers: vec![mycode_config::ProviderSettings {
-                id: "zai".to_owned(),
-                kind: "openai-completions".to_owned(),
-                base_url: "https://zai.test".to_owned(),
-                models: vec!["glm".to_owned()],
-                enabled: true,
-                context_limit: None,
-                max_output: None,
-                hidden_models: Vec::new(),
-            }],
-            ..mycode_config::AppSettings::default()
-        };
+        let document = magpie_settings("glm");
         WorkspaceState {
-            settings: Some(SettingsState::from_settings(&document, 1, Vec::new())),
+            settings: Some(SettingsState::from_settings(&document, 1)),
             catalog: Some(low_rung_catalog()),
             default_reasoning: default_reasoning.map(str::to_owned),
             ..WorkspaceState::default()
@@ -610,24 +442,12 @@ mod tests {
             "max on a low-only model lands on low, not default"
         );
 
-        let document = mycode_config::AppSettings {
-            providers: vec![mycode_config::ProviderSettings {
-                id: "zai".to_owned(),
-                kind: "openai-completions".to_owned(),
-                base_url: "https://zai.test".to_owned(),
-                models: vec!["glm".to_owned()],
-                enabled: true,
-                context_limit: None,
-                max_output: None,
-                hidden_models: Vec::new(),
-            }],
-            ..mycode_config::AppSettings::default()
-        };
+        let document = magpie_settings("glm");
         let mut multi_rung = WorkspaceState {
-            settings: Some(SettingsState::from_settings(&document, 1, Vec::new())),
+            settings: Some(SettingsState::from_settings(&document, 1)),
             catalog: Some(Arc::new(CatalogDocument {
                 providers: vec![CatalogProvider {
-                    id: "zai".to_owned(),
+                    id: mycode_config::MAGPIE_PROVIDER_ID.to_owned(),
                     models: vec![CatalogModel {
                         id: "glm".to_owned(),
                         reasoning: true,
@@ -678,7 +498,7 @@ mod tests {
             reasoning_effort: Some("low".to_owned()),
             ..mycode_config::AppSettings::default()
         };
-        let mut settings = SettingsState::from_settings(&document, 1, Vec::new());
+        let mut settings = SettingsState::from_settings(&document, 1);
         settings.reasoning = Some("high".to_owned());
         let mut state = WorkspaceState {
             settings: Some(settings),
@@ -871,38 +691,23 @@ mod tests {
 
     #[test]
     fn a_settings_reload_keeps_the_live_effort_overlay() {
-        // OAuth sign-in and imports reload the document; the swap must not
+        // Imports and magpie's plugin reload the document; the swap must not
         // drop the pick the chip and the session pin already carry.
         let mut state = state_with_low_rung_model(Some("max"));
-        state.selected_provider = Some("zai".to_owned());
+        state.selected_provider = Some(mycode_config::MAGPIE_PROVIDER_ID.to_owned());
         state.selected_model = Some("glm".to_owned());
         if let Some(settings) = state.settings.as_mut() {
             settings.reasoning = Some("max".to_owned());
         }
-        let document = mycode_config::AppSettings {
-            // A pinned English document keeps the process-global UI
-            // language deterministic for sibling tests; `auto` follows the
-            // OS locale.
-            appearance: mycode_config::AppearanceSettings {
-                language: "en".to_owned(),
-                ..mycode_config::AppearanceSettings::default()
-            },
-            providers: vec![mycode_config::ProviderSettings {
-                id: "zai".to_owned(),
-                kind: "openai-completions".to_owned(),
-                base_url: "https://zai.test".to_owned(),
-                models: vec!["glm".to_owned()],
-                enabled: true,
-                context_limit: None,
-                max_output: None,
-                hidden_models: Vec::new(),
-            }],
-            ..mycode_config::AppSettings::default()
-        };
+        let mut document = magpie_settings("glm");
+        // A pinned English document keeps the process-global UI
+        // language deterministic for sibling tests; `auto` follows the
+        // OS locale.
+        document.appearance.language = "en".to_owned();
         crate::view_model::reduce(
             &mut state,
             crate::view_model::FrontendAction::SettingsLoaded(Box::new(
-                SettingsState::from_settings(&document, 2, Vec::new()),
+                SettingsState::from_settings(&document, 2),
             )),
         );
         assert_eq!(live_reasoning(&state), Some("max"));

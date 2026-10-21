@@ -1,7 +1,6 @@
 //! The transcript timeline: streaming bubble, committed entries, tool
 //! blocks, and user rows with their recall hover action.
 use gpui_kit::assets::IconName;
-use gpui_kit::component::text::TextView;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -686,6 +685,26 @@ pub(super) const USER_BUBBLE_MAX_SHARE: f32 = 0.72;
 /// one hover action: recall, which rewinds to before this message and puts its
 /// text back in the composer for resending. Workspace files are not restored
 /// or deleted. Messages without a prior ledger event hide the action.
+/// User turns render verbatim: pasted Markdown, HTML, and rich-text styling
+/// keep no styling here. Line breaks stay, so the bubble shows what was sent.
+fn plain_user_text(text: &str) -> impl IntoElement {
+    let lines: Vec<gpui_kit::AnyElement> = text
+        .split('\n')
+        .map(|line| {
+            let line = line.replace('\t', "    ");
+            div()
+                .min_h(px(18.))
+                .child(if line.is_empty() {
+                    " ".to_owned()
+                } else {
+                    line
+                })
+                .into_any_element()
+        })
+        .collect();
+    div().flex().flex_col().children(lines)
+}
+
 pub(super) fn render_user_entry(
     entry: &ConversationEntry,
     can_rewind: bool,
@@ -714,10 +733,7 @@ pub(super) fn render_user_entry(
                 .text_sm()
                 .whitespace_normal()
                 .text_color(theme.foreground)
-                .child(TextView::markdown(
-                    format!("user-text-{}", entry.event_id),
-                    SharedString::from(entry.text.clone()),
-                ))
+                .child(plain_user_text(&entry.text))
                 .test_support(),
         );
     if can_rewind {

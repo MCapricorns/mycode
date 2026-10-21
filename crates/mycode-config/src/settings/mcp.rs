@@ -14,12 +14,40 @@ use crate::ConfigError;
 pub const MAX_MCP_SERVERS: usize = 64;
 /// Maximum extra environment variables per stdio server.
 pub const MAX_MCP_ENV_VARS: usize = 32;
+/// Maximum extra HTTP headers per server.
+pub const MAX_MCP_HEADERS: usize = 32;
 /// Maximum arguments per stdio server.
 pub(crate) const MAX_MCP_ARGS: usize = 64;
 
 /// Whether `key` can name a child-process environment variable.
 pub(crate) fn is_env_var_name(key: &str) -> bool {
     !key.is_empty() && !key.contains('=') && !key.chars().any(char::is_control)
+}
+
+/// Whether `key` is one HTTP header name (`token` grammar).
+pub(crate) fn is_header_name(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 128
+        && key.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 /// One configured MCP server binding.
@@ -53,37 +81,12 @@ pub struct McpServerSettings {
     /// HTTP: credential header style, `bearer` (default) or `x-api-key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_header: Option<String>,
-}
-
-/// The built-in recommended MCP servers offered by the settings UI.
-///
-/// Users add them with one click and supply their own API keys; keys live in
-/// the secret store, never in settings.
-pub fn builtin_mcp_servers() -> Vec<McpServerSettings> {
-    vec![
-        McpServerSettings {
-            id: "context7".to_owned(),
-            // Added rows start disabled: the settings page probes the server
-            // before the enable switch can land `on`.
-            enabled: false,
-            transport: "http".to_owned(),
-            command: None,
-            args: Vec::new(),
-            env: BTreeMap::new(),
-            endpoint: Some("https://mcp.context7.com/mcp".to_owned()),
-            key_header: Some("bearer".to_owned()),
-        },
-        McpServerSettings {
-            id: "github".to_owned(),
-            enabled: false,
-            transport: "http".to_owned(),
-            command: None,
-            args: Vec::new(),
-            env: BTreeMap::new(),
-            endpoint: Some("https://api.githubcopilot.com/mcp".to_owned()),
-            key_header: Some("bearer".to_owned()),
-        },
-    ]
+    /// HTTP: extra headers sent with every request. magpie's Library writes
+    /// vendor headers here (`X-Anysearch-Client`, `CONTEXT7_API_KEY`, …);
+    /// a pasted `Authorization` / `x-api-key` value still moves to the key
+    /// vault instead.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
 }
 
 /// Whether `command` is one executable, not a shell string.
@@ -195,9 +198,12 @@ impl AppSettings {
                             "{field}: stdio transport requires a command"
                         )));
                     }
-                    if server.endpoint.is_some() || server.key_header.is_some() {
+                    if server.endpoint.is_some()
+                        || server.key_header.is_some()
+                        || !server.headers.is_empty()
+                    {
                         return Err(invalid(&format!(
-                            "{field}: stdio transport must not set endpoint or keyHeader"
+                            "{field}: stdio transport must not set endpoint, keyHeader, or headers"
                         )));
                     }
                     bounded_text(command, MAX_FIELD_BYTES)
@@ -248,6 +254,23 @@ impl AppSettings {
                         return Err(invalid(&format!(
                             "{field}.keyHeader: must be exactly \"bearer\" or \"x-api-key\" — keep the API key in the app key vault, not in this field"
                         )));
+                    }
+                    if server.headers.len() > MAX_MCP_HEADERS {
+                        return Err(invalid(&format!(
+                            "{field}.headers: at most {MAX_MCP_HEADERS} entries"
+                        )));
+                    }
+                    for (name, value) in &server.headers {
+                        if !is_header_name(name) {
+                            return Err(invalid(&format!(
+                                "{field}.headers: {name:?} is not an HTTP header name"
+                            )));
+                        }
+                        bounded_text(value, MAX_FIELD_BYTES).map_err(|_| {
+                            invalid(&format!(
+                                "{field}.headers.{name}: too long or contains line breaks or NUL"
+                            ))
+                        })?;
                     }
                 }
                 _ => {

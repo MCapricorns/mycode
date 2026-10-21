@@ -223,6 +223,10 @@ pub struct UiState {
     /// every trace in every session; traces are expanded by default.
     #[serde(default)]
     pub thinking_collapsed: bool,
+    /// The one-time "magpie is not connected; install it" notice has been
+    /// shown. Kept so a missing gateway does not toast on every launch.
+    #[serde(default)]
+    pub magpie_prompted: bool,
     /// The Details panel is open. Restored so a resident panel survives a
     /// restart instead of silently closing.
     #[serde(default)]
@@ -254,6 +258,7 @@ impl Default for UiState {
             session_models: Vec::new(),
             selected_reasoning: None,
             thinking_collapsed: false,
+            magpie_prompted: false,
             inspector_open: false,
             inspector_pinned: false,
             window_size: None,
@@ -680,6 +685,12 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
             crate::document_repair::salvage_field::<bool>(object, "thinkingCollapsed")
         {
             probe.thinking_collapsed = value;
+        }
+    });
+    crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
+        if let Some(value) = crate::document_repair::salvage_field::<bool>(object, "magpiePrompted")
+        {
+            probe.magpie_prompted = value;
         }
     });
     crate::document_repair::salvage_adopt(&mut state, valid, |probe| {

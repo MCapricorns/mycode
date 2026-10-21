@@ -1,26 +1,20 @@
 //! First-party provider runtime.
 //!
-//! Resolves one configured provider endpoint into a streaming
+//! Resolves one endpoint (the local magpie gateway) into a streaming
 //! [`Provider`] over one of three wire protocols (`anthropic-messages`,
-//! `openai-completions`, `openai-responses`). Vendor differences are data in
-//! `settings.json`; credentials never enter settings — the caller supplies a
-//! key when resolving. Streaming completions egress through the injectable
-//! [`SseTransport`] seam. Catalog refresh and OAuth use the pinned HTTP
-//! client. The application fixes the User-Agent on provider requests.
+//! `openai-completions`, `openai-responses`). Streaming completions egress
+//! through the injectable [`SseTransport`] seam, and the pinned HTTP client
+//! carries the gateway's model list. The application fixes the User-Agent on
+//! provider requests.
 //!
-//! [`catalog`] carries the vendor data this runtime is configured from: the
-//! models.dev cloud document, its on-disk cache, and the hand-maintained
-//! Codex / OpenDesign rows injected into every resolved document. It lives
-//! here rather than in `mycode-config` because refreshing it is an HTTP
-//! call, and the configuration authority stays free of network dependencies.
-
+//! [`catalog`] is the model list magpie publishes; MCode ships no vendor
+//! presets, keys, or OAuth flows of its own.
 mod anthropic_messages;
 mod cache;
 pub mod catalog;
 mod driver;
 mod family;
 mod http_pin;
-mod oauth;
 mod openai_completions;
 mod openai_responses;
 mod proxy;
@@ -41,13 +35,6 @@ use mycode_core::{EventStream, Provider, ProviderError, ProviderErrorKind, Reque
 pub use family::keeps_thinking_when_off;
 pub use http_pin::{
     PinMode, PinnedBody, PinnedRequest, connection_addresses, is_public_ip, send_pinned,
-};
-pub use oauth::{
-    CODEX_VERIFICATION_URI, COPILOT_CHAT_HEADERS, COPILOT_PROVIDER_ID, CodexDevicePoll,
-    CodexDeviceStart, DeviceCodeStart, DeviceTokenPoll, OAuthSecret, OPENAI_CODEX_PROVIDER_ID,
-    ORIGINATOR, PinnedCall, chatgpt_account_id, copilot_bearer, exchange_codex_code,
-    parse_oauth_secret, poll_codex_device_token, poll_device_token, refresh_codex_token,
-    start_codex_device_flow, start_device_flow,
 };
 pub use proxy::{
     PROXY_TEST_URL, ProxyTestReport, ProxyTestRoute, set_proxy_preference, test_proxy,

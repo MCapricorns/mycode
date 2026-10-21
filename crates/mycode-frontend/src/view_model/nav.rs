@@ -43,14 +43,8 @@ pub fn top_dismiss_layer(
 /// control that page actually draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsBack {
-    /// Provider detail's back returns to the provider list.
-    CloseProviderDetail,
-    /// A catalog preset's back returns to the catalog, not the provider list.
-    ClosePreset,
-    /// Catalog or custom-endpoint back returns to the provider list.
+    /// Refreshing the model list returns to the Magpie page.
     ModelsList,
-    /// A web-vendor detail's back returns to the backend list.
-    WebList,
     /// Catalog, JSON, or custom MCP back returns to the server list.
     McpList,
     /// Back to desk.
@@ -61,21 +55,13 @@ pub enum SettingsBack {
 pub fn settings_back_target(
     section: SettingsSection,
     models: ModelsSubview,
-    provider_open: bool,
-    preset_open: bool,
-    web_detail_open: bool,
     mcp: McpSubview,
 ) -> SettingsBack {
     match section {
         SettingsSection::Models => match models {
-            ModelsSubview::List if provider_open => SettingsBack::CloseProviderDetail,
-            ModelsSubview::Catalog if preset_open => SettingsBack::ClosePreset,
-            ModelsSubview::Catalog | ModelsSubview::OAuth | ModelsSubview::Custom => {
-                SettingsBack::ModelsList
-            }
+            ModelsSubview::Catalog => SettingsBack::ModelsList,
             ModelsSubview::List => SettingsBack::Desk,
         },
-        SettingsSection::Web if web_detail_open => SettingsBack::WebList,
         SettingsSection::Mcp if mcp != McpSubview::List => SettingsBack::McpList,
         _ => SettingsBack::Desk,
     }
@@ -128,95 +114,20 @@ mod tests {
 
     #[test]
     fn settings_escape_matches_the_visible_back_button() {
-        let desk = |section| {
-            settings_back_target(
-                section,
-                ModelsSubview::List,
-                false,
-                false,
-                false,
-                McpSubview::List,
-            )
-        };
+        let desk = |section| settings_back_target(section, ModelsSubview::List, McpSubview::List);
         assert_eq!(desk(SettingsSection::General), SettingsBack::Desk);
         assert_eq!(desk(SettingsSection::About), SettingsBack::Desk);
         assert_eq!(
             settings_back_target(
                 SettingsSection::Models,
-                ModelsSubview::List,
-                true,
-                false,
-                false,
-                McpSubview::List,
-            ),
-            SettingsBack::CloseProviderDetail
-        );
-        assert_eq!(
-            settings_back_target(
-                SettingsSection::Models,
                 ModelsSubview::Catalog,
-                false,
-                true,
-                false,
-                McpSubview::List,
-            ),
-            SettingsBack::ClosePreset
-        );
-        assert_eq!(
-            settings_back_target(
-                SettingsSection::Models,
-                ModelsSubview::Catalog,
-                false,
-                false,
-                false,
                 McpSubview::List,
             ),
             SettingsBack::ModelsList
         );
-        assert_eq!(
-            settings_back_target(
-                SettingsSection::Models,
-                ModelsSubview::Custom,
-                false,
-                false,
-                false,
-                McpSubview::List,
-            ),
-            SettingsBack::ModelsList
-        );
-        // The shared OAuth sign-in page has no form: Escape leaves the page.
-        assert_eq!(
-            settings_back_target(
-                SettingsSection::Models,
-                ModelsSubview::OAuth,
-                false,
-                false,
-                false,
-                McpSubview::List,
-            ),
-            SettingsBack::ModelsList
-        );
-        assert_eq!(
-            settings_back_target(
-                SettingsSection::Web,
-                ModelsSubview::List,
-                false,
-                false,
-                true,
-                McpSubview::List,
-            ),
-            SettingsBack::WebList
-        );
-        for subview in [McpSubview::Catalog, McpSubview::Json, McpSubview::Custom] {
+        for subview in [McpSubview::Json, McpSubview::Custom] {
             assert_eq!(
-                settings_back_target(
-                    SettingsSection::Mcp,
-                    ModelsSubview::List,
-                    false,
-                    false,
-                    false,
-                    subview,
-                ),
+                settings_back_target(SettingsSection::Mcp, ModelsSubview::List, subview),
                 SettingsBack::McpList,
                 "{subview:?}"
             );

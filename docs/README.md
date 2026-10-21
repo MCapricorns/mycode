@@ -14,6 +14,5 @@
 | [agent.md](agent.md) | 回合循环、流式与取消、工具分发、可恢复的会话账本 |
 | [app.md](app.md) | 桥和线程、回合装配、压缩、子代理、MCP、OAuth、更新 |
 | [desktop.md](desktop.md) | 桌面和终端界面、共享视图模型、和核心的交互节拍 |
-| [model-catalog-updates.md](model-catalog-updates.md) | Codex 和 OpenDesign 模型表的维护、验证与已删除的旧机制 |
 
 `docs/images/` 只放随文档维护的 SVG（banner、logo、架构图、消息流程图），不存界面截图。改行为时先改代码，再同步这里的文档和图中文字。

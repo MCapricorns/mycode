@@ -109,13 +109,9 @@ impl AppSettings {
             // settings page never showed.
             match (entry.provider.as_deref(), entry.model.as_deref()) {
                 (Some(provider), Some(model)) => {
-                    if !self
-                        .providers
-                        .iter()
-                        .any(|configured| configured.id == provider)
-                    {
+                    if provider != crate::MAGPIE_PROVIDER_ID {
                         return Err(invalid(&format!(
-                            "{field}.provider: \"{provider}\" is not a configured provider"
+                            "{field}.provider: \"{provider}\" is not the magpie gateway"
                         )));
                     }
                     bounded_text(model, MAX_FIELD_BYTES).map_err(|_| {

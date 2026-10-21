@@ -371,32 +371,31 @@ mod tests {
             "kind": "mycode-app-settings",
             "revision": 3,
             "appearance": { "theme": "nope", "language": "zh" },
-            "providers": [{
-                "id": "openai",
-                "kind": "openai-completions",
-                "baseUrl": "https://api.openai.com/v1",
-                "models": ["gpt-4o"],
-                "enabled": true
-            }]
+            "magpie": {
+                "enabled": true,
+                "baseUrl": "http://127.0.0.1:3425/v1",
+                "apiKey": "magpie-mycode",
+                "model": "deepseek/deepseek-chat"
+            }
         }"#;
         write_private(&home, "settings.json", bytes);
         let (settings, repair) = read_app_settings_with_repair(&home).unwrap();
-        // The broken theme fell back to the default; the healthy provider
-        // row survived the reset.
+        // The broken theme fell back to the default; the healthy magpie
+        // binding survived the reset.
         assert_eq!(settings.appearance.theme, "dark");
         assert_eq!(settings.appearance.language, "zh");
-        assert_eq!(settings.providers.len(), 1);
-        assert_eq!(settings.providers[0].id, "openai");
+        assert!(settings.magpie.enabled);
+        assert_eq!(settings.magpie.model, "deepseek/deepseek-chat");
         let repair = repair.expect("validation repair");
         let backup = std::fs::read(home.root().join(&repair.backup)).unwrap();
         assert!(
             backup.windows(4).any(|window| window == b"nope"),
             "backup lost"
         );
-        assert!(backup.windows(6).any(|window| window == b"openai"));
+        assert!(backup.windows(6).any(|window| window == b"magpie"));
         let rewritten = std::fs::read(home.root().join("settings.json")).unwrap();
         let text = String::from_utf8(rewritten).unwrap();
-        assert!(text.contains("\"openai\""), "salvage published: {text}");
+        assert!(text.contains("\"magpie\""), "salvage published: {text}");
         assert!(!text.contains("nope"), "{text}");
     }
 

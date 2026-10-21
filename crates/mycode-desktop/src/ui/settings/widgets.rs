@@ -215,32 +215,6 @@ pub(super) fn choice_chips<V: AsRef<str>, L: AsRef<str>>(
         .into_any_element()
 }
 
-/// The two-line header column shared by settings rows: a strong title over a
-/// dim subtitle. Returns the bare column so callers can append extra lines.
-pub(super) fn row_header(title: &str, subtitle: String, theme: &Theme) -> gpui_kit::Div {
-    let muted = theme.muted_foreground;
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap_0p5()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                .overflow_hidden()
-                .child(title.to_owned()),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .whitespace_normal()
-                .child(subtitle),
-        )
-}
-
 pub(super) fn labeled_field(
     label: &str,
     input: Entity<InputState>,

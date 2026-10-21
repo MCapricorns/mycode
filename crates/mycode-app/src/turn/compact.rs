@@ -11,7 +11,6 @@ use crate::BridgeEvent;
 use crate::ledger::{
     HEAD_MOVED_ON, HeadWriter, branch_head, head_spelling, ledger_history, render_error,
 };
-use crate::oauth::resolve_request_auth;
 use crate::state::{CoreState, model_context_window};
 
 use super::TurnControl;
@@ -221,20 +220,17 @@ async fn compact_session_now(
 ) -> Result<(String, Option<String>), String> {
     open_branch_head(state, session, branch, expected_head).await?;
     let home = &state.home;
-    let (_settings, provider, stored_key) = turn_credentials(home, provider_id).await?;
-    let (bearer, extra_headers) =
-        resolve_request_auth(&state.home, &state.copilot, &provider, &stored_key).await?;
+    let (_settings, provider, bearer) = turn_credentials(state, provider_id).await?;
     if cancel.is_cancelled() {
         return Err("compaction cancelled".to_owned());
     }
-    let mut resolved = ResolvedProvider::resolve(
+    let resolved = ResolvedProvider::resolve(
         &provider,
         model,
         &bearer,
         &crate::user_agent::default_user_agent(),
     )
     .map_err(|error| format!("provider setup failed: {error}"))?;
-    resolved.headers.extend(extra_headers);
     let transport: Arc<dyn SseTransport> = Arc::new(
         ReqwestTransport::new().map_err(|error| format!("HTTP transport unavailable: {error}"))?,
     );

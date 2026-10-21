@@ -1,22 +1,12 @@
-//! Cloud-synced provider and model catalog.
+//! The model catalog the picker and the turn planner read.
 //!
-//! The cloud document (models.dev) is downloaded into a cache file in the
-//! owned home and revalidated at most once a day. The Codex and OpenDesign
-//! rows are hand-maintained in this crate and injected into every resolved
-//! document, so they survive a missing cache or an offline run. Provider
-//! presets and model discovery in the desktop UI read this catalog, so new
-//! vendors and models appear without an app update.
+//! magpie's gateway is the only model source: its `/v1/models` answer is
+//! parsed into one provider row (`magpie`), and the gateway translates
+//! between the OpenAI, Anthropic, and Gemini APIs on its side.
+
+pub mod magpie;
+
 use serde::{Deserialize, Serialize};
-
-pub mod codex;
-pub mod modelsdev;
-pub mod opendesign;
-pub mod store;
-
-pub use store::{
-    CachedCatalog, DEFAULT_MAX_AGE_SECS, RefreshOutcome, active, bundled, current,
-    current_with_repair, install_active, install_active_cached, refresh,
-};
 
 /// Wire protocol: Anthropic Messages.
 pub const KIND_ANTHROPIC_MESSAGES: &str = "anthropic-messages";
@@ -25,25 +15,12 @@ pub const KIND_OPENAI_COMPLETIONS: &str = "openai-completions";
 /// Wire protocol: OpenAI Responses.
 pub const KIND_OPENAI_RESPONSES: &str = "openai-responses";
 
-/// Auth: an OAuth device-code sign-in (GitHub Copilot / Codex).
-pub const AUTH_DEVICE_CODE: &str = "device-code";
-
-/// Whether the settings preset should offer a sign-in button.
-///
-/// True only for device-code providers (Copilot, Codex). Every other
-/// provider, xAI included, takes a pasted API key; an `oauth` value left in
-/// a catalog cache by an older build is just another API-key provider.
-#[must_use]
-pub fn uses_device_code_login(auth: &str) -> bool {
-    auth == AUTH_DEVICE_CODE
-}
-
 /// Upper bound for model entries in one provider.
 pub const MAX_MODELS_PER_PROVIDER: usize = 512;
 /// Upper bound for one catalog string field.
 pub const MAX_STRING_BYTES: usize = 8 * 1024;
 
-/// One model preset in the catalog.
+/// One model the gateway offers.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CatalogModel {
@@ -53,10 +30,10 @@ pub struct CatalogModel {
     pub name: String,
     /// Supports reasoning output.
     pub reasoning: bool,
-    /// models.dev `reasoning_options` includes a toggle (on/off).
+    /// A published on/off toggle in `reasoning_levels`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reasoning_toggle: bool,
-    /// models.dev effort values, already lowercased.
+    /// Effort values the gateway publishes, lowercased.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning_efforts: Vec<String>,
     /// Supports tool calling.
@@ -76,10 +53,11 @@ pub struct CatalogModel {
 impl CatalogModel {
     /// Thinking choices advertised for this model.
     ///
-    /// Only levels models.dev published are offered. A toggle adds Off and On.
-    /// An effort list is kept as published (`none` is shown as Off). A model
-    /// that merely sets `reasoning: true` does not grow a guessed ladder: it
-    /// offers Default alone, which leaves the provider's own setting.
+    /// Only levels the gateway published are offered. A toggle adds Off and
+    /// On. An effort list is kept as published (`none` is shown as Off). A
+    /// model that merely sets `reasoning: true` does not grow a guessed
+    /// ladder: it offers Default alone, which leaves the provider's own
+    /// setting.
     #[must_use]
     pub fn reasoning_levels(&self) -> Vec<String> {
         if !self.reasoning && self.reasoning_efforts.is_empty() && !self.reasoning_toggle {
@@ -107,11 +85,11 @@ impl CatalogModel {
     }
 }
 
-/// One provider preset: endpoint data plus its model list.
+/// One provider row: endpoint data plus its model list.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CatalogProvider {
-    /// Stable provider id (models.dev spelling).
+    /// Stable provider id (`magpie`).
     pub id: String,
     /// Display name.
     pub name: String,
@@ -119,12 +97,6 @@ pub struct CatalogProvider {
     pub kind: String,
     /// API base URL.
     pub base_url: String,
-    /// Documentation URL, when published.
-    pub doc: Option<String>,
-    /// Credential mode: `""` pastes an API key and `device-code` is a device
-    /// flow.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub auth: String,
     /// Model presets, sorted by id.
     pub models: Vec<CatalogModel>,
 }
@@ -136,8 +108,6 @@ impl Default for CatalogProvider {
             name: String::new(),
             kind: KIND_OPENAI_COMPLETIONS.to_owned(),
             base_url: String::new(),
-            doc: None,
-            auth: String::new(),
             models: Vec::new(),
         }
     }
@@ -171,11 +141,7 @@ impl CatalogDocument {
     ///
     /// The catalog provider id wins, then an exact base URL. When neither
     /// names a catalog provider, the model id is matched across the whole
-    /// catalog. Providers are sorted by id. A row that publishes a reasoning
-    /// toggle or effort list wins over an earlier row that only repeats the
-    /// id, so a custom GLM gateway still picks up Off/On and the output cap.
-    /// A catalog provider that simply does not list the model does not borrow
-    /// another vendor's row.
+    /// catalog.
     #[must_use]
     pub fn model_for_endpoint(
         &self,
@@ -193,23 +159,12 @@ impl CatalogDocument {
     }
 
     fn model_by_id(&self, model_id: &str) -> Option<&CatalogModel> {
-        let mut with_output = None;
-        let mut any = None;
         for provider in &self.providers {
-            let Some(model) = provider.models.iter().find(|model| model.id == model_id) else {
-                continue;
-            };
-            if model.reasoning_toggle || !model.reasoning_efforts.is_empty() {
+            if let Some(model) = provider.models.iter().find(|model| model.id == model_id) {
                 return Some(model);
             }
-            if with_output.is_none() && model.output > 0 {
-                with_output = Some(model);
-            }
-            if any.is_none() {
-                any = Some(model);
-            }
         }
-        with_output.or(any)
+        None
     }
 
     /// Returns a display name for a provider id, even when absent.
@@ -250,188 +205,35 @@ pub(crate) fn valid_model_id(id: &str) -> bool {
         && id.chars().all(|c| !c.is_whitespace() && !c.is_control())
 }
 
-/// Normalizes a parsed catalog: drops invalid entries, bounds model lists,
-/// and sorts providers and models by id.
-pub(crate) fn normalize(mut providers: Vec<CatalogProvider>) -> CatalogDocument {
-    providers.retain(|provider| {
-        valid_provider_id(&provider.id)
-            && clean_text(&provider.name).is_some()
-            && clean_text(&provider.base_url).is_some()
-            && matches!(
-                provider.kind.as_str(),
-                KIND_ANTHROPIC_MESSAGES | KIND_OPENAI_COMPLETIONS | KIND_OPENAI_RESPONSES
-            )
-            && !provider.models.is_empty()
-    });
-    for provider in &mut providers {
-        if let Some(name) = clean_text(&provider.name) {
-            provider.name = name;
-        }
-        if let Some(base_url) = clean_text(&provider.base_url) {
-            provider.base_url = base_url;
-        }
-        provider.doc = provider
-            .doc
-            .as_deref()
-            .and_then(clean_text)
-            .filter(|doc| doc.starts_with("https://"));
-        provider.models.retain(|model| valid_model_id(&model.id));
-        if provider.models.len() > MAX_MODELS_PER_PROVIDER {
-            provider.models.truncate(MAX_MODELS_PER_PROVIDER);
-        }
-        for model in &mut provider.models {
-            if let Some(clean) = clean_text(&model.name) {
-                model.name = clean;
-            } else {
-                model.name = model.id.clone();
-            }
-            let raw_efforts = std::mem::take(&mut model.reasoning_efforts);
-            for effort in raw_efforts {
-                modelsdev::push_effort(
-                    &mut model.reasoning_efforts,
-                    &effort,
-                    modelsdev::MAX_EFFORTS,
-                );
-            }
-            model.cost_in = model
-                .cost_in
-                .filter(|cost| *cost >= 0.0 && cost.is_finite());
-            model.cost_out = model
-                .cost_out
-                .filter(|cost| *cost >= 0.0 && cost.is_finite());
-        }
-        provider.models.sort_by(|a, b| a.id.cmp(&b.id));
-        provider.models.dedup_by(|a, b| a.id == b.id);
+/// Normalizes one parsed provider: drops invalid entries, bounds the model
+/// list, and sorts models by id.
+pub(crate) fn normalize_provider(mut provider: CatalogProvider) -> Option<CatalogProvider> {
+    if !valid_provider_id(&provider.id) {
+        return None;
     }
-    providers.retain(|provider| !provider.models.is_empty());
-    providers.sort_by(|a, b| a.id.cmp(&b.id));
-    providers.dedup_by(|a, b| a.id == b.id);
-    CatalogDocument { providers }
-}
-
-/// Adds the presets models.dev does not carry: the Codex subscription and
-/// the curated OpenDesign row. Both are fully hand-maintained here —
-/// `docs/model-catalog-updates.md` describes the update procedure.
-pub(crate) fn attach_subscription_presets(mut document: CatalogDocument) -> CatalogDocument {
-    codex::attach(&mut document);
-    opendesign::attach(&mut document);
-    document
-}
-
-/// Test fixture: installs the Kimi coding-plan rows as the live catalog.
-///
-/// The bundled baseline is only the Codex and OpenDesign presets now, so the
-/// family tests that exercise published effort lists install this instead of
-/// leaning on a vendored snapshot. The fixture is additive and deterministic;
-/// every caller installs the same document so parallel tests never clear or
-/// overwrite each other's rows.
-#[cfg(test)]
-pub(crate) fn install_kimi_fixture() {
-    store::install_active(std::sync::Arc::new(CatalogDocument {
-        providers: vec![CatalogProvider {
-            id: "kimi".to_owned(),
-            name: "Kimi".to_owned(),
-            kind: KIND_OPENAI_COMPLETIONS.to_owned(),
-            base_url: "https://api.kimi.com/coding/v1".to_owned(),
-            models: vec![
-                CatalogModel {
-                    id: "kimi-for-coding".to_owned(),
-                    name: "Kimi for Coding".to_owned(),
-                    reasoning: true,
-                    reasoning_toggle: true,
-                    reasoning_efforts: vec!["low".to_owned(), "high".to_owned(), "max".to_owned()],
-                    ..CatalogModel::default()
-                },
-                CatalogModel {
-                    id: "kimi-for-coding-highspeed".to_owned(),
-                    name: "Kimi for Coding Highspeed".to_owned(),
-                    reasoning: true,
-                    reasoning_toggle: true,
-                    ..CatalogModel::default()
-                },
-                CatalogModel {
-                    id: "kimi-installed-probe".to_owned(),
-                    name: "Kimi Installed Probe".to_owned(),
-                    reasoning: true,
-                    reasoning_toggle: true,
-                    reasoning_efforts: vec!["max".to_owned()],
-                    ..CatalogModel::default()
-                },
-            ],
-            ..CatalogProvider::default()
-        }],
-    }));
-}
-
-pub(crate) fn openai_codex_preset() -> CatalogProvider {
-    CatalogProvider {
-        id: "openai-codex".to_owned(),
-        name: "OpenAI Codex".to_owned(),
-        kind: KIND_OPENAI_RESPONSES.to_owned(),
-        base_url: "https://chatgpt.com/backend-api/codex".to_owned(),
-        doc: Some("https://developers.openai.com/codex".to_owned()),
-        auth: AUTH_DEVICE_CODE.to_owned(),
-        models: [
-            (
-                "gpt-5.6-luna",
-                "GPT-5.6 Luna",
-                &["none", "low", "medium", "high", "xhigh", "max"][..],
-            ),
-            (
-                "gpt-5.6-sol",
-                "GPT-5.6 Sol",
-                &["none", "low", "medium", "high", "xhigh", "max"],
-            ),
-            (
-                "gpt-5.6-sol-pro",
-                "GPT-5.6 Sol Pro",
-                &["none", "low", "medium", "high", "xhigh", "max"],
-            ),
-            (
-                "gpt-5.6-terra",
-                "GPT-5.6 Terra",
-                &["none", "low", "medium", "high", "xhigh", "max"],
-            ),
-            (
-                "gpt-6-astra",
-                "GPT-6 Astra",
-                &["low", "medium", "high", "xhigh", "max"],
-            ),
-            (
-                "gpt-6-luna",
-                "GPT-6 Luna",
-                &["none", "low", "medium", "high", "xhigh", "max"],
-            ),
-            (
-                "gpt-6-sol",
-                "GPT-6 Sol",
-                &["none", "low", "medium", "high", "xhigh", "max"],
-            ),
-            (
-                "gpt-6.1-sol",
-                "GPT-6.1 Sol",
-                &["low", "medium", "high", "xhigh", "max"],
-            ),
-        ]
-        .into_iter()
-        .map(|(id, name, efforts)| CatalogModel {
-            id: id.to_owned(),
-            name: name.to_owned(),
-            reasoning: true,
-            tool_call: true,
-            // Effort ladders mirror the models.dev rows for the same model
-            // ids. Only the GPT-5.6 / GPT-6 / GPT-6.1 families are carried;
-            // the backend still lists older series, which are filtered out.
-            reasoning_efforts: efforts.iter().map(|effort| (*effort).to_owned()).collect(),
-            ..CatalogModel::default()
-        })
-        .collect(),
+    provider.name = clean_text(&provider.name).unwrap_or_else(|| provider.id.clone());
+    provider.base_url = clean_text(&provider.base_url)?;
+    provider.models.retain(|model| valid_model_id(&model.id));
+    if provider.models.len() > MAX_MODELS_PER_PROVIDER {
+        provider.models.truncate(MAX_MODELS_PER_PROVIDER);
     }
+    for model in &mut provider.models {
+        model.name = clean_text(&model.name).unwrap_or_else(|| model.id.clone());
+        model.cost_in = model
+            .cost_in
+            .filter(|cost| *cost >= 0.0 && cost.is_finite());
+        model.cost_out = model
+            .cost_out
+            .filter(|cost| *cost >= 0.0 && cost.is_finite());
+    }
+    provider.models.sort_by(|a, b| a.id.cmp(&b.id));
+    provider.models.dedup_by(|a, b| a.id == b.id);
+    (!provider.models.is_empty()).then_some(provider)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CatalogModel;
+    use super::{CatalogDocument, CatalogModel, CatalogProvider};
 
     #[test]
     fn published_efforts_are_not_padded_with_a_guessed_ladder() {
@@ -441,47 +243,10 @@ mod tests {
             reasoning_efforts: vec!["low".to_owned(), "high".to_owned(), "max".to_owned()],
             ..CatalogModel::default()
         };
-        let levels = model.reasoning_levels();
         assert_eq!(
-            levels,
+            model.reasoning_levels(),
             vec!["low".to_owned(), "high".to_owned(), "max".to_owned()]
         );
-    }
-
-    #[test]
-    fn codex_preset_carries_only_the_current_model_families() {
-        let provider = super::openai_codex_preset();
-        assert!(
-            provider
-                .models
-                .iter()
-                .all(|model| super::codex::usable_family(&model.id)),
-            "preset drifted off the GPT-5.6 / GPT-6 / GPT-6.1 families: {:?}",
-            provider
-                .models
-                .iter()
-                .map(|model| model.id.as_str())
-                .collect::<Vec<_>>()
-        );
-        let model = |id: &str| {
-            provider
-                .models
-                .iter()
-                .find(|model| model.id == id)
-                .unwrap_or_else(|| panic!("preset model {id}"))
-        };
-        assert_eq!(
-            model("gpt-5.6-sol").reasoning_levels(),
-            vec![
-                "off".to_owned(),
-                "low".to_owned(),
-                "medium".to_owned(),
-                "high".to_owned(),
-                "xhigh".to_owned(),
-                "max".to_owned()
-            ]
-        );
-        assert!(provider.models.iter().all(|model| model.reasoning));
     }
 
     #[test]
@@ -505,62 +270,24 @@ mod tests {
     }
 
     #[test]
-    fn a_custom_glm_provider_borrows_limits_and_reasoning_levels() {
-        let document = super::CatalogDocument {
-            providers: vec![
-                super::CatalogProvider {
-                    id: "zhipu".to_owned(),
-                    models: vec![CatalogModel {
-                        id: "glm-4.7".to_owned(),
-                        reasoning_toggle: true,
-                        output: 128_000,
-                        context: 200_000,
-                        ..CatalogModel::default()
-                    }],
-                    ..super::CatalogProvider::default()
-                },
-                super::CatalogProvider {
-                    id: "302ai".to_owned(),
-                    models: vec![CatalogModel {
-                        id: "glm-4.6".to_owned(),
-                        ..CatalogModel::default()
-                    }],
-                    ..super::CatalogProvider::default()
-                },
-            ],
+    fn a_known_provider_does_not_borrow_another_providers_model() {
+        let document = CatalogDocument {
+            providers: vec![CatalogProvider {
+                id: "magpie".to_owned(),
+                models: vec![CatalogModel {
+                    id: "glm-4.7".to_owned(),
+                    ..CatalogModel::default()
+                }],
+                ..CatalogProvider::default()
+            }],
         };
-        let model = document
-            .model_for_endpoint("my-glm", Some("https://glm.example/v1"), "glm-4.7")
-            .expect("catalog row");
-        assert!(model.reasoning_toggle);
-        assert!(model.output > 0);
-        assert!(model.context > 0);
-        let levels = model.reasoning_levels();
-        assert!(
-            levels.iter().any(|level| level == "off"),
-            "glm-4.7 toggle should offer Off, got {levels:?}"
-        );
-        assert!(levels.iter().any(|level| level == "on"), "{levels:?}");
+        assert!(document.model("magpie", "glm-4.7").is_some());
+        assert!(document.model("other", "glm-4.7").is_none());
         assert!(
             document
-                .model_for_endpoint("302ai", None, "not-a-real-model")
-                .is_none(),
-            "a known provider does not borrow another vendor's model"
+                .model_for_endpoint("other", None, "glm-4.7")
+                .is_some(),
+            "an unknown provider falls back to the model id"
         );
-    }
-
-    #[test]
-    fn a_non_glm_effort_list_stays_as_published() {
-        let model = CatalogModel {
-            id: "gpt-5".to_owned(),
-            reasoning: true,
-            reasoning_efforts: vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()],
-            ..CatalogModel::default()
-        };
-        let levels = model.reasoning_levels();
-        assert!(!levels.iter().any(|level| level == "off"));
-        assert!(!levels.iter().any(|level| level == "on"));
-        assert!(!levels.iter().any(|level| level == "max"));
-        assert!(levels.iter().any(|level| level == "high"));
     }
 }

@@ -327,7 +327,6 @@ fn every_kimi_chat_model_uses_the_family_shape() {
 
 #[test]
 fn k3_ids_send_reasoning_effort_from_the_model_id_alone() {
-    crate::catalog::install_kimi_fixture();
     let proxy = "http://127.0.0.1:18080/kimi/v1/chat/completions";
     let coding = "https://api.kimi.com/coding/v1/chat/completions";
     for endpoint in [proxy, coding] {

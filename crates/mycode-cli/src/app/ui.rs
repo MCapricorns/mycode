@@ -337,16 +337,6 @@ impl Tui {
                     ],
                 )
             }
-            super::settings::SettingsOverlay::BaseUrl { buffer, .. } => (
-                " Base URL ".to_owned(),
-                vec![
-                    Line::from(Span::styled(format!(" {buffer}▌"), Style::default())),
-                    Line::from(Span::styled(
-                        " Enter save · Esc cancel",
-                        Style::default().fg(Color::DarkGray),
-                    )),
-                ],
-            ),
             super::settings::SettingsOverlay::ProxyUrl { buffer } => (
                 " Manual proxy ".to_owned(),
                 vec![

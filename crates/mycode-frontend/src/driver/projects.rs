@@ -90,7 +90,7 @@ impl FrontendDriver {
     /// Also backs the Skills page's refresh affordance.
     pub fn refresh_skills(&mut self, out: &mut Vec<Effect>) {
         let (workspace, user_home) = self.skill_roots();
-        let skills = mycode_config::discover_skills(&workspace, user_home.as_deref())
+        let skills = mycode_config::discover_skills(&workspace, user_home.as_deref(), None)
             .into_iter()
             .map(|skill| crate::view_model::SkillEntry {
                 slug: skill.slug,
@@ -180,9 +180,10 @@ impl FrontendDriver {
                 (cached.title.clone(), cached.path.clone())
             } else {
                 let (workspace, user_home) = self.skill_roots();
-                let Some(skill) = mycode_config::discover_skills(&workspace, user_home.as_deref())
-                    .into_iter()
-                    .find(|skill| skill.slug == slug)
+                let Some(skill) =
+                    mycode_config::discover_skills(&workspace, user_home.as_deref(), None)
+                        .into_iter()
+                        .find(|skill| skill.slug == slug)
                 else {
                     return;
                 };

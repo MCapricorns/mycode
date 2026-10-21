@@ -43,6 +43,7 @@ impl FrontendDriver {
             active_workspace: None,
             recent_models: self.vm.recent_models.clone(),
             thinking_collapsed: self.vm.thinking_collapsed,
+            magpie_prompted: self.magpie_prompted,
             inspector_open: self.vm.inspector_open,
             inspector_pinned: self.vm.inspector_pinned,
             window_size: self.vm.window_size,

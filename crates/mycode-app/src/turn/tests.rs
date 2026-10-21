@@ -9,14 +9,35 @@ use std::sync::{Arc, Mutex};
 
 use mycode_agent::session::{EventKind, HeadStamp};
 use mycode_config::{
-    AppSettings, AuthorityRevision, HomeLayout, ProviderSecrets, ProviderSettings,
-    replace_app_settings, replace_provider_secrets,
+    AppSettings, AuthorityRevision, HomeLayout, ProviderSettings, replace_app_settings,
 };
 use mycode_core::ProviderError;
 use mycode_providers::{ResolvedProvider, SseTransport, TransportCall};
 
 use super::{TurnControl, chat_turn, end_turn, run_chat_turn_on};
 use crate::state::CoreState;
+
+/// The gateway list a fixture publishes: one `magpie` row.
+pub(super) fn test_catalog(models: &[(&str, u64)]) -> mycode_providers::catalog::CatalogDocument {
+    use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+    CatalogDocument {
+        providers: vec![CatalogProvider {
+            id: "magpie".to_owned(),
+            name: "Magpie".to_owned(),
+            base_url: "http://127.0.0.1:3425/v1".to_owned(),
+            models: models
+                .iter()
+                .map(|(id, context)| CatalogModel {
+                    id: (*id).to_owned(),
+                    name: (*id).to_owned(),
+                    context: *context,
+                    ..CatalogModel::default()
+                })
+                .collect(),
+            ..CatalogProvider::default()
+        }],
+    }
+}
 
 pub(super) fn scratch() -> (std::path::PathBuf, HomeLayout) {
     // The clock alone is too coarse on Windows: parallel tests calling
@@ -132,30 +153,29 @@ struct TurnFixture {
 
 async fn turn_fixture() -> TurnFixture {
     let (root, home) = scratch();
-    let mut settings = AppSettings::default();
-    settings.providers.push(ProviderSettings {
-        id: "local".to_owned(),
-        kind: "openai-completions".to_owned(),
-        base_url: "https://example.com/v1".to_owned(),
-        models: vec!["test-model".to_owned()],
-        enabled: true,
-        context_limit: Some(200_000),
-        max_output: None,
-        hidden_models: Vec::new(),
-    });
+    let settings = AppSettings {
+        magpie: mycode_config::MagpieSettings {
+            enabled: true,
+            base_url: "http://127.0.0.1:3425/v1".to_owned(),
+            api_key: "test-key".to_owned(),
+            model: "test-model".to_owned(),
+            hidden_models: Vec::new(),
+        },
+        ..AppSettings::default()
+    };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    replace_provider_secrets(
-        &home,
-        AuthorityRevision::ABSENT,
-        &ProviderSecrets::new().with_key("local", Some("test-key")),
-    )
-    .expect("secrets");
     let cwd = home.root().join(mycode_config::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
-    let catalog = mycode_providers::catalog::current(&home);
-    let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
+    let state = Arc::new(CoreState::new(home, Vec::new()));
+    *state.catalog.write().expect("catalog") = Arc::new(test_catalog(&[("test-model", 200_000)]));
     let created = state.service.create(None).await.expect("session");
-    let provider = settings.providers[0].clone();
+    let provider = settings
+        .magpie
+        .is_active()
+        .then(|| {
+            crate::magpie::provider_row(&settings.magpie, &state.models()).expect("gateway row")
+        })
+        .expect("magpie is active");
     let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
         .expect("resolve");
     TurnFixture {
@@ -652,31 +672,21 @@ impl SseTransport for HangingSummaryTransport {
 #[tokio::test]
 async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
     let (root, home) = scratch();
-    let mut settings = AppSettings::default();
-    settings.providers.push(ProviderSettings {
-        id: "local".to_owned(),
-        kind: "openai-completions".to_owned(),
-        base_url: "https://example.com/v1".to_owned(),
-        models: vec!["test-model".to_owned()],
-        enabled: true,
-        // ~22k token auto threshold. The prior history fits, so setup
-        // does not compact; the request hook also counts the large
-        // prompt and starts a summary before the turn has started.
-        context_limit: Some(26_000),
-        max_output: None,
-        hidden_models: Vec::new(),
-    });
+    let settings = AppSettings {
+        magpie: mycode_config::MagpieSettings {
+            enabled: true,
+            base_url: "http://127.0.0.1:3425/v1".to_owned(),
+            api_key: "test-key".to_owned(),
+            model: "test-model".to_owned(),
+            hidden_models: Vec::new(),
+        },
+        ..AppSettings::default()
+    };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    replace_provider_secrets(
-        &home,
-        AuthorityRevision::ABSENT,
-        &ProviderSecrets::new().with_key("local", Some("test-key")),
-    )
-    .expect("secrets");
     let cwd = home.root().join(mycode_config::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
-    let catalog = mycode_providers::catalog::current(&home);
-    let state = Arc::new(CoreState::new(home, catalog, Vec::new()));
+    let state = Arc::new(CoreState::new(home, Vec::new()));
+    *state.catalog.write().expect("catalog") = Arc::new(test_catalog(&[("test-model", 26_000)]));
     let created = state.service.create(None).await.expect("session");
     let mut head = HeadStamp::Empty;
     // The head before the prompt must outweigh the summary that replaces
@@ -704,7 +714,8 @@ async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
         summary_started: Arc::new(tokio::sync::Notify::new()),
         kinds: Mutex::new(Vec::new()),
     });
-    let provider = settings.providers[0].clone();
+    let provider =
+        crate::magpie::provider_row(&settings.magpie, &state.models()).expect("gateway row");
     let resolved = ResolvedProvider::resolve(&provider, "test-model", "test-key", "test-agent")
         .expect("resolve");
     let session_id = created.session_id.as_str().to_owned();

@@ -29,7 +29,7 @@ use crate::workspace::{ToastKind, Workspace};
 
 pub(crate) use chat::composer_placeholder;
 pub(crate) use command_palette::ToggleCommandPalette;
-pub(crate) use settings::{McpForm, ProviderForm};
+pub(crate) use settings::McpForm;
 
 /// Renders the whole window chrome and content.
 pub fn render_root(
@@ -434,7 +434,6 @@ pub(crate) fn section_icon(section: SettingsSection) -> IconName {
         SettingsSection::Agents => IconName::Sparkles,
         SettingsSection::Skills => IconName::Terminal,
         SettingsSection::Mcp => IconName::PlugZap,
-        SettingsSection::Web => IconName::Globe,
         SettingsSection::Data => IconName::Database,
         SettingsSection::About => IconName::Info,
     }

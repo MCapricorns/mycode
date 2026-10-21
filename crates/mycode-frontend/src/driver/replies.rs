@@ -154,19 +154,6 @@ impl FrontendDriver {
             }
             // A failed mention search just leaves the menu empty.
             BridgeReply::ProjectFiles(Err(_)) => {}
-            BridgeReply::CopilotSignInStarted(Ok(info)) => {
-                self.act(
-                    FrontendAction::CopilotSignInStarted(crate::view_model::CopilotSignIn {
-                        provider_id: info.provider_id,
-                        user_code: info.user_code,
-                        verification_uri: info.verification_uri,
-                    }),
-                    out,
-                );
-            }
-            BridgeReply::CopilotSignInStarted(Err(message)) => {
-                self.act(FrontendAction::CopilotSignInFinished(Err(message)), out);
-            }
             BridgeReply::AskAnswered(Ok(())) => {}
             BridgeReply::Sent {
                 session,
@@ -190,8 +177,7 @@ impl FrontendDriver {
             BridgeReply::Settings(Ok(loaded)) => {
                 self.note_config_repairs(&loaded.repairs);
                 let revision = loaded.revision.get();
-                let mut state =
-                    SettingsState::from_settings(&loaded.settings, revision, loaded.provider_keys);
+                let mut state = SettingsState::from_settings(&loaded.settings, revision);
                 state.mcp_with_keys = loaded.mcp_keys;
                 // A dirty or in-flight editor keeps its appearance. Applying
                 // the disk copy here would undo unsaved appearance edits
@@ -206,6 +192,7 @@ impl FrontendDriver {
                     out.push(Effect::SyncProxyField);
                 }
                 self.act(FrontendAction::SettingsLoaded(Box::new(state)), out);
+                self.prompt_magpie_install(out);
                 self.toast_applied_update(out);
             }
             BridgeReply::Settings(Err(message)) => {
@@ -293,18 +280,12 @@ impl FrontendDriver {
                 // waiting to write the latest draft.
                 self.continue_settings_save(out);
             }
-            BridgeReply::ProviderKeySaved(Ok((provider_keys, mcp_keys))) => {
+            BridgeReply::ProviderKeySaved(Ok((_provider_keys, mcp_keys))) => {
                 // Refresh the key markers in place: reloading settings here
                 // would race the concurrently running settings save and wipe
-                // the just-added provider (and any other unsaved edits).
+                // any other unsaved edits.
                 let stored = mcp_keys.clone();
-                self.act(
-                    FrontendAction::ProviderKeySaved {
-                        provider_keys,
-                        mcp_keys,
-                    },
-                    out,
-                );
+                self.act(FrontendAction::ProviderKeySaved { mcp_keys }, out);
                 // An enable that waited on this key save may probe now.
                 for server_id in stored {
                     if self.pending_mcp_enable.contains(&server_id)
@@ -373,38 +354,6 @@ impl FrontendDriver {
                 self.pending_mcp_enable.remove(&server_id);
                 self.act(FrontendAction::McpProbeFailed { server_id, message }, out);
             }
-            BridgeReply::WebBackendProbed {
-                backend_id,
-                outcome,
-            } => {
-                if self.pending_web_enable.remove(&backend_id) {
-                    match outcome {
-                        Ok(()) => {
-                            let index = self.vm.settings.as_ref().and_then(|settings| {
-                                settings
-                                    .web_backends
-                                    .iter()
-                                    .position(|backend| backend.id == backend_id)
-                            });
-                            if let Some(index) = index {
-                                self.act(FrontendAction::SettingsBackendToggled(index, true), out);
-                                self.toast(
-                                    crate::i18n::t(
-                                        "Search backend verified and enabled",
-                                        "搜索后端已验证并启用",
-                                    )
-                                    .to_owned(),
-                                    ToastKind::Info,
-                                    out,
-                                );
-                            }
-                        }
-                        Err(message) => {
-                            self.toast(message, ToastKind::Error, out);
-                        }
-                    }
-                }
-            }
             BridgeReply::Catalog(Ok(info)) => {
                 let refreshed = self.pending_catalog_refresh;
                 self.pending_catalog_refresh = false;
@@ -427,6 +376,7 @@ impl FrontendDriver {
                 // A failed lazy load clears the flag so the next surface
                 // open retries; a failed manual refresh also toasts.
                 self.catalog_requested = false;
+                self.prompt_magpie_install(out);
                 if self.pending_catalog_refresh {
                     self.pending_catalog_refresh = false;
                     self.act(FrontendAction::Failed(message), out);
@@ -434,6 +384,7 @@ impl FrontendDriver {
             }
             BridgeReply::UiState(Ok((ui_state, repairs))) => {
                 self.ui_state_loaded = true;
+                self.magpie_prompted = ui_state.magpie_prompted;
                 self.note_config_repairs(&repairs);
                 self.act(
                     FrontendAction::UiStateLoaded {
@@ -456,6 +407,7 @@ impl FrontendDriver {
                 );
                 self.restore_session_projects();
                 self.refresh_skills(out);
+                self.prompt_magpie_install(out);
             }
             BridgeReply::UiState(Err(_)) => self.ui_state_loaded = true,
             BridgeReply::UiStateSaved(Ok(())) => {}

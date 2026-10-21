@@ -12,9 +12,7 @@ use mycode_providers::{ReqwestTransport, ResolvedProvider, SseTransport, WirePro
 use tokio_util::sync::CancellationToken;
 
 use crate::BridgeEvent;
-use crate::oauth::resolve_request_auth;
 use crate::state::CoreState;
-use crate::turn::turn_credentials;
 
 /// A title is a few words; the cap leaves room for a model that answers
 /// verbosely before finding its line.
@@ -36,13 +34,13 @@ pub(crate) fn summarize_title(
     state: Arc<CoreState>,
     events: crate::BridgeEventTx,
     session: SessionId,
-    provider_id: String,
+    _provider_id: String,
     model: String,
     seed: String,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     let session_id = session.as_str().to_owned();
     async move {
-        let Some(title) = generate(&state, &provider_id, &model, &seed).await else {
+        let Some(title) = generate(&state, &model, &seed).await else {
             return;
         };
         if persist_title(&state.home, &session_id, &title).await {
@@ -53,21 +51,16 @@ pub(crate) fn summarize_title(
 
 /// Resolves credentials exactly like a chat turn, then runs one bare
 /// request on the same wire.
-async fn generate(state: &CoreState, provider_id: &str, model: &str, seed: &str) -> Option<String> {
-    let (_settings, provider, stored_key) =
-        turn_credentials(&state.home, provider_id).await.ok()?;
-    let (bearer, extra_headers) =
-        resolve_request_auth(&state.home, &state.copilot, &provider, &stored_key)
-            .await
-            .ok()?;
-    let mut resolved = ResolvedProvider::resolve(
+async fn generate(state: &CoreState, model: &str, seed: &str) -> Option<String> {
+    let settings = crate::magpie::load_settings(&state.home).await.ok()?;
+    let provider = crate::magpie::provider_row(&settings.magpie, &state.models())?;
+    let resolved = ResolvedProvider::resolve(
         &provider,
         model,
-        &bearer,
+        &settings.magpie.api_key,
         &crate::user_agent::default_user_agent(),
     )
     .ok()?;
-    resolved.headers.extend(extra_headers);
     let transport: Arc<dyn SseTransport> = Arc::new(ReqwestTransport::new().ok()?);
     let wire = WireProvider::new(resolved, transport);
     let cancel = CancellationToken::new();

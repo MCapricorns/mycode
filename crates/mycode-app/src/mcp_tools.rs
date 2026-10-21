@@ -323,7 +323,7 @@ pub(crate) async fn connect_mcp_tools(
     let Ok((Ok(secrets), merged)) = tokio::task::spawn_blocking(move || {
         (
             mycode_config::read_provider_secrets(&read_home),
-            merged_mcp_servers(&read_settings, read_project.as_deref()),
+            merged_mcp_servers(&read_home, &read_settings, read_project.as_deref()),
         )
     })
     .await
@@ -333,10 +333,11 @@ pub(crate) async fn connect_mcp_tools(
     let MergedServers {
         servers,
         project_ids,
+        magpie_ids,
         warning: project_warning,
     } = merged;
     let stored_key = |server: &mycode_config::McpServerSettings| {
-        stored_mcp_key(&secrets, &project_ids, &server.id).map(str::to_owned)
+        stored_mcp_key(&secrets, &project_ids, &magpie_ids, &server.id).map(str::to_owned)
     };
     let fingerprint = mcp_fingerprint(&servers, &stored_key);
     let enabled: Vec<_> = servers.iter().filter(|server| server.enabled).collect();
@@ -431,20 +432,26 @@ pub(crate) async fn connect_mcp_tools(
     (tools, project_warning)
 }
 
-/// User servers plus the project's own, with the ids that came from the
-/// project.
+/// User servers, magpie's Library servers, and the project's own, with the
+/// ids that came from each managed source.
 #[derive(Debug, Default)]
 struct MergedServers {
     servers: Vec<mycode_config::McpServerSettings>,
     project_ids: std::collections::HashSet<String>,
+    magpie_ids: std::collections::HashSet<String>,
     warning: Option<String>,
 }
 
-/// A project's `.mycode/mcp.json` ships with the repository, so it adds
-/// servers but never replaces one the user configured, enabled or not. A
-/// project row reusing a user id would otherwise inherit that server's
-/// stored key and could send it to an endpoint the repository chose.
-fn merged_mcp_servers(settings: &AppSettings, project: Option<&std::path::Path>) -> MergedServers {
+/// A project's `.mycode/mcp.json` ships with the repository, and magpie's
+/// `~/.mycode/mcp.json` is its own file; both add servers but never replace
+/// one the user configured, enabled or not. A managed row reusing a user id
+/// would otherwise inherit that server's stored key and could send it to an
+/// endpoint the row chose.
+fn merged_mcp_servers(
+    home: &mycode_config::HomeLayout,
+    settings: &AppSettings,
+    project: Option<&std::path::Path>,
+) -> MergedServers {
     let mut merged = MergedServers {
         servers: settings
             .mcp_servers
@@ -454,47 +461,67 @@ fn merged_mcp_servers(settings: &AppSettings, project: Option<&std::path::Path>)
             .collect(),
         ..MergedServers::default()
     };
-    let Some(project) = project else {
-        return merged;
-    };
-    let extra = match mycode_config::project_mcp_servers(project) {
-        Ok(extra) => extra,
+    let mut shadowed = Vec::new();
+    let magpie = match mycode_config::global_mcp_servers(home) {
+        Ok(servers) => servers,
         Err(error) => {
             merged.warning = Some(error);
-            return merged;
+            Vec::new()
         }
     };
-    let mut shadowed = Vec::new();
-    for server in extra.into_iter().filter(|server| server.enabled) {
+    for server in magpie.into_iter().filter(|server| server.enabled) {
         let taken = settings
             .mcp_servers
             .iter()
-            .any(|existing| existing.id == server.id)
-            || merged.project_ids.contains(&server.id);
+            .any(|existing| existing.id == server.id);
         if taken {
             shadowed.push(server.id);
             continue;
         }
-        merged.project_ids.insert(server.id.clone());
+        merged.magpie_ids.insert(server.id.clone());
         merged.servers.push(server);
+    }
+    if let Some(project) = project {
+        let extra = match mycode_config::project_mcp_servers(project) {
+            Ok(extra) => extra,
+            Err(error) => {
+                merged.warning = Some(error);
+                return merged;
+            }
+        };
+        for server in extra.into_iter().filter(|server| server.enabled) {
+            let taken = settings
+                .mcp_servers
+                .iter()
+                .any(|existing| existing.id == server.id)
+                || merged.magpie_ids.contains(&server.id)
+                || merged.project_ids.contains(&server.id);
+            if taken {
+                shadowed.push(server.id);
+                continue;
+            }
+            merged.project_ids.insert(server.id.clone());
+            merged.servers.push(server);
+        }
     }
     if !shadowed.is_empty() {
         merged.warning = Some(format!(
-            "project servers {} reuse a configured id and were skipped",
+            "servers {} reuse a configured id and were skipped",
             shadowed.join(", ")
         ));
     }
     merged
 }
 
-/// The vault key for one server. Project servers never get one: the user
-/// stored those keys for their own servers.
+/// The vault key for one server. Managed rows never get one: their own file
+/// carries the headers they need.
 fn stored_mcp_key<'a>(
     secrets: &'a mycode_config::ProviderSecrets,
     project_ids: &std::collections::HashSet<String>,
+    magpie_ids: &std::collections::HashSet<String>,
     id: &str,
 ) -> Option<&'a str> {
-    if project_ids.contains(id) {
+    if project_ids.contains(id) || magpie_ids.contains(id) {
         return None;
     }
     secrets.key(&format!("mcp-{id}"))
@@ -513,6 +540,7 @@ fn mcp_fingerprint(
         server.env.hash(&mut hasher);
         server.endpoint.hash(&mut hasher);
         server.key_header.hash(&mut hasher);
+        server.headers.hash(&mut hasher);
         stored_key(server).hash(&mut hasher);
     }
     hasher.finish()
@@ -970,6 +998,11 @@ async fn open_mcp_client(
                 crate::mcp_client::HttpChannelOptions {
                     key_header: crate::mcp_client::KeyHeader::parse(server.key_header.as_deref()),
                     api_key,
+                    headers: server
+                        .headers
+                        .iter()
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect(),
                     timeout,
                 },
             ))
@@ -1035,13 +1068,23 @@ mod tests {
             }}"#,
         )
         .unwrap();
-        let mut user = mycode_config::builtin_mcp_servers();
-        user[0].enabled = false;
+        let user = vec![mycode_config::McpServerSettings {
+            id: "context7".to_owned(),
+            enabled: false,
+            transport: "http".to_owned(),
+            command: None,
+            args: Vec::new(),
+            env: Default::default(),
+            endpoint: Some("https://mcp.context7.com/mcp".to_owned()),
+            key_header: None,
+            headers: Default::default(),
+        }];
         let settings = super::AppSettings {
             mcp_servers: user,
             ..super::AppSettings::default()
         };
-        let merged = super::merged_mcp_servers(&settings, Some(&root));
+        let home = mycode_config::HomeLayout::from_root(&root).unwrap();
+        let merged = super::merged_mcp_servers(&home, &settings, Some(&root));
         let _ = std::fs::remove_dir_all(&root);
         assert!(
             merged
@@ -1063,11 +1106,16 @@ mod tests {
             .with_key("mcp-local", Some("stale-key"))
             .with_key("mcp-context7", Some("user-key"));
         assert_eq!(
-            super::stored_mcp_key(&secrets, &merged.project_ids, "local"),
+            super::stored_mcp_key(&secrets, &merged.project_ids, &merged.magpie_ids, "local"),
             None
         );
         assert_eq!(
-            super::stored_mcp_key(&secrets, &merged.project_ids, "context7"),
+            super::stored_mcp_key(
+                &secrets,
+                &merged.project_ids,
+                &merged.magpie_ids,
+                "context7"
+            ),
             Some("user-key")
         );
     }

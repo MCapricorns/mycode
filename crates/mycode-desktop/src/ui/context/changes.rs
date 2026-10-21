@@ -180,6 +180,7 @@ pub(crate) fn render_changes_drawer(
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     cx.stop_propagation();
                     workspace.on_toggle_changes_panel(false, cx);
+                    workspace.on_close_git_diff_panel(cx);
                 })),
         )
         .child(
@@ -337,88 +338,112 @@ pub(crate) fn render_diff_panel(
         inspector_span,
         workspace.vm().changes_panel_open,
     );
-    review_panel("diff-panel-layer", diff_right, diff_width, theme)
-        .child(
+    // The drawer's own scrim already owns outside clicks while it is open; a
+    // second scrim here would cover the drawer and steal file clicks. With the
+    // drawer closed this layer is what makes a click anywhere left of the diff
+    // close it.
+    let mut layer = div().id("diff-panel-scrim-layer").absolute().inset_0();
+    if !workspace.vm().changes_panel_open {
+        layer = layer.child(
             div()
-                .px_3()
-                .py_2()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .border_b_1()
-                .border_color(theme.border)
-                .child(div().flex_1().min_w_0().text_sm().truncate().child(path))
-                .when(added + removed > 0, |this| {
-                    this.child(
-                        div()
-                            .flex_shrink_0()
-                            .flex()
-                            .flex_row()
-                            .gap(px(6.))
-                            .text_xs()
-                            .font_family(theme.mono_font_family.clone())
-                            .child(
-                                div()
-                                    .text_color(crate::ui::desk::diff_ink(theme, true))
-                                    .child(format!("+{added}")),
-                            )
-                            .child(
-                                div()
-                                    .text_color(crate::ui::desk::diff_ink(theme, false))
-                                    .child(format!("−{removed}")),
-                            ),
-                    )
-                })
+                .id("diff-panel-backdrop")
+                .absolute()
+                .top_0()
+                .left_0()
+                .bottom_0()
+                .right(px(diff_right))
+                .bg(crate::ui::skin::menu_scrim(theme))
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    cx.stop_propagation();
+                    workspace.on_close_git_diff_panel(cx);
+                })),
+        );
+    }
+    layer
+        .child(
+            review_panel("diff-panel-layer", diff_right, diff_width, theme)
                 .child(
                     div()
-                        .id("diff-panel-close")
-                        .px_2()
-                        .py(px(2.))
-                        .rounded(px(6.))
-                        .text_xs()
-                        .cursor_pointer()
-                        .text_color(theme.muted_foreground)
-                        .hover(|this| this.bg(theme.secondary_hover))
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            cx.stop_propagation();
-                            workspace.on_close_git_diff_panel(cx);
-                        }))
-                        .child(t("Close", "关闭")),
-                ),
-        )
-        .child(
-            div()
-                .id("diff-panel-body")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .py_2()
-                .text_xs()
-                .font_family(theme.mono_font_family.clone())
-                .children(rows.into_iter().enumerate().map(|(index, row)| {
-                    let (color, bg) = diff_line_paint(row.text, theme);
-                    div()
-                        .id(format!("diff-line-{index}"))
+                        .px_3()
+                        .py_2()
                         .flex()
                         .flex_row()
-                        .px_2()
-                        .text_color(color)
-                        .bg(bg)
+                        .items_center()
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .child(div().flex_1().min_w_0().text_sm().truncate().child(path))
+                        .when(added + removed > 0, |this| {
+                            this.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .flex_row()
+                                    .gap(px(6.))
+                                    .text_xs()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .child(
+                                        div()
+                                            .text_color(crate::ui::desk::diff_ink(theme, true))
+                                            .child(format!("+{added}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(crate::ui::desk::diff_ink(theme, false))
+                                            .child(format!("−{removed}")),
+                                    ),
+                            )
+                        })
                         .child(
                             div()
-                                .w(px(36.))
-                                .flex_shrink_0()
-                                .text_right()
+                                .id("diff-panel-close")
+                                .px_2()
+                                .py(px(2.))
+                                .rounded(px(6.))
+                                .text_xs()
+                                .cursor_pointer()
                                 .text_color(theme.muted_foreground)
-                                .child(row.number),
-                        )
-                        .child(div().min_w_0().pl_2().child(if row.text.is_empty() {
-                            " ".to_owned()
-                        } else {
-                            row.text.to_owned()
-                        }))
-                })),
+                                .hover(|this| this.bg(theme.secondary_hover))
+                                .on_click(cx.listener(|workspace, _, _, cx| {
+                                    cx.stop_propagation();
+                                    workspace.on_close_git_diff_panel(cx);
+                                }))
+                                .child(t("Close", "关闭")),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("diff-panel-body")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .py_2()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .children(rows.into_iter().enumerate().map(|(index, row)| {
+                            let (color, bg) = diff_line_paint(row.text, theme);
+                            div()
+                                .id(format!("diff-line-{index}"))
+                                .flex()
+                                .flex_row()
+                                .px_2()
+                                .text_color(color)
+                                .bg(bg)
+                                .child(
+                                    div()
+                                        .w(px(36.))
+                                        .flex_shrink_0()
+                                        .text_right()
+                                        .text_color(theme.muted_foreground)
+                                        .child(row.number),
+                                )
+                                .child(div().min_w_0().pl_2().child(if row.text.is_empty() {
+                                    " ".to_owned()
+                                } else {
+                                    row.text.to_owned()
+                                }))
+                        })),
+                ),
         )
         .into_any_element()
 }

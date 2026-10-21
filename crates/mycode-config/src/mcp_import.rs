@@ -47,9 +47,27 @@ pub fn normalize_api_key(raw: &str) -> String {
 /// Returns a one-line reason when the text is not JSON or contains no
 /// recognizable server entries.
 pub fn parse_mcp_import(text: &str) -> Result<Vec<ImportedMcpServer>, String> {
+    parse_document(text, true)
+}
+
+/// Parses a server map magpie's Library wrote.
+///
+/// The file is magpie's own, not a pasted document: every header stays on
+/// the row as written, because a vendor header such as `CONTEXT7_API_KEY`
+/// has no key-vault slot here.
+///
+/// # Errors
+///
+/// Returns a one-line reason when the text is not JSON or contains no
+/// recognizable server entries.
+pub fn parse_mcp_library(text: &str) -> Result<Vec<ImportedMcpServer>, String> {
+    parse_document(text, false)
+}
+
+fn parse_document(text: &str, lift_secrets: bool) -> Result<Vec<ImportedMcpServer>, String> {
     let value = parse_lenient(text).ok_or_else(|| "paste is not valid JSON".to_owned())?;
     let mut imported = Vec::new();
-    collect_servers(&value, &mut imported)?;
+    collect_servers(&value, &mut imported, lift_secrets)?;
     if imported.is_empty() {
         return Err("no MCP servers found in the pasted JSON".to_owned());
     }
@@ -119,11 +137,15 @@ fn strip_jsonc(text: &str) -> String {
     out
 }
 
-fn collect_servers(value: &Value, out: &mut Vec<ImportedMcpServer>) -> Result<(), String> {
+fn collect_servers(
+    value: &Value,
+    out: &mut Vec<ImportedMcpServer>,
+    lift_secrets: bool,
+) -> Result<(), String> {
     match value {
         Value::Object(map) => {
             if let Some(servers) = map.get("mcpServers").or_else(|| map.get("servers")) {
-                return collect_server_map(servers, out);
+                return collect_server_map(servers, out, lift_secrets);
             }
             if map.contains_key("command")
                 || map.contains_key("url")
@@ -135,10 +157,10 @@ fn collect_servers(value: &Value, out: &mut Vec<ImportedMcpServer>) -> Result<()
                     .or_else(|| map.get("name"))
                     .and_then(Value::as_str)
                     .unwrap_or("imported");
-                out.push(parse_server(id, value)?);
+                out.push(parse_server(id, value, lift_secrets)?);
                 return Ok(());
             }
-            collect_server_map(value, out)
+            collect_server_map(value, out, lift_secrets)
         }
         Value::Array(items) => {
             for (index, item) in items.iter().enumerate() {
@@ -148,7 +170,7 @@ fn collect_servers(value: &Value, out: &mut Vec<ImportedMcpServer>) -> Result<()
                     .or_else(|| item.get("name"))
                     .and_then(Value::as_str)
                     .unwrap_or(&fallback);
-                out.push(parse_server(id, item)?);
+                out.push(parse_server(id, item, lift_secrets)?);
             }
             Ok(())
         }
@@ -156,17 +178,25 @@ fn collect_servers(value: &Value, out: &mut Vec<ImportedMcpServer>) -> Result<()
     }
 }
 
-fn collect_server_map(value: &Value, out: &mut Vec<ImportedMcpServer>) -> Result<(), String> {
+fn collect_server_map(
+    value: &Value,
+    out: &mut Vec<ImportedMcpServer>,
+    lift_secrets: bool,
+) -> Result<(), String> {
     let Some(map) = value.as_object() else {
         return Err("mcpServers must be an object".to_owned());
     };
     for (id, spec) in map {
-        out.push(parse_server(id, spec)?);
+        out.push(parse_server(id, spec, lift_secrets)?);
     }
     Ok(())
 }
 
-fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String> {
+fn parse_server(
+    raw_id: &str,
+    spec: &Value,
+    lift_secrets: bool,
+) -> Result<ImportedMcpServer, String> {
     let id = sanitize_mcp_id(raw_id)
         .ok_or_else(|| format!("server id '{raw_id}' is not a usable name"))?;
     let transport = spec
@@ -211,7 +241,7 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
                 .collect()
         })
         .unwrap_or_default();
-    let (api_key, key_header) = lift_header_key(spec.get("headers"));
+    let (api_key, key_header, headers) = header_fields(spec.get("headers"), lift_secrets);
     // Claude Desktop and Cline mark a parked server `"disabled": true`.
     let enabled = spec.get("disabled").and_then(Value::as_bool) != Some(true)
         && spec.get("enabled").and_then(Value::as_bool) != Some(false);
@@ -234,6 +264,7 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
                 env: BTreeMap::new(),
                 endpoint: Some(endpoint),
                 key_header: Some(key_header.unwrap_or_else(|| "bearer".to_owned())),
+                headers,
             },
             api_key,
         });
@@ -271,33 +302,55 @@ fn parse_server(raw_id: &str, spec: &Value) -> Result<ImportedMcpServer, String>
             env,
             endpoint: None,
             key_header: None,
+            headers: BTreeMap::new(),
         },
         api_key,
     })
 }
 
-fn lift_header_key(headers: Option<&Value>) -> (Option<String>, Option<String>) {
+/// Splits HTTP headers into a vault key, its header style, and the headers
+/// kept on the row.
+///
+/// A pasted document lifts `Authorization` / `x-api-key` into the key vault.
+/// magpie's Library file keeps every header as written.
+fn header_fields(
+    headers: Option<&Value>,
+    lift_secrets: bool,
+) -> (Option<String>, Option<String>, BTreeMap<String, String>) {
+    let mut key = None;
+    let mut style = None;
+    let mut kept = BTreeMap::new();
     let Some(headers) = headers.and_then(Value::as_object) else {
-        return (None, None);
+        return (key, style, kept);
     };
     for (name, value) in headers {
         let Some(text) = value.as_str() else {
             continue;
         };
-        if name.eq_ignore_ascii_case("authorization") {
-            let key = normalize_api_key(text);
-            if !key.is_empty() {
-                return (Some(key), Some("bearer".to_owned()));
+        if lift_secrets && key.is_none() && name.eq_ignore_ascii_case("authorization") {
+            let candidate = normalize_api_key(text);
+            if !candidate.is_empty() {
+                key = Some(candidate);
+                style = Some("bearer".to_owned());
+                continue;
             }
         }
-        if name.eq_ignore_ascii_case("x-api-key") {
-            let key = normalize_api_key(text);
-            if !key.is_empty() {
-                return (Some(key), Some("x-api-key".to_owned()));
+        if lift_secrets && key.is_none() && name.eq_ignore_ascii_case("x-api-key") {
+            let candidate = normalize_api_key(text);
+            if !candidate.is_empty() {
+                key = Some(candidate);
+                style = Some("x-api-key".to_owned());
+                continue;
             }
+        }
+        if kept.len() < crate::settings::MAX_MCP_HEADERS
+            && crate::settings::is_header_name(name)
+            && crate::settings::bounded_text(text, crate::settings::MAX_FIELD_BYTES).is_ok()
+        {
+            kept.insert(name.clone(), text.to_owned());
         }
     }
-    (None, None)
+    (key, style, kept)
 }
 
 fn sanitize_mcp_id(raw: &str) -> Option<String> {
