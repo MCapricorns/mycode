@@ -198,13 +198,19 @@ pub fn preferred_index<T: AsRef<str>>(ids: &[T], query: &str, selected: Option<&
         .unwrap_or(0)
 }
 
-/// Composer and default-model label: the model name only.
+/// Composer and default-model label: `Provider · Model`, so a chip can say
+/// which gateway the model runs through instead of showing a bare name that
+/// two providers could share.
 pub fn selected_model_label(vm: &WorkspaceState) -> String {
     match (
         vm.selected_provider.as_deref(),
         vm.selected_model.as_deref(),
     ) {
-        (Some(provider), Some(model)) => model_display_name(vm, provider, model),
+        (Some(provider), Some(model)) => format!(
+            "{} · {}",
+            provider_display_name(vm, provider),
+            model_display_name(vm, provider, model)
+        ),
         (_, Some(model)) => model.to_owned(),
         _ => crate::i18n::t("Select model", "选择模型").to_owned(),
     }
@@ -309,9 +315,40 @@ pub fn enabled_providers(vm: &WorkspaceState) -> Vec<(String, String)> {
 mod tests {
     use super::{
         ModelChoice, RECENT_SHOWN, filter_model_choices, merge_model_choices, preferred_index,
-        visible_recent,
+        selected_model_label, visible_recent,
     };
     use mycode_config::ModelPin;
+
+    #[test]
+    fn the_selected_model_label_names_the_provider() {
+        let mut state = crate::view_model::WorkspaceState::default();
+        assert_eq!(
+            selected_model_label(&state),
+            crate::i18n::t("Select model", "选择模型")
+        );
+        state.selected_provider = Some("magpie".to_owned());
+        state.selected_model = Some("gpt-5".to_owned());
+        // Without a catalog both halves fall back to the raw ids.
+        assert_eq!(selected_model_label(&state), "magpie · gpt-5");
+        state.catalog = Some(std::sync::Arc::new(
+            mycode_providers::catalog::CatalogDocument {
+                providers: vec![mycode_providers::catalog::CatalogProvider {
+                    id: "magpie".to_owned(),
+                    name: "Magpie".to_owned(),
+                    models: vec![mycode_providers::catalog::CatalogModel {
+                        id: "gpt-5".to_owned(),
+                        name: "GPT-5".to_owned(),
+                        ..mycode_providers::catalog::CatalogModel::default()
+                    }],
+                    ..mycode_providers::catalog::CatalogProvider::default()
+                }],
+            },
+        ));
+        assert_eq!(selected_model_label(&state), "Magpie · GPT-5");
+        // A model picked without a provider half keeps the bare name.
+        state.selected_provider = None;
+        assert_eq!(selected_model_label(&state), "gpt-5");
+    }
 
     #[test]
     fn filter_keeps_the_whole_catalog_and_matches_name() {
