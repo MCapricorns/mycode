@@ -527,6 +527,12 @@ impl FrontendDriver {
                 self.act(FrontendAction::UpdateDialogToggled(true), out);
             }
             BridgeReply::SettingsSaved(Err(message)) => {
+                // A CAS conflict leaves the editor holding a stale revision:
+                // every later save would fail the same way. Reload the
+                // document so the next save compares against the store's
+                // actual revision. The reducer keeps unsaved edits while a
+                // reload lands (see `settings_loaded`).
+                self.dispatch(BridgeCommand::LoadSettings);
                 self.act(FrontendAction::SettingsSaveFailed(message), out);
             }
             BridgeReply::SessionDeleted(Err(message)) => {

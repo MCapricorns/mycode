@@ -12,6 +12,16 @@ pub(super) fn settings_loaded(state: &mut WorkspaceState, settings: SettingsStat
             current.mcp_with_keys = settings.mcp_with_keys;
             if !current.saving {
                 current.revision = settings.revision;
+                // A reload after a failed save also re-syncs the magpie
+                // binding: magpie's plugin may have rewritten the document
+                // underneath the editor. `providers` is derived from the
+                // binding (never user-edited), so it moves with it —
+                // without this, a connected gateway shows "no provider"
+                // until the next full reload.
+                if current.magpie.is_default() {
+                    current.magpie = settings.magpie.clone();
+                    current.providers = settings.providers.clone();
+                }
             }
         }
         _ => {

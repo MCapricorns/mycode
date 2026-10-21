@@ -31,6 +31,22 @@ pub(in crate::secure_fs) fn read_file(
     read_bounded(file, maximum_bytes).map(Some)
 }
 
+/// A quarantined backup: ownership still verified, file mode not. See
+/// `owned_file::read_quarantined_backup`.
+pub(in crate::secure_fs) fn read_backup(
+    root: &Path,
+    components: &[OsString],
+    maximum_bytes: usize,
+) -> Result<Option<Zeroizing<Vec<u8>>>, ConfigError> {
+    let Some((parent, name)) = open_existing_parent(root, components)? else {
+        return Ok(None);
+    };
+    let Some(file) = open_existing_regular(&parent, name, false)? else {
+        return Ok(None);
+    };
+    read_bounded(file, maximum_bytes).map(Some)
+}
+
 /// One locked read-modify-replace.
 ///
 /// The advisory lock is `flock` on the parent directory handle itself, so no

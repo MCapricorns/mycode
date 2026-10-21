@@ -429,7 +429,7 @@ fn plan_op(
                 // A one-character difference (typo, renamed local, quote
                 // style) still has one close site. Fuzzy commits only a
                 // unique best match at distance 1.
-                if super::fuzzy::plan_fuzzy_fallback(
+                match super::fuzzy::plan_fuzzy_fallback(
                     body,
                     super::fuzzy::FuzzyPlan {
                         pattern: &patterns[0],
@@ -440,14 +440,19 @@ fn plan_op(
                     planned,
                     replacement_bytes,
                     cancel,
-                )
-                .is_ok()
-                {
-                    notes.push(format!(
-                        "literal pattern not found; applied a unique fuzzy match at distance 1: {}",
-                        snippet(&patterns[0])
-                    ));
-                    return Ok(());
+                ) {
+                    Ok(()) => {
+                        notes.push(format!(
+                            "literal pattern not found; applied a unique fuzzy match at distance 1: {}",
+                            snippet(&patterns[0])
+                        ));
+                        return Ok(());
+                    }
+                    // A cancellation is not a miss: the fuzzy scan aborted
+                    // because the user stopped the call, and "pattern not
+                    // found" would misreport it to the model.
+                    Err(error) if cancel.is_cancelled() => return Err(error),
+                    Err(_) => {}
                 }
             }
             if matches.is_empty() {

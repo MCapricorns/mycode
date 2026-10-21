@@ -1,6 +1,6 @@
 # mycode-tools
 
-`mycode-tools` 实现模型直接调用的工具：`read`、`write`、`edit`、`grep`、`find`、当前平台的一个进程工具，以及本 crate 定义、宿主提供实现的 `ask_user`、`agent`、`web_search`、`fetch_content`。MCP 工具由 app 装配。`content` 回到模型；`details` 只给界面（diff、字节数、退出码），不进上下文。
+`mycode-tools` 实现模型直接调用的工具：`read`、`write`、`edit`、`grep`、`find`、当前平台的一个进程工具，以及本 crate 定义、宿主提供实现的 `ask_user`、`agent`。MCP 工具由 app 装配。`content` 回到模型；`details` 只给界面（diff、字节数、退出码），不进上下文。
 
 ```text
 tool_call
@@ -18,7 +18,7 @@ tool_call
 - 随后按 schema 修补形状，再校验：`required` 里的字段如果模型用了别的工具的拼法（`file`/`filename`→`path`、`text`/`body`→`content`、`query`/`glob`→`pattern`、`task`/`instructions`→`prompt`、`name`/`role`→`agent` 等，且该拼法不是 schema 声明的属性）会改成 schema 名字；字符串形式的数字和布尔在任意深度按 schema 转成标量；带 `const`/单值 `enum` 标签的 `oneOf`/`anyOf` 对象缺少标签时按字段推断变体（恰好一个变体覆盖对象，或最贴合的那个；同样贴合时取声明顺序靠前的），标签拼写只差大小写/连字符时改正；推断出变体后，若该变体 `additionalProperties: false`，丢掉它没有声明的多余键（`type_note` 这类说明字段）。空对象、认不出的字段、没有标签的联合、解析失败的值都原样留给校验报错，不会被猜成某个变体。
 - MCP 工具用服务器给的 schema 做同一套修补（不做 camelCase 转 snake_case，服务器可能就声明成驼峰），校验错误也走同一套渲染：联合失败只列允许的 `type` 取值，其它消息限制在 320 字节。
 - 未知工具、schema 不合法、执行错误都变成 `is_error` 的工具结果，回合继续。没有“先问用户是否允许”的回调。
-- `prepare_tool_ctx` 在执行前绑定文件或搜索句柄并改锚路径。只有不改变东西的工具可以并行：`read`、`grep`、`find`、网页工具、`search_tool`、声明 `readOnlyHint` 的 MCP 工具，以及目标是这类工具的 `use_tool`；写、进程、`ask_user` 按模型顺序单独执行。同一条回复里的 `agent` 调用会一起启动。
+- `prepare_tool_ctx` 在执行前绑定文件或搜索句柄并改锚路径。只有不改变东西的工具可以并行：`read`、`grep`、`find`、`search_tool`、声明 `readOnlyHint` 的 MCP 工具，以及目标是这类工具的 `use_tool`；写、进程、`ask_user` 按模型顺序单独执行。同一条回复里的 `agent` 调用会一起启动。
 - `ToolStream` 保证任意条进度后恰好一个终止事件；终止发送成功后，后续进度被静默丢弃。
 
 ## 内置工具
@@ -102,11 +102,8 @@ tool_call
 | --- | --- |
 | `ask_user` | 一次 1–4 个问题，等用户回答；用户关闭问题是一次错误结果，回合继续；停止整个回合会中止调用。答案渲染最多 4096 字符；`multiple` 允许复选。 |
 | `agent` | 按角色跑一个子循环。`prompt` 最多 16,000 字符，答案最多 24,000 字符。内置角色只有 `scout` 和 `artisan`，也可用家目录 `agents/*.md` 或工作区 `.mycode/agents/*.md` 自定义；工具描述不写角色名，可用角色以 system prompt 的 `<dispatch>` 为准（只列设置里启用的）。子代理不能问用户，也不能再调 `agent`；没有墙钟超时，只能由答案、取消、停止或删除对话结束。 |
-| `web_search` / `fetch_content` | 有界 HTTP。搜索最多 8 条（默认 5），摘要最多 240 字符，重复 URL 丢弃，相同查询缓存 600 秒。抓取一次 1–8 个 URL。 |
 
-`scout` 只读：工具限制为 `read`、`grep`、`find`、`web_search`、`fetch_content`，MCP 也只给 `readOnlyHint: true` 的工具。`artisan` 默认在独立 git worktree 中改文件，结束时把最多 256 KiB 的 diff 附在答案后并删除 worktree；改动不会自动合回主工作区，也不提交。`isolation` 可选 `shared`/`worktree`，只读角色强制 `shared`。每个父回合最多同时跑 8 个子代理，多出的排队；同一条回复里的多个 `agent` 都会启动。
-
-网页后端：有启用的 backend 就用它；都没启用时用第一个有 key 的。一个可用的都没有时，`web_search` 和 `fetch_content` 不注册，模型看不到它们。Querit 和 Exa 必须有 key，AnySearch 可匿名。`fetch_content` 带 `goal` 时按目标选 1200 字符的摘录；如果命中的是标题，会返回该标题下的整节，最多 48,000 字符。不带 `goal` 时每页最多 8000 字符，截断标 `(truncated)`。
+`scout` 只读：工具限制为 `read`、`grep`、`find`，MCP 也只给 `readOnlyHint: true` 的工具（联网检索由 magpie Library 下发的 MCP 服务提供）。`artisan` 默认在独立 git worktree 中改文件，结束时把最多 256 KiB 的 diff 附在答案后并删除 worktree；改动不会自动合回主工作区，也不提交。`isolation` 可选 `shared`/`worktree`，只读角色强制 `shared`。每个父回合最多同时跑 8 个子代理，多出的排队；同一条回复里的多个 `agent` 都会启动。
 
 ## MCP 与技能
 
@@ -120,5 +117,5 @@ MCP 在回合开始时连接启用的服务器，连接池随后复用。单个�
 - `write`、`edit` 和进程启动只用进程内全局锁串行化，revision 检查也是进程内 compare-and-swap。同一账号的外部进程仍可能并发改文件；没有 advisory lock。发布后会重新读取并核对 inode 和内容，但复核完成之后的替换无法发现。
 - 搜索拒绝符号链接、重解析点、跨挂载点和 Unix 多链接文件；文件工具把路径限制在保留的根句柄内，但 `write`/`edit` 只保证自己发布的新 inode，不阻止其它进程写同一路径。
 - `program` 模式的 shebang 只跟一层；解释器必须是可加载映像，`#!/usr/bin/env name` 只接受一个程序名。
-- 网页、MCP 结果和文件内容都按不可信数据处理；工具描述和子代理提示里明确要求不把其中的文字当指令。
+- 网页（MCP 检索结果）、MCP 结果和文件内容都按不可信数据处理；工具描述和子代理提示里明确要求不把其中的文字当指令。
 - 撤回或编辑一条对话不会恢复或删除工作区文件。

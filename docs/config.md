@@ -1,6 +1,6 @@
 # 配置与状态
 
-`mycode-config` 读写本机配置和界面状态，不联网。会话账本、目录下载和运行回合不在这里。
+`mycode-config` 读写本机配置和界面状态，不联网。会话账本和运行回合不在这里。
 
 ## 家目录
 
@@ -31,7 +31,7 @@
 
 - 文件不存在：返回默认值，不写盘。
 - 内容损坏（解析/校验失败、非 UTF-8、超过文档上限但在 8 MiB 内）：原字节复制到 `{文件名}.broken-<纳秒>`，逐字段/逐行抢救，再把通过校验的结果规范写回。抢救只在整体仍能通过校验时采用某个字段或行，通不过校验的字段或行被丢弃。
-- 文件本身不可用（所有者或权限不对、链接、目录、非瞬时 I/O 错误）：不读内容，直接把文件改名为 `{文件名}.broken-<纳秒>`，再写入默认值。Unix 上文件模式不是 `0600` 就算不可用，目录权限会在读取时收紧到 `0700`；Windows 上文件必须属于当前用户且 DACL 受保护，目录会被安装受保护 DACL。
+- 文件本身不可用（所有者或权限不对、链接、目录、非瞬时 I/O 错误）：不读内容，直接把文件改名为 `{文件名}.broken-<纳秒>`，再写入默认值；所有者仍是当前用户、只是权限模式不符的（外部写入者替换文件后的典型情形），会先从改名后的字节里抢救字段再发布。Unix 上文件模式不是 `0600` 就算不可用，目录权限会在读取时收紧到 `0700`；Windows 上文件必须属于当前用户且 DACL 受保护，目录会被安装受保护 DACL。
 - 超过 8 MiB 的文档不备份也不重置，直接报 `Oversized`。
 - 家目录本身不可信（所有者不对、是链接）时不被“修好”，返回原错误。`Interrupted`、`WouldBlock`、`TimedOut`、`ResourceBusy` 这类瞬时错误也不触发重置。
 
@@ -61,7 +61,7 @@
 
 - **外观**：`appearance.theme` 为 `dark` 或 `light`；`language` 为 `auto`、`en`、`zh`；`fontSize` 为 `s`、`m`、`l`、`xl`，对应正文 12 / 14 / 16 / 18 像素，缺省 `m`。界面字体固定为操作系统界面字体。
 - **代理**：`proxy` 为空表示跟随系统（环境变量或系统代理设置；系统没有就直连，不探测本机端口）。也可写 `http` / `https` / `socks5` / `socks5h` 代理 URL；只写 `host:port` 按 `http` 处理。`auto`、`direct`、`system` 也按跟随系统读。设置页的测试请求 `https://www.google.com/generate_204`，显示线路（直连 / 系统代理 / 手动代理）、状态码和耗时。环回、`.local` 和私网地址始终直连。
-- **magpie**：`enabled` 表示网关可用；`baseUrl` 必须是 `http://` 回环地址或以 `/v1` 结尾的 `https://` 地址（本机默认 `http://127.0.0.1:3425/v1`）；`apiKey` 是 magpie 的 agent 插件写入的密钥；`model` 是 magpie 里选中的模型 id。可选 `hiddenModels` 最多 2048 个，不出现在对话模型切换、最近使用推荐和命令面板。MCode 不写这四个字段，插件负责写入和撤销；关掉网关后没有模型来源。
+- **magpie**：`enabled` 表示网关可用；`baseUrl` 必须是 `http://` 回环地址或 `https://` 地址（本机默认 `http://127.0.0.1:3425/v1`）；`apiKey` 是 magpie 的 agent 插件写入的网关密钥（在 `settings.json` 里，属于 magpie 段，不进 `secrets.json`）；`model` 是 magpie 里选中的模型 id。可选 `hiddenModels` 最多 2048 个，不出现在对话模型切换、最近使用推荐和命令面板。MCode 不写这四个字段，插件负责写入和撤销；关掉网关后没有模型来源。插件重写文件可能带来目录继承的权限，读取时的修复路径会从备份抢救出 magpie 段再重新发布。
 - **推理强度**：`reasoningEffort` 可省略，可取 `off`、`none`、`on`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；`default` 不允许。会话里选的模型和强度不写这里，见 `ui.json`。
 - **Shell**：没有 shell 设置。解释器按操作系统自动选择，见 [tools.md](tools.md)。`MYCODE_SHELL` 为非 `auto` 的值时提示一次并忽略。
 - **MCP**：`transport` 为 `stdio`（`command` 是单个可执行文件，不接受 shell 字符串；最多 64 个 `args`，最多 32 个 `env`）或 `http`（`endpoint` 为 `https://`，`keyHeader` 只能是 `bearer` 或 `x-api-key`，`headers` 最多 32 个自定义头）。最多 64 台服务器。密钥用 `mcp-<id>`。没有内置目录；magpie Library 的 `~/.mycode/mcp.json` 会作为只读托管行合并，自带 `headers`，与用户同 id 时用户行优先。启用开关对声明了 `keyHeader` 的行要求先有已存密钥，再做一次 `tools/list` 探测，成功才启用。
@@ -76,7 +76,7 @@
 | magpie 隐藏模型 | 2048 个 |
 | MCP | 64 台服务器；stdio 每条命令 64 个参数、32 个环境变量；HTTP 32 个自定义头 |
 | 子代理 | 设置里 32 个角色；发现结果含内置最多 32 个；每个角色目录最多读 32 个文件 |
-| 密钥 | 64 个 provider，单把 key 16 KiB |
+| 密钥 | 64 个条目（MCP 的 `mcp-<id>`），单把 key 16 KiB |
 | 技能 | 关闭列表 256 个 slug，每个 128 字节；system prompt 里最多 32 个 |
 | 提示资源 | 每份 64 KiB，最多 16 份，合计最多 96K 字符 |
 | 自由文本 | 代理、模型 id、MCP 命令/参数/环境变量、角色路由 model 最多 8 KiB；URL 最多 2 KiB |

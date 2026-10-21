@@ -641,15 +641,31 @@ impl PackTaskActor for SessionActor {
 
     async fn invoke(&mut self, request: Self::Request) -> Result<Self::Operation, Self::Error> {
         let core = Arc::clone(&self.core);
-        blocking_session(move || core.lock().expect("session actor").invoke_sync(request)).await?
+        // Poison recovery instead of a panic: one panicked session
+        // operation must not turn every later call into a panic loop.
+        // The lock guard is still held; the state it protected may be
+        // mid-update, which the per-call validation and the durable
+        // ledger's fail-closed checks already handle.
+        blocking_session(move || {
+            let mut guard = core
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.invoke_sync(request)
+        })
+        .await?
     }
 
     async fn pull(&mut self, operation: &mut Self::Operation) -> Result<Self::Pull, Self::Error> {
         let core = Arc::clone(&self.core);
         let inner = Arc::clone(&operation.inner);
         blocking_session(move || {
-            let mut op = inner.lock().expect("session operation");
-            core.lock().expect("session actor").pull_sync(&mut op)
+            let mut op = inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut guard = core
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.pull_sync(&mut op)
         })
         .await?
     }
@@ -662,7 +678,7 @@ impl PackTaskActor for SessionActor {
         operation
             .inner
             .lock()
-            .expect("session operation")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .admission
             .take()
     }

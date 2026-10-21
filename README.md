@@ -12,7 +12,7 @@
   <a href="https://x.com/M_Capricorns"><img alt="关注 @M_Capricorns" src="https://img.shields.io/badge/X-%40M__Capricorns-000?style=flat-square&logo=x"></a>
 </p>
 
-**对话、工具调用和会话记录都留在本机。模型请求只发往你自己配置的服务商。**
+**对话、工具调用和会话记录都留在本机。模型请求只发往本机 magpie 网关。**
 
 [下载](https://github.com/MCapricorns/mycode/releases/latest) · [快速开始](#快速开始) · [功能](#功能) · [数据](#数据与配置) · [架构](#架构) · [文档](docs/README.md) · [更新日志](CHANGELOG.md)
 

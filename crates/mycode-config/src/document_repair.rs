@@ -5,15 +5,17 @@
 //! strict checks reject for its own permissions, owner, or type, are both
 //! moved aside and replaced. A damaged document's replacement keeps every
 //! field that still decodes and validates (`salvage`), so one bad section does
-//! not force the user to re-enter the rest. The previous file stays beside
-//! the original as `{name}.broken-<nanos>`. Session ledgers are not documents
-//! this module handles.
+//! not force the user to re-enter the rest; a permissions mismatch salvages
+//! the same way from the moved bytes, so an external writer (magpie's agent
+//! plugin) cannot cost the user their configuration. The previous file stays
+//! beside the original as `{name}.broken-<nanos>`. Session ledgers are not
+//! documents this module handles.
 
 use std::io;
 
 use crate::error::ConfigErrorKind;
 use crate::secure_fs::owned_file::{
-    locked_update_owned_file, quarantine_owned_file, read_owned_file,
+    locked_update_owned_file, quarantine_owned_file, read_owned_file, read_quarantined_backup,
 };
 use crate::{ConfigError, HomeLayout};
 
@@ -131,9 +133,9 @@ fn backup_name_with_stamp(relative: &str, stamp: u128) -> Result<String, ConfigE
 
 /// Reads one owned document through `decode`. A damaged document is
 /// quarantined and salvaged from its stored bytes; a file the strict checks
-/// reject is moved aside unread and rebuilt from `fallback`. In both cases the
-/// remainder comes from `fallback`, and the published value is the one
-/// returned.
+/// reject is moved aside, and — for a permissions mismatch — salvaged from
+/// the moved bytes before the `fallback` fills the rest. The published value
+/// is the one returned.
 pub(crate) fn load_or_reset<T>(
     home: &HomeLayout,
     relative: &'static str,
@@ -171,20 +173,31 @@ pub(crate) fn load_or_reset<T>(
             }
         }
         Err(error) if is_unusable_file(&error) => {
-            reset_unreadable(home, relative, error, fallback, publish)
+            reset_unreadable(home, relative, error, max_bytes, fallback, salvage, publish)
         }
         Err(error) => Err(error),
     }
 }
 
 /// Moves a document the strict read rejected aside, unread, and publishes
-/// the fallback. When nothing can be moved (the failure was the home, not the
-/// file) the original error is returned unchanged.
+/// the fallback — salvaging from the moved bytes when the failure was a
+/// permissions mismatch. When nothing can be moved (the failure was the
+/// home, not the file) the original error is returned unchanged.
+///
+/// An external writer such as magpie's agent plugin replaces the file
+/// wholesale: the replacement carries the directory's inherited ACL while
+/// the bytes themselves stay the user's. The moved bytes are re-read
+/// through the strict owned-file path, which bounds the read and re-checks
+/// ownership — a backup that is still not owned by the current user is not
+/// salvaged, so an injected document cannot ride this path back in. Without
+/// this salvage, every plugin write dropped the whole `magpie` binding.
 fn reset_unreadable<T>(
     home: &HomeLayout,
     relative: &'static str,
     error: ConfigError,
+    max_bytes: usize,
     fallback: impl FnOnce() -> T,
+    salvage: impl FnOnce(&serde_json::Value) -> Option<T>,
     publish: impl FnOnce(&T) -> Result<(), ConfigError>,
 ) -> Result<Loaded<T>, ConfigError> {
     let mut moved_backup = None;
@@ -205,7 +218,16 @@ fn reset_unreadable<T>(
     let Some(backup) = moved_backup else {
         return Err(error);
     };
-    let value = fallback();
+    let value = if error.kind() == ConfigErrorKind::AccessControl {
+        read_quarantined_backup(home, &backup, max_bytes.max(QUARANTINE_MAX_BYTES))
+            .ok()
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|document| salvage(&document))
+            .unwrap_or_else(fallback)
+    } else {
+        fallback()
+    };
     publish(&value)?;
     Ok(Loaded {
         value,
@@ -472,6 +494,32 @@ mod tests {
             permissions.set_readonly(false);
             let _ = std::fs::set_permissions(path.path(), permissions);
         }
+    }
+
+    #[test]
+    fn a_permissions_mismatch_keeps_the_magpie_binding_of_the_moved_bytes() {
+        let (_guard, home) = home("plugin-rewrite");
+        // What magpie's agent plugin leaves behind: a full, valid document
+        // whose bytes carry the binding but whose permissions came from the
+        // directory (an inherited ACL on Windows, 0644 on Unix).
+        let document = concat!(
+            r#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"magpie":{"#,
+            r#""enabled":true,"baseUrl":"http://127.0.0.1:3425/v1","#,
+            r#""apiKey":"magpie-mycode","model":"opendesign/deepseek-v4.1-flash"},"#,
+            r#""mcpServers":[],"appearance":{"theme":"dark","language":"auto","fontSize":"m"}}"#
+        );
+        let path = home.root().join("settings.json");
+        std::fs::write(&path, document).unwrap();
+
+        let (settings, repair) = read_app_settings_with_repair(&home).unwrap();
+        let repair = repair.expect("the mismatched document is quarantined");
+        // The binding survives: without the salvage every plugin write
+        // disconnected the gateway.
+        assert!(settings.magpie.is_active(), "{:?}", settings.magpie);
+        assert_eq!(settings.magpie.model, "opendesign/deepseek-v4.1-flash");
+        assert!(home.root().join(&repair.backup).exists(), "backup kept");
+        // The republished document reads back cleanly and is protected again.
+        assert!(read_app_settings_with_repair(&home).unwrap().1.is_none());
     }
 
     #[test]

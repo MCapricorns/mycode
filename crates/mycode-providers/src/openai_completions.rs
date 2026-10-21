@@ -367,6 +367,34 @@ fn same_detail(left: &Value, right: &Value) -> bool {
     false
 }
 
+/// Merges a non-cumulative frame: an item that names an existing one (by id
+/// or index) merges into it; a new one is charged against the accumulation
+/// ceiling and appended.
+fn merge_distinct_details(
+    details: &mut Vec<Value>,
+    incoming: Vec<Value>,
+    accumulated: &mut usize,
+) -> Result<(), &'static str> {
+    for item in incoming {
+        if let Some(position) = details
+            .iter()
+            .position(|existing| same_detail(existing, &item))
+        {
+            merge_detail(&mut details[position], &item);
+        } else {
+            // A retained detail item is stream state and counts toward the
+            // accumulation ceiling like any other fragment, so distinct-id
+            // frames cannot grow the array without bound.
+            let item_len = mycode_core::encoded_json_len(&item).unwrap_or(usize::MAX);
+            if !charge_stream(accumulated, item_len) {
+                return Err("stream exceeded the output limit");
+            }
+            details.push(item);
+        }
+    }
+    Ok(())
+}
+
 fn merge_detail(existing: &mut Value, incoming: &Value) {
     let prev = detail_item_text(existing);
     let next = detail_item_text(incoming);
@@ -597,41 +625,42 @@ impl CompletionsReducer {
         if incoming.is_empty() {
             return Ok(());
         }
+        // The joined text drives cumulative-frame detection but is only
+        // needed when a prior frame exists; building it for an empty list
+        // is free (detail_text of `[]` is the empty string).
         let before = detail_text(&self.reasoning_details);
-        let incoming_text = detail_text(&incoming);
-        if !self.reasoning_details.is_empty() && incoming_text.starts_with(&before) {
-            if incoming_text.len() > before.len() {
-                self.reasoning_details = incoming;
-            } else if incoming.len() == self.reasoning_details.len() {
-                for (dest, src) in self.reasoning_details.iter_mut().zip(incoming) {
-                    merge_detail(dest, &src);
+        let cumulative = !self.reasoning_details.is_empty();
+        if cumulative {
+            let incoming_text = detail_text(&incoming);
+            if incoming_text.starts_with(&before) {
+                if incoming_text.len() > before.len() {
+                    self.reasoning_details = incoming;
+                } else if incoming.len() == self.reasoning_details.len() {
+                    for (dest, src) in self.reasoning_details.iter_mut().zip(incoming) {
+                        merge_detail(dest, &src);
+                    }
                 }
-            }
-        } else if !self.reasoning_details.is_empty() && before.starts_with(&incoming_text) {
-            if incoming_text == before && incoming.len() == self.reasoning_details.len() {
-                for (dest, src) in self.reasoning_details.iter_mut().zip(incoming) {
-                    merge_detail(dest, &src);
+            } else if before.starts_with(&incoming_text) {
+                if incoming_text == before && incoming.len() == self.reasoning_details.len() {
+                    for (dest, src) in self.reasoning_details.iter_mut().zip(incoming) {
+                        merge_detail(dest, &src);
+                    }
                 }
+            } else {
+                merge_distinct_details(
+                    &mut self.reasoning_details,
+                    incoming,
+                    &mut self.accumulated,
+                )?;
             }
         } else {
+            // First frame: take it as-is without the prefix comparisons.
             for item in incoming {
-                if let Some(position) = self
-                    .reasoning_details
-                    .iter()
-                    .position(|existing| same_detail(existing, &item))
-                {
-                    merge_detail(&mut self.reasoning_details[position], &item);
-                } else {
-                    // A retained detail item is stream state and counts
-                    // toward the accumulation ceiling like any other
-                    // fragment, so distinct-id frames cannot grow the
-                    // array without bound.
-                    let item_len = mycode_core::encoded_json_len(&item).unwrap_or(usize::MAX);
-                    if !charge_stream(&mut self.accumulated, item_len) {
-                        return Err("stream exceeded the output limit");
-                    }
-                    self.reasoning_details.push(item);
+                let item_len = mycode_core::encoded_json_len(&item).unwrap_or(usize::MAX);
+                if !charge_stream(&mut self.accumulated, item_len) {
+                    return Err("stream exceeded the output limit");
                 }
+                self.reasoning_details.push(item);
             }
         }
         let after = detail_text(&self.reasoning_details);

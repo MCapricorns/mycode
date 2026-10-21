@@ -106,8 +106,8 @@ fn render_provider_step(
                 .text_color(theme.muted_foreground)
                 .whitespace_normal()
                 .child(t(
-                    "No enabled providers. Add one in Settings.",
-                    "没有启用的服务商。请先在设置中添加。",
+                    "No model source. Install or start magpie, then pick a model in its Agents page.",
+                    "没有模型来源。请安装或启动 magpie，然后在它的 Agents 页选一个模型。",
                 ))
                 .into_any_element(),
         );

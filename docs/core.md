@@ -52,7 +52,7 @@
 - `tools: Arc<[ToolSpec]>`。
 - `reasoning`、`max_output_tokens`、`reasoning_token`、`prompt_cache_key`。
 
-应用层填 `max_output_tokens` 的顺序是设置里的 `maxOutput`、目录的 `limit.output`、最后的 32000。`prompt_cache_key` 通常是会话 id。`reasoning_token` 用于目录里存在、但内置档位没有的 effort 拼写，原样发送。
+应用层填 `max_output_tokens` 的顺序是网关的 `max_output_tokens`、最后的 32000。`prompt_cache_key` 通常是会话 id。`reasoning_token` 用于目录里存在、但内置档位没有的 effort 拼写，原样发送。
 
 `Request::validate` 在 `before_request` 钩子改写之后、发给 provider 之前检查 JSON 编码大小，上限 8 MiB（`MAX_REQUEST_ENCODED_BYTES`）。编码失败是 `Protocol`，超限是 `Rejected`。
 

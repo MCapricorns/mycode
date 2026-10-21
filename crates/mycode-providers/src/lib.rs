@@ -157,7 +157,11 @@ impl WireProvider {
     /// Builds the wire call and whether a retry rule could rewrite it; the
     /// driver consults that flag before attempting a rewrite. Decided from
     /// the JSON value before serialization, not by scanning the encoded bytes.
-    fn call_for(&self, request: &Request) -> (TransportCall, bool) {
+    ///
+    /// A body that cannot be encoded fails like `Request::validate` does:
+    /// an empty POST would surface as an opaque provider 400 with nothing
+    /// pointing at the encoding failure.
+    fn call_for(&self, request: &Request) -> Result<(TransportCall, bool), ProviderError> {
         let model = self.resolved.model.as_str();
         let endpoint = self.resolved.endpoint.as_str();
         let (body, replays_thinking) = match self.resolved.kind.as_str() {
@@ -183,12 +187,15 @@ impl WireProvider {
         ) {
             headers.push(header);
         }
+        let encoded = serde_json::to_vec(&body).map_err(|_| {
+            ProviderError::with_message(ProviderErrorKind::Protocol, "request encoding failed")
+        })?;
         let call = TransportCall {
             endpoint: self.resolved.endpoint.clone(),
             headers,
-            body: serde_json::to_vec(&body).unwrap_or_default().into(),
+            body: encoded.into(),
         };
-        (call, retryable)
+        Ok((call, retryable))
     }
 }
 
@@ -208,7 +215,7 @@ impl Provider for WireProvider {
     ) -> Pin<Box<dyn Future<Output = Result<EventStream, ProviderError>> + Send + 'a>> {
         Box::pin(async move {
             request.validate()?;
-            let (call, retryable) = self.call_for(request);
+            let (call, retryable) = self.call_for(request)?;
             let kind = self.resolved.kind.clone();
             let (sender, stream) = EventStream::channel(cancel.clone());
             let transport = Arc::clone(&self.transport);

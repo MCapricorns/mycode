@@ -129,6 +129,15 @@ pub trait Tool: Send + Sync + 'static {
         args_schema::<Self::Args>()
     }
 
+    /// Extra identity for the compiled-schema cache when `params_schema`
+    /// varies between instances of one type and name. The default of an
+    /// empty string says the schema is fixed; the shell tool returns its
+    /// resolved kind (`Pwsh` and `WindowsPowerShell` share the tool name
+    /// `powershell` but not the parameter docs).
+    fn schema_key(&self) -> String {
+        String::new()
+    }
+
     /// Access mode for a retained local search root.
     ///
     /// Built-in `grep` returns content access and `find` metadata access.
@@ -318,16 +327,23 @@ impl ArgsCheck {
     }
 }
 
-/// Compiled argument checks of [`Tool`] implementors, keyed by type and
-/// name. A tool's `params_schema` is fixed by those two (the shell tool's
-/// schema follows the shell its name names), so each schema is generated
-/// and compiled once per process instead of on every call.
+/// Compiled argument checks of [`Tool`] implementors, keyed by type, name,
+/// and the schema's identity. A tool whose `params_schema` varies beyond the
+/// name (the shell tool: `Pwsh` and `WindowsPowerShell` both register as
+/// `powershell` but carry kind-specific parameter docs) must include that
+/// variation in `schema_key`, or two instances would silently share one
+/// compiled schema. Each schema is generated and compiled once per process
+/// instead of on every call.
 static ARGS_CHECKS: LazyLock<RwLock<ArgsChecks>> = LazyLock::new(Default::default);
 
-type ArgsChecks = HashMap<(TypeId, String), Arc<ArgsCheck>>;
+type ArgsChecks = HashMap<(TypeId, String, String), Arc<ArgsCheck>>;
 
 fn args_check<T: Tool>(tool: &T) -> Result<Arc<ArgsCheck>, ToolError> {
-    let key = (TypeId::of::<T>(), tool.name().to_owned());
+    let key = (
+        TypeId::of::<T>(),
+        tool.name().to_owned(),
+        tool.schema_key().to_owned(),
+    );
     if let Some(check) = ARGS_CHECKS.read().get(&key) {
         return Ok(Arc::clone(check));
     }

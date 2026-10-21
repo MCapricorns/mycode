@@ -11,18 +11,21 @@ MYCode 的 home 布局与严格配置文档。会话与压缩检查点都在 `se
 ├─ settings.json
 ├─ secrets.json
 ├─ ui.json
-├─ catalog-cache.json
+├─ AGENTS.md
+├─ mcp.json
+├─ skills/
 ├─ agents/<role>.md
 ├─ sessions.db
 ├─ sessions/<项目键>/<sess-id>/{<br1-id>.jsonl,payloads/,compaction.json}
 └─ scratch/
 ```
 
-- `settings.json`：providers、web backends、MCP、subagents、appearance。无密钥。未知字段或已退役字段（`userAgent`、`usage`、`tools.*`、`subagents.maxConcurrent`/`timeoutSecs`、`appearance.palette`/`fontFamily`、网页 `custom` 后端）均按文档损坏处理，备份后重置并逐项抢救（salvage）仍合法的字段。子代理并发固定为 `SUBAGENT_CONCURRENCY`（8）。
-- `secrets.json`：`provider-id`、`web-<id>`、`mcp-<id>`。
+- `settings.json`：magpie 网关绑定（含插件写入的网关密钥）、MCP、subagents、appearance、skills 开关。未知字段或已退役字段（`providers`、`web`、`userAgent`、`usage`、`tools.*`、`subagents.maxConcurrent`/`timeoutSecs`、`appearance.palette`/`fontFamily`）均按文档损坏处理，备份后重置并逐项抢救（salvage）仍合法的字段；外部写入者改掉文件权限时同样从备份抢救。子代理并发固定为 `SUBAGENT_CONCURRENCY`（8）。
+- `secrets.json`：MCP 服务器的 `mcp-<id>`。
 - `ui.json`：最近项目、会话→项目路径、选中模型、窗口尺寸。last-writer-wins，无 revision CAS。
+- `AGENTS.md` / `mcp.json` / `skills/`：magpie Library 写入的规则、MCP 服务器和技能（也可手写）。
 - `agents/`：用户级 subagent 角色；项目级角色在 `<project>/.mycode/agents/`。
-- 系统提示资源来自 workspace 与 home 的 `AGENTS.md`/`MYCODE.md`，技能来自 `.agents` 树。
+- 系统提示资源来自 workspace 与 home 的 `AGENTS.md`/`MYCODE.md`，技能来自 `.agents` 树和 magpie Library 的 `skills/`。
 - `project_dir_key(project)` 把项目路径拼成文件夹名（无项目为 `no-project`），`new_session_dir(project, id)` 生成新会话目录 `sessions/<项目键>/<id>`，`locate_session_dir(home, id)` 扫描 `sessions/*/` 找到已有会话的目录。
 - 未绑定项目时工具 cwd 是 `scratch/`，不是按会话 id 命名的目录。
 

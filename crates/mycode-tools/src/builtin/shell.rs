@@ -263,6 +263,10 @@ impl Tool for ShellTool {
         schema
     }
 
+    fn schema_key(&self) -> String {
+        format!("{:?}", self.resolved().kind)
+    }
+
     async fn execute(
         &self,
         args: Self::Args,

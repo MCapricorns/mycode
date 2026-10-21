@@ -405,8 +405,6 @@ impl BridgeAgentHost {
         let fail = |message: String| mycode_tools::ToolError::Execution(message);
         let cancelled = || fail(format!("subagent {} cancelled", role.name));
         let run_dir = worktree.map_or_else(|| self.cwd.clone(), Path::to_path_buf);
-        // An OAuth refresh rotates the stored token, so routing always runs
-        // to completion; the cancel is checked right after it.
         let resolved = self.resolve_route(&role.name).await.map_err(fail)?;
         if child_cancel.is_cancelled() {
             return Err(cancelled());

@@ -135,9 +135,8 @@ fn split_key_ids(secrets: &mycode_config::ProviderSecrets) -> (Vec<String>, Vec<
 /// so the UI updates its markers in place.
 ///
 /// The key lands in one locked read-modify-write: concurrent saves (several
-/// keys from one `mcp.json` import, an OAuth refresh rotating its token
-/// mid-turn) each apply to the current document instead of failing a
-/// revision check against one another.
+/// keys from one `mcp.json` import) each apply to the current document
+/// instead of failing a revision check against one another.
 pub(crate) fn save_provider_key(
     home: &HomeLayout,
     provider_id: &str,

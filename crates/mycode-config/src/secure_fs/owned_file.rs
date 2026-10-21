@@ -36,6 +36,14 @@ mod fallback {
         Err(unavailable())
     }
 
+    pub(super) fn read_backup(
+        _root: &Path,
+        _components: &[OsString],
+        _maximum_bytes: usize,
+    ) -> Result<Option<Zeroizing<Vec<u8>>>, ConfigError> {
+        Err(unavailable())
+    }
+
     pub(super) struct Transaction;
 
     impl Transaction {
@@ -111,6 +119,28 @@ pub(crate) fn quarantine_owned_file(
         return Err(ConfigError::new(ConfigErrorKind::PathEscape));
     }
     platform::quarantine_file(&path.root, &path.components, backup_name)
+}
+
+/// Reads a quarantined backup without the DACL-mode check.
+///
+/// [`quarantine_owned_file`] renames the file, so a permissions mismatch
+/// (an external writer's inherited ACL) moves with the bytes and would fail
+/// [`read_owned_file`] again. Ownership is still verified — a file the
+/// current user does not own is never salvaged — and the read stays bounded.
+///
+/// # Errors
+///
+/// Returns [`ConfigErrorKind::Oversized`] when content exceeds
+/// `maximum_bytes` and [`ConfigError`] for owned-path security, ownership,
+/// or I/O failures.
+pub(crate) fn read_quarantined_backup(
+    home: &HomeLayout,
+    backup: &str,
+    maximum_bytes: usize,
+) -> Result<Option<Zeroizing<Vec<u8>>>, ConfigError> {
+    let path = OwnedPath::new(home, Path::new(backup))?;
+    require_file_name(&path)?;
+    platform::read_backup(&path.root, &path.components, maximum_bytes)
 }
 
 /// Runs one read-modify-replace callback under an advisory lock.

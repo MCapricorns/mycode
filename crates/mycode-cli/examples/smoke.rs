@@ -3,9 +3,11 @@
 //! Run: `cargo run -p mycode-cli --example smoke`
 //!
 //! Drives `FrontendDriver` exactly like the TUI would, then prints a
-//! step-by-step verdict for each scenario: tool use (pelican.svg), web
-//! search, the context7 MCP server, a subagent, a mid-stream interrupt plus
-//! a continue that must see the earlier work, and manual compaction.
+//! step-by-step verdict for each scenario: tool use (hello-world.html), an
+//! MCP tool call, a subagent, a mid-stream interrupt plus a continue that
+//! must see the earlier work, and manual compaction. Web search is not
+//! exercised: it is whatever MCP server magpie's Library provides, so A3
+//! stands in for network-backed tools.
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -96,34 +98,41 @@ fn main() {
     );
     verdict("A1 tool call ran", saw_tool(&driver, entries_before, ""));
 
-    // A2 web search (anysearch backend is enabled in settings).
+    // A2 MCP tool call through whatever server magpie's Library provides
+    // (anysearch is the usual one; the verdict matches on any MCP tool).
     let entries_before = transcript_len(&driver);
     turn(
         &mut driver,
         &wake_rx,
         &mut rendered,
-        "A2 web_search",
-        "Use the web_search tool to look up what 'zenmux' is. \
+        "A2 MCP tool",
+        "Use one of the connected MCP tools to look up what 'zenmux' is. \
          Reply with one line on what it is, or NO-TOOL if no such tool exists.",
         Duration::from_secs(120),
     );
-    verdict("A2 web tool ran", saw_tool(&driver, entries_before, "web"));
+    verdict(
+        "A2 MCP tool ran",
+        saw_tool(&driver, entries_before, "search")
+            || saw_tool(&driver, entries_before, "extract")
+            || saw_tool(&driver, entries_before, "lookup")
+            || saw_tool(&driver, entries_before, "query"),
+    );
 
-    // A3 MCP: context7 is configured and enabled.
+    // A3 MCP: any enabled server's tool counts (context7 when configured).
     let entries_before = transcript_len(&driver);
     turn(
         &mut driver,
         &wake_rx,
         &mut rendered,
-        "A3 context7 MCP",
-        "Use the context7 MCP server tools to look up the Win32 MessageBox \
+        "A3 MCP docs lookup",
+        "Use the connected MCP server tools to look up the Win32 MessageBox \
          API. Reply with one fact about it, or NO-TOOL if unreachable.",
         Duration::from_secs(180),
     );
-    // Context7 calls surface under the server's own tool names
-    // (resolve-library-id / query-docs), not a "context7" prefix.
+    // Server tools surface under the server's own tool names
+    // (resolve-library-id / query-docs), not a server-name prefix.
     verdict(
-        "A3 mcp/context7 ran",
+        "A3 MCP docs tool ran",
         saw_tool(&driver, entries_before, "resolve-library")
             || saw_tool(&driver, entries_before, "query-docs")
             || saw_tool(&driver, entries_before, "context7")

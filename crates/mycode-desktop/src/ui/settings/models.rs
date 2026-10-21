@@ -199,7 +199,6 @@ pub(crate) fn render_models_section(
                             .icon(IconName::RefreshCw)
                             .label(t("Refresh models", "刷新模型"))
                             .small()
-                            .when(connected, |this| this)
                             .on_click(cx.listener(|workspace, _event, _window, cx| {
                                 workspace.on_refresh_catalog(cx);
                             })),

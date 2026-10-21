@@ -1,6 +1,6 @@
 # mycode-providers
 
-MCode 只通过本机 magpie 网关请求模型：`base_url` 是 magpie 的 `/v1`，密钥是 magpie 给 MCode 的 `magpie-mycode`。网关的 `GET /v1/models` 决定可选模型和上下文窗口；MCode 不再保存厂商列表、models.dev 目录或 OAuth 凭据。协议仍是三种：`anthropic-messages`、`openai-completions`、`openai-responses`，由 magpie 按模型选择。
+MCode 只通过本机 magpie 网关请求模型：`base_url` 是 magpie 的 `/v1`，密钥是 magpie 给 MCode 的 `magpie-mycode`。网关的 `GET /v1/models` 决定可选模型和上下文窗口；MCode 不再保存厂商列表、models.dev 目录或 OAuth 凭据。请求一律走 `openai-completions` 一种协议；`anthropic-messages`、`openai-responses` 的适配器仍在源码里，但当前不会被选中。
 
 密钥不在 `settings.json`：`settings.magpie.apiKey` 是 magpie 写入的网关密钥，`ResolvedProvider::resolve` 由调用方传入它和 User-Agent。
 
@@ -61,14 +61,14 @@ MCode 的本地 magpie 网关是回环地址，因此 `proxy` 对 `127.0.0.1` / 
 
 出站请求先解析域名，再只连接检查过的地址；重定向手动跟随，最多 5 跳，每跳重新检查，跨 origin 只保留 `accept`、`accept-language`、`content-type`。所有跳转都必须是 https，不能降级到 http。
 
-- `PinMode::PublicHttps`：用于网页检索和更新下载。要求 https、443 端口，DNS 结果必须全是公网地址。`github.com`、`www.github.com`、`api.github.com`、`codeload.github.com`、`uploads.github.com`、`*.githubusercontent.com` 允许混入非公网地址，但只连接其中的公网地址。任何主机的解析结果如果整段都是 `198.18.0.0/15`（本机 fake-ip，如 Clash TUN），可以连接这些地址；只要混入回环、RFC1918、链路本地或 ULA 就拒绝。
-- `PinMode::CheckRedirect`：用于模型流和目录刷新。第一跳可以全公网或全私网（本机模型），之后的跳转必须全公网。
+- `PinMode::PublicHttps`：用于更新下载。要求 https、443 端口，DNS 结果必须全是公网地址。`github.com`、`www.github.com`、`api.github.com`、`codeload.github.com`、`uploads.github.com`、`*.githubusercontent.com` 允许混入非公网地址，但只连接其中的公网地址。任何主机的解析结果如果整段都是 `198.18.0.0/15`（本机 fake-ip，如 Clash TUN），可以连接这些地址；只要混入回环、RFC1918、链路本地或 ULA 就拒绝。
+- `PinMode::CheckRedirect`：保留给模型流；当前网关是回环直连，不经过这条路径。第一跳可以全公网或全私网（本机模型），之后的跳转必须全公网。
 
-代理由 `proxy` 设置决定：`System` 跟随系统代理，`Url` 让所有公网主机走指定代理。回环、`.local` 和字面私网地址永远直连。走代理的一跳由代理解析域名，不做地址钉住；仍会做 URL 级检查，并在本地 DNS 返回全私网地址时改为直连。OAuth 使用 `CheckRedirect` 且 `follow_redirects: false`，代理同样生效。
+代理由 `proxy` 设置决定：`System` 跟随系统代理，`Url` 让所有公网主机走指定代理。回环、`.local` 和字面私网地址永远直连。走代理的一跳由代理解析域名，不做地址钉住；仍会做 URL 级检查，并在本地 DNS 返回全私网地址时改为直连。
 
 ## 思考强度
 
-Chat 表先看主机行（OpenRouter、DashScope、OpenDesign），再看模型行。下表按首个命中行排列。
+Chat 表先看模型行；主机行（OpenRouter、DashScope、OpenDesign）是历史遗留——当前端点固定是本机网关，主机行不会命中，保留给直接连接厂商端点的测试。下表按首个命中行排列。
 
 | 族 | Chat Completions | Responses | Anthropic Messages |
 | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ K3 识别只看路径段：`k3`、`k3-*`、`kimi-k3`、`kimi-k3-*`。`k30`、`k3
 
 ## 输出上限
 
-应用层顺序：设置 `maxOutput`（>0）→ 目录 `limit.output`（>0）→ 32000。Anthropic Messages 必须带 `max_tokens`，没有传入时也用 32000；已公布的 `limit.output` 原样发送，不取厂商常量最小值。Chat Completions 用 `max_tokens`，Responses 用 `max_output_tokens`，只在有值时发送。
+应用层顺序：网关 `max_output_tokens`（>0）→ 32000。Anthropic Messages 必须带 `max_tokens`，没有传入时也用 32000；已公布的 `limit.output` 原样发送，不取厂商常量最小值。Chat Completions 用 `max_tokens`，Responses 用 `max_output_tokens`，只在有值时发送。
 
 压缩摘要用自己的上限：模型上限默认 8192，`keeps_thinking_when_off` 时为 32768；实际取该上限与可用窗口的 1/4（带思考为 1/2，最少 2048）中的较小值；遇到 `Length` 重试一次，上限 65536（至少与首次相同）；摘要请求超时 180s。
 
@@ -146,4 +146,3 @@ K3 识别只看路径段：`k3`、`k3-*`、`kimi-k3`、`kimi-k3-*`。`k30`、`k3
 | 重定向跳数 | 5 |
 | 网关模型列表 | 每次刷新时读取，不落盘 |
 | 每个服务商模型数 / 每字符串字段 | 512 / 8 KiB |
-| OpenDesign 提示预留 | 2048 token |
