@@ -13,6 +13,7 @@
 //! is what lets the agent, the tools, and the desktop all agree on one set of
 //! types. See `docs/core.md`.
 
+pub mod attachments;
 pub mod error;
 pub mod events;
 pub mod ids;
@@ -30,6 +31,11 @@ pub mod tool;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+pub use attachments::{
+    AttachError, Attachments, IMAGE_MEDIA_TYPES, ImageAttachment, MAX_ATTACHED_FILES,
+    MAX_ATTACHED_IMAGES, MAX_FILE_BYTES, MAX_FILES_BYTES, MAX_IMAGE_BASE64_BYTES, MAX_IMAGE_BYTES,
+    MAX_MESSAGE_IMAGE_BASE64_BYTES, StoredUserMessage, TextAttachment, image_media_type,
+};
 pub use error::MycodeError;
 pub use events::{AgentEvent, MessageDelta, TurnOutcome};
 pub use ids::CallId;
