@@ -13,8 +13,11 @@
 //! link-local, and ULA are still refused, including a mix that contains one.
 //! [`PinMode::CheckRedirect`] allows a first hop that is entirely public or
 //! entirely private (local models and localhost MCP). Later hops must resolve
-//! to public addresses, including a different host. Every hop in either mode
-//! is https: a redirect cannot downgrade a request to plain http.
+//! to public addresses, including a different host. A hop must be https,
+//! except that a hop may use plain http when its host is a loopback name and
+//! every address it may connect to is loopback: the magpie gateway listens
+//! there without TLS. A redirect cannot carry a request from a public host
+//! down to plain http.
 
 use parking_lot::Mutex;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -178,7 +181,9 @@ pub fn connection_addresses(
             Err(format!("resolved addresses are not all public: {host}"))
         }
         PinMode::CheckRedirect => {
-            require_https(&parsed)?;
+            if parsed.scheme() != "https" && !plain_http_loopback(&parsed, addrs) {
+                return Err("requests must use https".to_owned());
+            }
             if hop == 0 {
                 if !matches!(class, AddressClass::AllPublic | AddressClass::AllPrivate) {
                     return Err("resolved addresses must be all public or all private".to_owned());
@@ -371,7 +376,9 @@ async fn send_hop(
 }
 
 /// URL-level policy for a hop whose addresses this process cannot see
-/// because a proxy resolves the host.
+/// because a proxy resolves the host. A loopback host never reaches here: it
+/// routes directly, so its plain-http allowance is decided with the
+/// addresses in [`connection_addresses`].
 fn check_url(mode: PinMode, url: &str) -> Result<(), String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| format!("url is invalid: {url}"))?;
     if mode == PinMode::PublicHttps {
@@ -383,6 +390,22 @@ fn check_url(mode: PinMode, url: &str) -> Result<(), String> {
         return Err(format!("host is not public: {host}"));
     }
     Ok(())
+}
+
+/// Plain http is only for a gateway on this machine: a loopback host name and
+/// every address it resolved to must be loopback.
+fn plain_http_loopback(parsed: &reqwest::Url, addrs: &[IpAddr]) -> bool {
+    parsed.scheme() == "http"
+        && loopback_host(parsed.host_str().unwrap_or(""))
+        && !addrs.is_empty()
+        && addrs.iter().all(IpAddr::is_loopback)
+}
+
+/// Whether `host` names this machine: `localhost`, `127.0.0.0/8`, or `::1`.
+fn loopback_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Every hop is https. Settings already refuse an `http://` endpoint; this

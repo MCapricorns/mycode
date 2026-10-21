@@ -112,6 +112,84 @@ fn checked_requests_never_use_plain_http() {
     assert!(super::check_url(PinMode::CheckRedirect, "http://cdn.example/asset").is_err());
 }
 
+#[test]
+fn only_a_loopback_first_hop_may_use_plain_http() {
+    // The magpie gateway answers on loopback without TLS.
+    validate_hop(
+        PinMode::CheckRedirect,
+        0,
+        "http://127.0.0.1:3425/v1/chat/completions",
+        &[ip([127, 0, 0, 1])],
+    )
+    .unwrap();
+    validate_hop(
+        PinMode::CheckRedirect,
+        0,
+        "http://localhost:3425/v1/chat/completions",
+        &[ip([127, 0, 0, 1]), v6("::1")],
+    )
+    .unwrap();
+    validate_hop(
+        PinMode::CheckRedirect,
+        0,
+        "http://[::1]:3425/v1/chat/completions",
+        &[v6("::1")],
+    )
+    .unwrap();
+    // A loopback name answered by a public address is not this machine, and
+    // one answered by loopback plus anything else is not either.
+    assert!(
+        validate_hop(
+            PinMode::CheckRedirect,
+            0,
+            "http://localhost:3425/v1/models",
+            &[ip([1, 1, 1, 1])],
+        )
+        .is_err()
+    );
+    assert!(
+        validate_hop(
+            PinMode::CheckRedirect,
+            0,
+            "http://localhost:3425/v1/models",
+            &[ip([127, 0, 0, 1]), ip([1, 1, 1, 1])],
+        )
+        .is_err()
+    );
+    assert!(
+        validate_hop(
+            PinMode::CheckRedirect,
+            0,
+            "http://localhost:3425/v1/models",
+            &[ip([127, 0, 0, 1]), v6("fd00::1")],
+        )
+        .is_err()
+    );
+    // A non-loopback http endpoint still fails.
+    assert!(
+        validate_hop(
+            PinMode::CheckRedirect,
+            0,
+            "http://192.168.1.20:8080/v1/models",
+            &[ip([192, 168, 1, 20])],
+        )
+        .is_err()
+    );
+    // A redirect hop stays https even toward loopback.
+    assert!(
+        validate_hop(
+            PinMode::CheckRedirect,
+            1,
+            "http://127.0.0.1:3425/v1/models",
+            &[ip([127, 0, 0, 1])],
+        )
+        .is_err()
+    );
+    // The proxy-resolved URL check has no loopback exception: that path never
+    // sees a loopback host.
+    assert!(super::check_url(PinMode::CheckRedirect, "http://127.0.0.1:3425/v1/models").is_err());
+}
+
 fn v6(value: &str) -> IpAddr {
     value.parse().unwrap()
 }
