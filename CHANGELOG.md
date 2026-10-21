@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.20] - 2026-10-21
+
 ### Added
 
 - magpie 侧按会话归组请求：会话请求带 `x-magpie-session: <会话 id>` 头（与 `prompt_cache_key` 同值），magpie 的 Sessions 页据此列出、录制和删除对话；标题生成和压缩摘要这类不属于对话的请求不带。只有打开 magpie 的「录制对话」时才保留正文，关闭时只看到会话本身。
@@ -337,7 +339,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.19...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.20...HEAD
+[0.12.20]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.20
 [0.12.19]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.19
 [0.12.18]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.18
 [0.12.17]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.17
