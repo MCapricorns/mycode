@@ -61,16 +61,22 @@ pub(crate) fn project_replayed_entry_with_meter(
                     Some(project_assistant_message(event.event_id.as_str(), &message)),
                     assistant_meter(&message),
                 ),
-                Err(_) => (
-                    Some(ConversationEntry {
-                        event_id: event.event_id.as_str().to_owned(),
-                        kind: EntryKind::UserMessage,
-                        text: decode_text(payload).into(),
-                        call_id: None,
-                        thinking: String::new(),
-                    }),
-                    None,
-                ),
+                Err(_) => {
+                    let text = match mycode_core::StoredUserMessage::from_payload(payload) {
+                        Some(stored) => stored.display_text(),
+                        None => decode_text(payload),
+                    };
+                    (
+                        Some(ConversationEntry {
+                            event_id: event.event_id.as_str().to_owned(),
+                            kind: EntryKind::UserMessage,
+                            text: text.into(),
+                            call_id: None,
+                            thinking: String::new(),
+                        }),
+                        None,
+                    )
+                }
             }
         }
         EventKind::ToolResult => {

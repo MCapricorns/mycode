@@ -108,6 +108,8 @@ pub enum BridgeCommand {
         expected_head: HeadStamp,
         /// Message text; nonempty and bounded by the view-model.
         text: String,
+        /// Images and code files sent beside the text.
+        attachments: mycode_core::Attachments,
     },
     /// Load the settings document with its revision and stored key ids.
     LoadSettings,

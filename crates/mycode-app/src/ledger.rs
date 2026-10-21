@@ -273,6 +273,13 @@ pub(crate) async fn ledger_history(
                         history.push(Arc::new(Message::Assistant(assistant)));
                     }
                     Err(_) => {
+                        // A message with images is stored as the tagged
+                        // envelope; everything older is raw prompt text.
+                        if let Some(stored) = mycode_core::StoredUserMessage::from_payload(payload)
+                        {
+                            history.push(Arc::new(Message::User(stored.user_message())));
+                            return Ok(());
+                        }
                         let text = decode_text(payload);
                         // The transcript copy of a checkpoint summary. Leaving
                         // it in model history would shift `covered_messages`.
@@ -392,12 +399,34 @@ pub(crate) async fn recall_message(
         .map_err(render_error)
 }
 
+/// Test helper: commits a plain-text prompt. The product path goes through
+/// [`send_message_with`] so attachments can ride along.
+#[cfg(test)]
 pub(crate) async fn send_message(
     service: &SessionService,
     session: &SessionId,
     branch: &BranchId,
     expected_head: &HeadStamp,
     text: &str,
+) -> Result<(String, ConversationEntry), SessionError> {
+    send_message_with(
+        service,
+        session,
+        branch,
+        expected_head,
+        text,
+        &mycode_core::Attachments::default(),
+    )
+    .await
+}
+
+pub(crate) async fn send_message_with(
+    service: &SessionService,
+    session: &SessionId,
+    branch: &BranchId,
+    expected_head: &HeadStamp,
+    text: &str,
+    attachments: &mycode_core::Attachments,
 ) -> Result<(String, ConversationEntry), SessionError> {
     // The shared CAS append: reserve, compare-and-swap at the UI's head, and
     // re-commit at the durable tip on a moved head. Identical to every other
@@ -408,13 +437,24 @@ pub(crate) async fn send_message(
         branch.clone(),
         expected_head.clone(),
     );
-    let event_id = writer.write(EventKind::Message, text.as_bytes()).await?;
+    let (payload, display) = if attachments.is_empty() {
+        (text.as_bytes().to_vec(), text.to_owned())
+    } else {
+        let stored = mycode_core::StoredUserMessage {
+            prompt: text.to_owned(),
+            attachments: attachments.clone(),
+        };
+        let payload = stored.to_payload().map_err(|_| SessionError::Unavailable)?;
+        let display = stored.display_text();
+        (payload, display)
+    };
+    let event_id = writer.write(EventKind::Message, &payload).await?;
     Ok((
         event_id.clone(),
         ConversationEntry {
             event_id,
             kind: EntryKind::UserMessage,
-            text: text.into(),
+            text: display.into(),
             call_id: None,
             thinking: String::new(),
         },

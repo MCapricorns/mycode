@@ -199,6 +199,7 @@ async fn assert_failure_routes(failure: Failure) {
             branch: BranchId::parse("br1-0123456789abcdef0123456789abcdef").unwrap(),
             expected_head: HeadStamp::Empty,
             text: "unsent".to_owned(),
+            attachments: mycode_core::Attachments::default(),
         },
         failure,
     )

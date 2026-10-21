@@ -63,6 +63,11 @@ impl FrontendDriver {
                         self.pending_composer_prefill = Some(text.clone());
                         out.push(Effect::ComposerSet { text, focus: true });
                     }
+                    if !self.welcome_attachments.is_empty() {
+                        // The compose text comes back above; its files and
+                        // pictures come back with it, not into a toast.
+                        self.return_welcome_attachments(out);
+                    }
                     self.act(FrontendAction::WelcomeSendConsumed, out);
                 }
                 if let Some(project) = self.pending_project.take() {
@@ -163,6 +168,7 @@ impl FrontendDriver {
                 // A send that raced a session switch must not touch the
                 // conversation now open; the committed entry lives in its
                 // own session's ledger and shows on reopen.
+                self.pending_send_attachments.remove(&session);
                 let applicable = self
                     .vm
                     .active
@@ -544,6 +550,7 @@ impl FrontendDriver {
             }
             BridgeReply::Created(Err(message)) => {
                 self.welcome_send_session = None;
+                self.return_welcome_attachments(out);
                 self.act(FrontendAction::WelcomeSendConsumed, out);
                 self.act(FrontendAction::Failed(message), out);
             }
@@ -554,6 +561,7 @@ impl FrontendDriver {
                 self.release_held_send();
                 if self.welcome_send_session.is_some() {
                     self.welcome_send_session = None;
+                    self.return_welcome_attachments(out);
                     self.act(FrontendAction::WelcomeSendConsumed, out);
                 }
                 self.act(FrontendAction::Failed(message), out);
@@ -563,6 +571,7 @@ impl FrontendDriver {
                 text,
                 outcome: Err(message),
             } => {
+                let attachments = self.pending_send_attachments.remove(&session);
                 if self
                     .vm
                     .active
@@ -573,6 +582,11 @@ impl FrontendDriver {
                     // The composer was cleared when the send went out; the
                     // text comes back instead of vanishing with the error.
                     self.restore_above_draft(text, out);
+                    if let Some(attachments) = attachments
+                        && !attachments.is_empty()
+                    {
+                        out.push(Effect::AttachmentsRestored(attachments));
+                    }
                 }
             }
             BridgeReply::ChatStarted(Err(message)) => {

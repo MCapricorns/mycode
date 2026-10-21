@@ -7,7 +7,7 @@ use mycode_config::{HomeLayout, read_ui_state, replace_ui_state, update_ui_state
 
 use crate::ledger::{
     delete_session, forget_session_bindings, inspect_summaries, load_older, open_conversation,
-    recall_message, render_error, send_message,
+    recall_message, render_error, send_message_with,
 };
 use crate::mcp_tools::mcp_list_tools;
 use crate::search::search_project_files;
@@ -438,10 +438,18 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             branch,
             expected_head,
             text,
+            attachments,
         } => {
-            let outcome = send_message(&state.service, &session, &branch, &expected_head, &text)
-                .await
-                .map_err(render_error);
+            let outcome = send_message_with(
+                &state.service,
+                &session,
+                &branch,
+                &expected_head,
+                &text,
+                &attachments,
+            )
+            .await
+            .map_err(render_error);
             BridgeReply::Sent {
                 session: session.to_string(),
                 text,
