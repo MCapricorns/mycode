@@ -81,7 +81,16 @@ fn scratch_home(label: &str) -> mycode_config::HomeLayout {
 
 /// The settings rows for one scratch home, with a cold shared-server cache.
 fn page_rows(vm: &WorkspaceState, home: &mycode_config::HomeLayout) -> Vec<SettingRow> {
-    settings_rows(vm, home, &mut SharedServers::default())
+    page_rows_with(vm, home, &mut SharedServers::default())
+}
+
+/// The settings rows for one read with a caller-owned shared cache.
+fn page_rows_with(
+    vm: &WorkspaceState,
+    home: &mycode_config::HomeLayout,
+    cache: &mut SharedServers,
+) -> Vec<SettingRow> {
+    settings_rows(vm, home, cache)
 }
 
 /// The selectable items for one scratch home.
@@ -108,9 +117,11 @@ fn settings_list_the_servers_magpie_shares() {
         rows.iter().any(|row| matches!(
             row,
             SettingRow::Info { label, value }
-                if label == "anysearch" && value.contains("https://api.anysearch.com/mcp")
+                if label == "anysearch"
+                    && value.contains("https://api.anysearch.com/mcp")
+                    && !value.ends_with("· off")
         )),
-        "magpie's server is missing from the MCP rows"
+        "magpie's enabled server is missing or marked off"
     );
     assert!(!rows.iter().any(|row| matches!(
         row,
@@ -251,4 +262,81 @@ fn wheel_cursor_steps_three_rows_and_stays_on_the_list() {
     // The list shrank since the cursor was set: clamp, then step.
     assert_eq!(wheel_cursor(20, true, 5), 1);
     assert_eq!(wheel_cursor(20, false, 5), 4);
+}
+
+/// The read-only rows sourced from magpie's `mcp.json`.
+fn shared_rows(rows: &[SettingRow]) -> Vec<(String, String)> {
+    rows.iter()
+        .filter_map(|row| match row {
+            SettingRow::Info { label, value } if value.contains(" · magpie") => {
+                Some((label.clone(), value.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// One cache follows the file: new servers appear, a deleted file empties the
+/// section, a broken file reports itself, and a fixed file clears the error.
+#[test]
+fn shared_rows_follow_the_file_through_the_cache() {
+    let home = scratch_home("cache");
+    let vm = WorkspaceState::default();
+    let mut cache = SharedServers::default();
+    let file = home.root().join("mcp.json");
+    assert!(shared_rows(&page_rows_with(&vm, &home, &mut cache)).is_empty());
+
+    std::fs::write(
+        &file,
+        r#"{"mcpServers":{"anysearch":{"type":"http","url":"https://a.example/mcp"}}}"#,
+    )
+    .unwrap();
+    let rows = page_rows_with(&vm, &home, &mut cache);
+    assert_eq!(shared_rows(&rows).len(), 1, "the first write is read");
+
+    // A longer document, so the cached stamp cannot match by length.
+    std::fs::write(
+        &file,
+        r#"{"mcpServers":{"anysearch":{"type":"http","url":"https://a.example/mcp"},"context7":{"type":"http","url":"https://mcp.context7.com/mcp"}}}"#,
+    )
+    .unwrap();
+    let rows = page_rows_with(&vm, &home, &mut cache);
+    assert!(
+        shared_rows(&rows)
+            .iter()
+            .any(|(label, _)| label == "context7"),
+        "a rewritten file replaces the cached rows"
+    );
+
+    std::fs::remove_file(&file).unwrap();
+    assert!(
+        shared_rows(&page_rows_with(&vm, &home, &mut cache)).is_empty(),
+        "a deleted file clears the cached rows"
+    );
+
+    std::fs::write(&file, "{").unwrap();
+    let rows = page_rows_with(&vm, &home, &mut cache);
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            SettingRow::Info { value, .. } if value.starts_with('✗')
+        )),
+        "a broken file is reported"
+    );
+
+    std::fs::write(
+        &file,
+        r#"{"mcpServers":{"context7":{"type":"http","url":"https://mcp.context7.com/mcp"}}}"#,
+    )
+    .unwrap();
+    let rows = page_rows_with(&vm, &home, &mut cache);
+    assert!(
+        rows.iter().all(|row| !matches!(
+            row,
+            SettingRow::Info { value, .. } if value.starts_with('✗')
+        )),
+        "fixing the file clears the cached error"
+    );
+    assert_eq!(shared_rows(&rows).len(), 1);
+    let _ = std::fs::remove_dir_all(home.root());
 }
