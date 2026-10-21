@@ -1,7 +1,8 @@
 use super::input::choice_numbers;
 use super::render::render_entry;
-use super::settings_rows::{SettingRow, settings_items, settings_rows};
+use super::settings_rows::{SettingRow, SharedServers, settings_items, settings_rows};
 use super::theme::Palette;
+use super::wheel_cursor;
 use mycode_app::{ConversationEntry, EntryKind};
 use mycode_frontend::view_model::WorkspaceState;
 
@@ -48,7 +49,7 @@ fn choice_numbers_accept_lists_and_reject_free_text() {
 fn settings_list_the_shortcuts_without_selecting_them() {
     let home = scratch_home("shortcuts");
     let vm = WorkspaceState::default();
-    let keys: Vec<String> = settings_rows(&vm, &home)
+    let keys: Vec<String> = page_rows(&vm, &home)
         .into_iter()
         .filter_map(|row| match row {
             SettingRow::Info { label, .. } => Some(label),
@@ -57,8 +58,8 @@ fn settings_list_the_shortcuts_without_selecting_them() {
         .collect();
     assert!(keys.iter().any(|keys| keys == "Ctrl+Enter"));
     assert!(keys.iter().any(|keys| keys == "Ctrl+G"));
-    let selectable = settings_items(&vm, &home).len();
-    let items = settings_rows(&vm, &home)
+    let selectable = page_items(&vm, &home).len();
+    let items = page_rows(&vm, &home)
         .iter()
         .filter(|row| matches!(row, SettingRow::Item { .. }))
         .count();
@@ -78,6 +79,19 @@ fn scratch_home(label: &str) -> mycode_config::HomeLayout {
     mycode_config::HomeLayout::from_root(root).unwrap()
 }
 
+/// The settings rows for one scratch home, with a cold shared-server cache.
+fn page_rows(vm: &WorkspaceState, home: &mycode_config::HomeLayout) -> Vec<SettingRow> {
+    settings_rows(vm, home, &mut SharedServers::default())
+}
+
+/// The selectable items for one scratch home.
+fn page_items(
+    vm: &WorkspaceState,
+    home: &mycode_config::HomeLayout,
+) -> Vec<super::settings::SettingItem> {
+    settings_items(vm, home, &mut SharedServers::default())
+}
+
 /// magpie's shared servers are listed read-only, so the MCP section never
 /// says "none configured" while connected tools exist.
 #[test]
@@ -89,7 +103,7 @@ fn settings_list_the_servers_magpie_shares() {
     )
     .unwrap();
     let vm = WorkspaceState::default();
-    let rows = settings_rows(&vm, &home);
+    let rows = page_rows(&vm, &home);
     assert!(
         rows.iter().any(|row| matches!(
             row,
@@ -104,7 +118,7 @@ fn settings_list_the_servers_magpie_shares() {
     )));
     // Read-only: magpie's rows are not selectable settings items.
     assert!(
-        settings_items(&vm, &home)
+        page_items(&vm, &home)
             .iter()
             .all(|item| !matches!(item, super::settings::SettingItem::Mcp(_)))
     );
@@ -139,7 +153,7 @@ fn a_configured_server_shadows_the_shared_one() {
         )),
         ..WorkspaceState::default()
     };
-    let rows = settings_rows(&vm, &home);
+    let rows = page_rows(&vm, &home);
     let labels: Vec<&str> = rows
         .iter()
         .filter_map(|row| match row {
@@ -165,7 +179,7 @@ fn a_configured_server_shadows_the_shared_one() {
         "{labels:?}"
     );
     // The user row stays selectable and keeps its index.
-    let items = settings_items(&vm, &home);
+    let items = page_items(&vm, &home);
     let item_rows = rows
         .iter()
         .filter(|row| matches!(row, SettingRow::Item { .. }))
@@ -187,7 +201,7 @@ fn a_broken_shared_config_is_reported_without_none_configured() {
     let home = scratch_home("broken");
     std::fs::write(home.root().join("mcp.json"), "{").unwrap();
     let vm = WorkspaceState::default();
-    let rows = settings_rows(&vm, &home);
+    let rows = page_rows(&vm, &home);
     assert!(rows.iter().any(|row| matches!(
         row,
         SettingRow::Info { label, value } if label == "magpie" && value.starts_with('✗')
@@ -197,4 +211,44 @@ fn a_broken_shared_config_is_reported_without_none_configured() {
         SettingRow::Header(title) if title.contains("none configured")
     )));
     let _ = std::fs::remove_dir_all(home.root());
+}
+
+/// A shared server magpie switched off is listed, but marked so the row does
+/// not promise tools that never connect.
+#[test]
+fn a_disabled_shared_server_is_marked_off() {
+    let home = scratch_home("off");
+    std::fs::write(
+        home.root().join("mcp.json"),
+        r#"{"mcpServers":{"anysearch":{"type":"http","url":"https://api.anysearch.com/mcp","disabled":true}}}"#,
+    )
+    .unwrap();
+    let vm = WorkspaceState::default();
+    let rows = page_rows(&vm, &home);
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            SettingRow::Info { label, value }
+                if label == "anysearch" && value.ends_with("· off")
+        )),
+        "the disabled shared server is not marked off"
+    );
+    let _ = std::fs::remove_dir_all(home.root());
+}
+
+/// Wheel notches step three rows and never leave the cursor off the list,
+/// even after the list shrank under it.
+#[test]
+fn wheel_cursor_steps_three_rows_and_stays_on_the_list() {
+    assert_eq!(wheel_cursor(0, false, 0), 0);
+    assert_eq!(wheel_cursor(0, true, 0), 0);
+    assert_eq!(wheel_cursor(0, false, 10), 3);
+    assert_eq!(wheel_cursor(9, true, 10), 6);
+    assert_eq!(wheel_cursor(1, true, 10), 0);
+    // One notch past the end lands on the last row, not beyond it.
+    assert_eq!(wheel_cursor(8, false, 10), 9);
+    assert_eq!(wheel_cursor(9, false, 10), 9);
+    // The list shrank since the cursor was set: clamp, then step.
+    assert_eq!(wheel_cursor(20, true, 5), 1);
+    assert_eq!(wheel_cursor(20, false, 5), 4);
 }

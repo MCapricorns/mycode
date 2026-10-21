@@ -83,6 +83,8 @@ const MENU_ROWS: usize = 8;
 const CRAB: Color = Color::Rgb(0xf0, 0x74, 0x20);
 /// Rows of the settings picker overlay.
 const PICKER_ROWS: usize = 10;
+/// Rows one wheel notch moves: three, so one trackpad flick is not one line.
+const WHEEL_ROWS: usize = 3;
 
 /// One transient notice above the status bar.
 struct Notice {
@@ -130,6 +132,9 @@ struct Tui {
     /// Events read while checking for a paste burst, replayed in order
     /// before the next poll.
     pending_events: std::collections::VecDeque<Event>,
+    /// magpie's shared MCP servers, cached until `~/.mycode/mcp.json`
+    /// changes so a painting settings page does not re-read it.
+    shared_mcp: settings_rows::SharedServers,
     quit: bool,
 }
 
@@ -240,6 +245,7 @@ impl Tui {
             was_settings: false,
             stream_paint: Instant::now(),
             pending_events: std::collections::VecDeque::new(),
+            shared_mcp: settings_rows::SharedServers::default(),
             quit: false,
         }
     }
@@ -419,7 +425,6 @@ impl Tui {
     /// Wheel notches: three rows each, so one flick is not one line on a
     /// trackpad. The settings page scrolls by moving its cursor.
     fn on_mouse(&mut self, kind: MouseEventKind) {
-        const ROWS: usize = 3;
         let back = match kind {
             MouseEventKind::ScrollUp => true,
             MouseEventKind::ScrollDown => false,
@@ -431,19 +436,12 @@ impl Tui {
             if self.settings_overlay.is_some() {
                 return;
             }
-            let items = settings_items(self.driver.vm(), self.driver.home());
-            if items.is_empty() {
-                return;
-            }
-            self.settings_cursor = if back {
-                self.settings_cursor.saturating_sub(ROWS)
-            } else {
-                (self.settings_cursor + ROWS).min(items.len() - 1)
-            };
+            let items = settings_items(self.driver.vm(), self.driver.home(), &mut self.shared_mcp);
+            self.settings_cursor = wheel_cursor(self.settings_cursor, back, items.len());
         } else if back {
-            self.scroll = self.scroll.saturating_add(ROWS);
+            self.scroll = self.scroll.saturating_add(WHEEL_ROWS);
         } else {
-            self.scroll = self.scroll.saturating_sub(ROWS);
+            self.scroll = self.scroll.saturating_sub(WHEEL_ROWS);
         }
     }
 
@@ -465,5 +463,20 @@ impl Tui {
         if self.notices.len() != before {
             self.dirty = true;
         }
+    }
+}
+
+/// The settings cursor after one wheel notch in a list of `len` rows. A
+/// cursor past the end (the list shrank since it was last set) is clamped
+/// first, so Enter still has a row to act on.
+fn wheel_cursor(cursor: usize, back: bool, len: usize) -> usize {
+    let Some(last) = len.checked_sub(1) else {
+        return 0;
+    };
+    let cursor = cursor.min(last);
+    if back {
+        cursor.saturating_sub(WHEEL_ROWS)
+    } else {
+        (cursor + WHEEL_ROWS).min(last)
     }
 }
