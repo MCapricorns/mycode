@@ -103,18 +103,55 @@ pub(super) fn plan_fuzzy(
     replacement_bytes: &mut usize,
     cancel: &CancellationToken,
 ) -> Result<(), ToolError> {
+    plan_fuzzy_inner(body, op, bom_len, planned, replacement_bytes, cancel, false)
+}
+
+/// Automatic fallback after an exact literal miss: like [`plan_fuzzy`], but
+/// only windows with the needle's token count compete. A shorter window is
+/// always one deletion away and would otherwise veto a correct unique match.
+pub(super) fn plan_fuzzy_fallback(
+    body: &str,
+    op: FuzzyPlan<'_>,
+    bom_len: usize,
+    planned: &mut Vec<Planned>,
+    replacement_bytes: &mut usize,
+    cancel: &CancellationToken,
+) -> Result<(), ToolError> {
+    plan_fuzzy_inner(body, op, bom_len, planned, replacement_bytes, cancel, true)
+}
+
+fn plan_fuzzy_inner(
+    body: &str,
+    op: FuzzyPlan<'_>,
+    bom_len: usize,
+    planned: &mut Vec<Planned>,
+    replacement_bytes: &mut usize,
+    cancel: &CancellationToken,
+    same_token_count: bool,
+) -> Result<(), ToolError> {
     let FuzzyPlan {
         pattern,
         replacement,
         max_distance,
     } = op;
     let needle = normalize(pattern, MAX_FUZZY_TOKENS, Some(cancel))?;
+    if needle.tokens.is_empty() {
+        return Err(ToolError::InvalidArgs(
+            "fuzzy pattern is only whitespace after tokenization".to_owned(),
+        ));
+    }
     let haystack = normalize(body, MAX_FUZZY_TOKENS, Some(cancel))?;
     let needle_chars = needle.norm.chars().count();
     let required_margin = required_margin(needle_chars);
     let ranking_distance = max_distance.saturating_add(required_margin.saturating_sub(1));
 
-    let rank = score_windows(&needle, &haystack, ranking_distance, cancel)?;
+    let rank = score_windows(
+        &needle,
+        &haystack,
+        ranking_distance,
+        same_token_count,
+        cancel,
+    )?;
     let Some(best) = rank
         .best
         .filter(|candidate| candidate.distance <= max_distance)
@@ -268,6 +305,7 @@ fn score_windows(
     needle: &Normalized,
     haystack: &Normalized,
     ranking_distance: u32,
+    same_token_count: bool,
     cancel: &CancellationToken,
 ) -> Result<Rank, ToolError> {
     let mut rank = Rank {
@@ -280,8 +318,11 @@ fn score_windows(
     }
     let t = needle.tokens.len();
     let k = ranking_distance as usize;
-    let min_toks = t.saturating_sub(k).max(1);
-    let max_toks = t.saturating_add(k);
+    let (min_toks, max_toks) = if same_token_count {
+        (t, t)
+    } else {
+        (t.saturating_sub(k).max(1), t.saturating_add(k))
+    };
     let starts = candidate_starts(needle, haystack, max_toks, k, cancel)?;
     let mut attempted = 0usize;
     for start in starts {

@@ -267,12 +267,12 @@ impl Tool for EditTool {
         }
         check_cancel(&ctx.cancel)?;
         let planning_cancel = ctx.cancel.clone();
-        let (snapshot, applied) = tokio::task::spawn_blocking(move || {
+        let (snapshot, applied, notes) = tokio::task::spawn_blocking(move || {
             check_cancel(&planning_cancel)?;
-            let planned = plan_edits(&snapshot.text, &ops, &planning_cancel)?;
+            let (planned, notes) = plan_edits_with_notes(&snapshot.text, &ops, &planning_cancel)?;
             let applied = apply_planned(&snapshot.text, &planned, &planning_cancel)?;
             check_cancel(&planning_cancel)?;
-            Ok::<_, ToolError>((snapshot, applied))
+            Ok::<_, ToolError>((snapshot, applied, notes))
         })
         .await
         .map_err(|error| ToolError::Execution(format!("edit planning worker failed: {error}")))??;
@@ -287,6 +287,7 @@ impl Tool for EditTool {
                 &snapshot.path_key,
                 snapshot.revision.as_str(),
                 &applied,
+                &notes,
                 false,
             ));
         }
@@ -315,6 +316,7 @@ impl Tool for EditTool {
             &outcome.path_key,
             outcome.revision.as_str(),
             &applied,
+            &notes,
             outcome.detached_hardlink,
         ))
     }
@@ -325,6 +327,112 @@ mod fuzzy;
 mod line;
 mod normalize;
 use engine::*;
+
+#[cfg(test)]
+mod compat_tests {
+    use super::{EditArgs, EditTool};
+    use crate::stream::ToolStream;
+    use crate::tool::{ToolDyn, ToolResult};
+    use serde_json::Value;
+
+    async fn run(dir: &std::path::Path, file: &std::path::Path, args: Value) -> ToolResult {
+        let args_json = args;
+        let ctx = crate::prepare_tool_ctx(
+            dir,
+            &[],
+            &[],
+            tokio_util::sync::CancellationToken::new(),
+            "call-compat",
+            &EditTool,
+            &args_json,
+        )
+        .await
+        .expect("preflight succeeds");
+        let _ = file;
+        let (mut stream, _rx) = ToolStream::channel();
+        ToolDyn::execute_dyn(&EditTool, args_json, &ctx, &mut stream)
+            .await
+            .expect("compat edit runs")
+    }
+
+    /// A block copied from an older read usually keeps the lines but not the
+    /// indentation. The relaxed pass edits it and says so.
+    #[tokio::test]
+    async fn a_literal_miss_with_different_indentation_is_repaired() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-edit-relaxed-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("workspace");
+        let file = base.join("target.rs");
+        std::fs::write(
+            &file,
+            "fn main() {\n    let x = 1;\n    println!(\"{x}\");\n}\n",
+        )
+        .expect("seed file");
+        let args = serde_json::json!({
+            "path": file.display().to_string(),
+            "old_string": "  let x = 1;\n  println!(\"{x}\");",
+            "new_string": "    let x = 2;"
+        });
+        let result = run(&base, &file, args).await;
+        assert!(!result.is_error, "{result:?}");
+        let text = format!("{:?}", result.content);
+        assert!(text.contains("ignoring whitespace"), "{text}");
+        let body = std::fs::read_to_string(&file).expect("read back");
+        assert!(body.contains("let x = 2;"), "{body}");
+        assert!(!body.contains("println!"), "{body}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A line number from before an earlier edit is repaired from the unique
+    /// expected block instead of failing the whole call.
+    #[tokio::test]
+    async fn a_moved_line_range_edits_the_expected_block() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-edit-line-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("workspace");
+        let file = base.join("target.txt");
+        std::fs::write(&file, "alpha\nbeta\ngamma\n").expect("seed file");
+        let args = serde_json::json!({
+            "path": file.display().to_string(),
+            "operations": [{
+                "type": "line_range",
+                "start_line": 1,
+                "end_line": 1,
+                "expected_text": "beta",
+                "replacement": "BETA"
+            }]
+        });
+        let result = run(&base, &file, args).await;
+        assert!(!result.is_error, "{result:?}");
+        let text = format!("{:?}", result.content);
+        assert!(text.contains("no longer matches"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read back"),
+            "alpha\nBETA\ngamma\n"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The execute path is the one the agent uses; keep the typed args
+    /// constructing cleanly after the compat changes.
+    #[allow(dead_code)]
+    fn _typed_args(path: String) -> EditArgs {
+        EditArgs {
+            path,
+            expected_revision: None,
+            old_string: None,
+            new_string: None,
+            replace_all: false,
+            operations: None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod schema_tests {
