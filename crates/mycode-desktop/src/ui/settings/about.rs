@@ -1,6 +1,6 @@
-//! The About settings page: version, self-update controls, and the provider
-//! catalog date. Every transient notice is a toast; nothing status-like is
-//! painted here.
+//! The About settings page: version and self-update controls. Every
+//! transient notice is a toast; nothing status-like is painted here.
+//! The gateway's model list lives on the Magpie page, not here.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::switch::Switch;
@@ -19,17 +19,6 @@ pub(super) fn render_about_section(
 ) -> AnyElement {
     let vm = workspace.vm();
     let current = mycode_app::current_version();
-    let catalog_line = match vm.catalog_fetched_at {
-        0 => t("built-in providers", "内置服务商").to_owned(),
-        seconds => {
-            let date = catalog_date(seconds);
-            format!(
-                "{} · {} {date}",
-                t("cloud catalog", "云端目录"),
-                t("fetched", "获取于")
-            )
-        }
-    };
     let auto_update = vm.auto_update;
     let checking = matches!(vm.update, UpdateState::Checking);
     let downloading = matches!(vm.update, UpdateState::Downloading { .. });
@@ -140,34 +129,6 @@ pub(super) fn render_about_section(
                 .into_any_element(),
             cx.theme(),
         ),
-        settings_row(
-            "catalog",
-            t("Provider catalog", "服务商目录"),
-            None,
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(catalog_line),
-                )
-                .child(
-                    Button::new("catalog-refresh")
-                        .icon(IconName::RefreshCw)
-                        .label(t("Refresh", "刷新"))
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_refresh_catalog(cx);
-                        })),
-                )
-                .into_any_element(),
-            cx.theme(),
-        ),
     ];
     let theme = cx.theme();
     settings_card(
@@ -181,17 +142,4 @@ pub(super) fn render_about_section(
         rows,
     )
     .into_any_element()
-}
-
-/// The local calendar date of a unix timestamp, `YYYY-MM-DD`.
-fn catalog_date(seconds: u64) -> String {
-    i64::try_from(seconds)
-        .ok()
-        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
-        .map(|utc| {
-            utc.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d")
-                .to_string()
-        })
-        .unwrap_or_default()
 }

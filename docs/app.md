@@ -1,6 +1,6 @@
 # mycode-app
 
-没有界面依赖的应用核。前端启动 `CoreBridge`，发送 `BridgeCommand`，等待 `BridgeReply`，渲染 `BridgeEvent`。会话、回合、工具宿主、MCP、网页、OAuth、设置、导出和自更新都在这里。
+没有界面依赖的应用核。前端启动 `CoreBridge`，发送 `BridgeCommand`，等待 `BridgeReply`，渲染 `BridgeEvent`。会话、回合、工具宿主、MCP、magpie 网关、设置、导出和自更新都在这里。
 
 ## 桥与线程
 
@@ -8,10 +8,10 @@
 - 命令通道无界，`send` 同步。工作循环 `await` 命令，不能堵住运行时线程。
 - 回复走 oneshot，接收端在哪个执行器上 poll 都行。丢掉回复 future 只是不再等，持久效果已经发生。
 - 事件通道是 tokio 无界 mpsc，`send` 同步返回并唤醒接收端，慢界面不会卡住核心。前端每帧只取一小段增量（80 字、16 个增量），结束事件留到下一帧。
-- `ChatTurn`、`CompactSession`、标题、OAuth、目录刷新、更新、探测各自 spawn。`CancelChat`、`Steer`、`CancelSubagent`、`UiReady` 在命令循环上同步处理。其余存储/配置命令进 `JoinSet`，关闭时先排空，再关 `SessionService`。
+- `ChatTurn`、`CompactSession`、标题、目录刷新、更新、探测各自 spawn。`CancelChat`、`Steer`、`CancelSubagent`、`UiReady` 在命令循环上同步处理。其余存储/配置命令进 `JoinSet`，关闭时先排空，再关 `SessionService`。
 - 文件锁、原子写、目录遍历都在 `spawn_blocking` 里，阻塞池上限 32。
 
-启动顺序：回收上次崩溃留下的子代理 worktree（`agent-worktrees/`，以及旧版 `task-worktrees/`；租约按进程号命名，仍在运行的其他进程的租约保留）；在阻塞池读取并校验目录缓存信封；建 `CoreState`（同时从 `ui.json` 恢复会话到文件夹的绑定）。目录刷新和更新检查等首帧 `UiReady` 后才开始；`ui.json` 的 `auto_update` 关闭时不做更新检查。
+启动顺序：回收上次崩溃留下的子代理 worktree（`agent-worktrees/`，以及旧版 `task-worktrees/`；租约按进程号命名，仍在运行的其他进程的租约保留）；建 `CoreState`（同时从 `ui.json` 恢复会话到文件夹的绑定）。网关模型列表刷新和更新检查等首帧 `UiReady` 后才开始；`ui.json` 的 `auto_update` 关闭时不做更新检查。
 
 ## 模块
 
@@ -19,20 +19,19 @@
 | --- | --- |
 | `protocol` | 纯数据协议：会话行、转录条目、活动对话、旧页、流式回复、`ask_user` 问题。身份类型从 agent 再导出 |
 | `dispatch` | 命令循环、并发分发、会话删除的取消顺序 |
-| `state` | 家目录、`SessionService`、内存目录、会话到文件夹映射、Copilot bearer 缓存、回合/子代理取消令牌、steer 收件箱、MCP 连接池 |
+| `state` | 家目录、`SessionService`、内存目录、会话到文件夹映射、回合/子代理取消令牌、steer 收件箱、MCP 连接池 |
 | `ledger` | 读历史、CAS 按头追加、打开尾部 40 条、每次再翻 40 条、召回、删除 |
 | `turn` | 一次回合和 `/compact`：凭据、认证、历史、工具、提示词、压缩钩子、`Agent`、事件泵 |
 | `projection` | 账本事件 → 转录行；同时恢复最近一次请求的上下文大小和缓存读 |
 | `compaction` | 自动压缩、检查点读写、摘要请求与重试 |
-| `tool_hosts` | `ask_user` 路由；网页后端密钥先看环境变量，再看密钥库 |
+| `tool_hosts` | `ask_user` 路由 |
 | `subagent` | 角色目录、工具白名单、每回合 8 个并发名额、worktree、按角色路由 |
 | `mcp_client` / `mcp_tools` | stdio / Streamable HTTP，协议版本 `2025-06-18` |
-| `web_client` | Querit、AnySearch、Exa；搜索最多 32 条、一次抓 8 个 URL、响应 8 MiB、单页 1M 字符、搜索 30 秒 / 取页 45 秒超时。Bearer 由传输层加 |
-| `oauth` | Copilot、Codex 设备码登录，以及每次请求前的令牌处理 |
+| `magpie` | 读 `settings.magpie`、请求网关的 `GET /v1/models`、构造唯一的 provider 行 |
 | `user_agent` | 固定 UA：`MYCode-Agent/<版本> (<平台> <系统版本>; <架构>; <shell>)`，不是设置项 |
 | `settings_io` | 设置 CAS、单把密钥写入、代理设置生效 |
 | `search` | 作曲栏 `@` 文件搜索：不区分大小写子串，跳过 `.git`、`node_modules`、`target`、`dist`、`build` 等目录，最多访问 8192 个目录项，返回最短的 8 条 |
-| `export` | 导出/导入设置、界面状态和明文 API 密钥，不带会话；包版本 2，上限 48 MiB，可导入版本 1/2 |
+| `export` | 导出/导入设置、界面状态和明文 MCP API 密钥，不带会话；包版本 2，上限 48 MiB，可导入版本 1/2 |
 | `updates` | 检查、下载、SHA-256 校验、暂存和重启安装；资产上限 512 MiB，待安装包最多尝试 3 次启动 |
 | `install` | 自安装：终端版复制进 `<home>/bin` 并写 PATH；桌面版仅 Windows 自安装 |
 | `title` | 侧栏标题：一次无工具、无 system prompt 的后台请求，60 秒超时，标题最多 72 字符 |
@@ -42,15 +41,15 @@
 `chat_turn` 的顺序：
 
 1. 工作目录用会话绑定的文件夹，不存在就建；没有绑定用 `<home>/scratch/`。
-2. 读设置和密钥。提供商必须启用且有密钥；和保存命令并发时最多读 3 次，间隔 150ms。
-3. `resolve_request_auth` 取认证头和额外头，再 `ResolvedProvider::resolve`。
+2. `turn_credentials` 读设置里的 magpie 绑定；provider 必须是 `magpie` 且绑定完整（地址、密钥、模型）。
+3. `ResolvedProvider::resolve` 用网关密钥解析端点（`openai-completions`）。
 4. 重新读该分支的持久头，从账本回放整段分支。界面专用的 `COMPACTION SUMMARY` 行跳过；并行工具结果按调用顺序重排。
 5. 取最后一条有文字的用户消息作为本次 prompt；它后面的助手消息或工具结果只在本次请求里省略，账本不动。
 6. 连接 MCP，发现角色与工作区额外文件夹。
-7. 建工具表：内置工具、`ask_user`；网页后端可用（`web_backend_ready`：有可用后端，需要 key 的已有 key）时才加 `web_search`、`fetch_content`；至少一个角色启用时加 `agent`；连上的 MCP 按直连/延迟规则注册。
+7. 建工具表：内置工具、`ask_user`；至少一个角色启用时加 `agent`；连上的 MCP 按直连/延迟规则注册。
 8. 拼 system prompt：固定身份和 `<working_style>` + `build_system_prompt` 的工具说明 + 子代理委派表；然后是 `<environment>` / `<shell>`、资源文件（`AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`）、skill 目录、MCP 说明、其它工作区文件夹和临时目录。skill 和文件夹排序，保证同样的文件得到相同字节。
 9. 跑一次回合前压缩；写出检查点就立刻写摘要卡片并发 `SummaryShown`。
-10. `AgentConfig` 带 system prompt、`prompt_cache_key` = 会话 id、输出上限（设置 `maxOutput` → 目录 `limit.output` → 32000）、会话自己的思考档位（`ChatTurn.reasoning`）。装压缩钩子，`Agent::prompt`。不保存文件快照。
+10. `AgentConfig` 带 system prompt、`prompt_cache_key` = 会话 id、输出上限（设置 `maxOutput` → 网关 `max_output_tokens` → 32000）、会话自己的思考档位（`ChatTurn.reasoning`）。装压缩钩子，`Agent::prompt`。不保存文件快照。
 
 ## 事件泵与取消
 
@@ -84,11 +83,11 @@
 
 - 每个父回合最多 8 个子代理，多出的排队；artisan 排队时发一条 `capped` 进度，scout 只排队。
 - 没有墙钟超时。父回合取消、`CancelSubagent`、删除会话都会结束它，排队中的也一样。
-- 工具取角色白名单和父级工具的交集。角色没写时继承 `read`、`write`、`edit`、`shell`、`grep`、`find`、`web_search`、`fetch_content`。`shell`/`bash`/`powershell`/`cmd` 都映射到当前进程实际的那个解释器。
+- 工具取角色白名单和父级工具的交集。角色没写时继承 `read`、`write`、`edit`、`shell`、`grep`、`find`。`shell`/`bash`/`powershell`/`cmd` 都映射到当前进程实际的那个解释器。
 - scout 强制只读：不注册写工具和 shell，MCP 只拿 `readOnlyHint` 为 true 的工具。
-- 子代理的 system prompt 带上会话工作区的 `AGENTS.md` / `MYCODE.md` 资源（按会话 cwd 发现，worktree 里看不到未提交的改动），并把它们和匹配的 `SKILL.md` 当作用户的常驻指令；其它文件、工具输出和网页仍是数据。
-- 连上的 MCP 会注册，`<mcp>` 说明与父回合共用同一份目录文本，只读角色另注明只拿 `readOnlyHint` 工具；子代理不能 `ask_user`，不能再调 `agent`；父回合没注册网页工具时子代理也拿不到。子代理有自己的压缩钩子（见「历史压缩」）。
-- provider/model 只有设置里两项都填了才覆盖，否则用父回合的 provider；思考档位取设置覆盖或角色定义，默认交给提供商，不继承父回合的档位。换提供商走 `resolve_request_auth`，共用 Copilot bearer 缓存。
+- 子代理的 system prompt 带上会话工作区的 `AGENTS.md` / `MYCODE.md` 资源（按会话 cwd 发现，worktree 里看不到未提交的改动），并把它们和匹配的 `SKILL.md` 当作用户的常驻指令；其它文件、工具输出和 MCP 结果仍是数据。
+- 连上的 MCP 会注册，`<mcp>` 说明与父回合共用同一份目录文本，只读角色另注明只拿 `readOnlyHint` 工具；子代理不能 `ask_user`，不能再调 `agent`。子代理有自己的压缩钩子（见「历史压缩」）。
+- provider/model 只有设置里两项都填了才覆盖，否则用父回合的 provider；路由的 provider 固定为 `magpie`，密钥共用网关密钥。思考档位取设置覆盖或角色定义，默认交给提供商，不继承父回合的档位。
 - 只有能写的角色能用 worktree：在 `<home>/agent-worktrees/` 建分离 checkout，结束时把 diff（最多 256 KiB）附在答案或错误后面，再删掉 worktree。
 
 ## MCP
@@ -100,27 +99,15 @@
 - 结果超过 20 KiB 时只保留首尾，全文写入 `<home>/mcp-results/`；存新结果时顺带清掉 7 天前的文件。
 - 设置和密钥的指纹没变、连接没坏时，下回合复用池里的服务器。连接中途断开或指纹变化，整池重连；某台启动失败的服务器等 120 秒后再单独重试，冷却期内只用已连上的。工具顺序按设置里的服务器顺序，保证相同输入的列表字节一致。
 
-## OAuth
-
-`StartOAuthSignIn` 只支持 Copilot 和 Codex。Windows 和 macOS 打开浏览器，其它平台只把验证链接给面板。Codex 设备码流程 15 分钟，连续 3 次轮询失败才放弃；Copilot 收到 `slow_down` 时轮询间隔加 5 秒。
-
-成功后令牌写进密钥库，并把该提供商写入设置（启用、补上或更新模型）。调用方没给模型时，取目录里前 6 个支持工具调用的模型。
-
-每次请求前 `resolve_request_auth`：
-
-- Copilot 用存下的 GitHub 令牌换短期 bearer，缓存到过期前 60 秒。
-- Codex 访问令牌过期时用 refresh token 换新并写回；全进程串行刷新，等锁的回合直接采用别人刚写回的新令牌。请求另带 `originator`、`openai-beta`、`chatgpt-account-id` 等头。
-- 其它提供商的 OAuth blob 过期就直接报错，提示改贴 API key。
-
 ## 目录
 
-启动只校验缓存信封：`formatVersion`、`kind`、etag 语法和整体 JSON 结构。首次 `document()` 才完整解析、归一化并注入内置的 Codex / OpenDesign 行；结果由 `OnceLock` 缓存，解析失败回退到内置保底行。
+模型列表只有一个来源：magpie 网关的 `GET /v1/models`。启动后（首帧 `UiReady`）后台请求一次，`RefreshCatalog` 手动刷新；读取失败时保留内存里的上一份列表。目录不落盘、没有内置保底行；没有绑定（magpie 未连接）时刷新如实报错，回合开始前 `turn_credentials` 也会拒绝。
 
-`GetCatalog` 在阻塞池里完成首次物化。首帧后的后台刷新：缓存不到 24 小时直接 `Fresh`，不联网；否则发条件请求。`RefreshCatalog` 和更新包下载成功后的预刷新强制跳过时间窗。`Fresh`、`NotModified`、`Updated` 都替换内存目录并发 `CatalogUpdated`；失败保留旧目录。
+绑定本身由 magpie 的 agent 插件写进 `settings.json` 的 `magpie` 段；插件用普通文件写入会带来目录继承的 ACL，核心的文档修复路径会从隔离备份里抢救出 `magpie` 段再重新发布（见 [config.md](config.md) 的恢复规则）。
 
 ## 历史压缩
 
-可用窗口是模型上下文的 95%，触发线是可用窗口的 90%。窗口取设置 `contextLimit`，再取目录；都没有时触发线是 48000 token。
+可用窗口是模型上下文的 95%，触发线是可用窗口的 90%。窗口取网关 `context_window`；没有时触发线是 48000 token。
 
 请求大小按 provider 的计数算：本回合上一次请求的回复带回的 prompt token 数（含缓存读），加上之后新增消息（回复本身、工具结果、steer）的估算。回合第一次请求还没有回复，整段估算。估算是 ASCII 每 4 字符 1 token、其他字符（中日韩等）每字 1 token、每张图 1600，再乘上一次实测的比例（provider 计数 ÷ 估算，限在 0.75–3 倍，按会话记住）。provider 报的数远低于估算时，按比例下限算。大小包含 system prompt 和工具 schema。
 

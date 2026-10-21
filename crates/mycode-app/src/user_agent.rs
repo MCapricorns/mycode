@@ -7,7 +7,7 @@
 
 use std::sync::OnceLock;
 
-/// The outbound User-Agent shared by provider, catalog, and OAuth calls.
+/// The outbound User-Agent shared by provider, gateway-list, and update calls.
 /// Detection runs once; the result cannot change during a session.
 #[must_use]
 pub fn default_user_agent() -> String {

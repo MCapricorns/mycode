@@ -207,6 +207,15 @@ pub(crate) async fn refresh_catalog(
     };
     crate::settings_io::apply_network(&settings);
     if !settings.magpie.is_active() {
+        // A missing or disabled binding is a real error for a manual
+        // refresh: the Models page toast would otherwise report success
+        // while the list it asked for was just cleared.
+        let message = if settings.magpie.is_default() {
+            "magpie is not connected: install the agent plugin and pick a model in magpie"
+                .to_owned()
+        } else {
+            "magpie is not connected: pick a model in magpie first".to_owned()
+        };
         if let Ok(mut guard) = state.catalog.write() {
             *guard = Arc::new(CatalogDocument::default());
         }
@@ -215,7 +224,7 @@ pub(crate) async fn refresh_catalog(
             providers: 0,
             fetched_at: 0,
         });
-        return BridgeReply::Catalog(Ok(catalog_info(state)));
+        return BridgeReply::Catalog(Err(message));
     }
     let gateway = match crate::magpie::Gateway::from_settings(&settings.magpie) {
         Ok(gateway) => gateway,

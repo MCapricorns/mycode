@@ -16,9 +16,9 @@
 //!
 //! The command channel is unbounded on purpose: the worker loop must `await`
 //! commands instead of blocking the runtime thread, or spawned tasks (chat
-//! turns, catalog refreshes) would starve until the next command arrives.
-//! `UnboundedSender::send` is synchronous, so the caller never touches async
-//! machinery.
+//! turns, gateway-list refreshes) would starve until the next command
+//! arrives. `UnboundedSender::send` is synchronous, so the caller never
+//! touches async machinery.
 //!
 //! Module map: `dispatch` runs the command loop, `state` holds the shared
 //! core state, `ledger` reads and writes session ledgers, `turn` drives one
@@ -279,9 +279,9 @@ pub enum BridgeCommand {
         /// Session identity spelling.
         session_id: String,
     },
-    /// Resolve the current provider catalog (cache, else baseline rows).
+    /// Resolve the gateway's current model list from memory.
     GetCatalog,
-    /// Re-download the cloud provider catalog.
+    /// Re-read the gateway's model list (`GET /v1/models`).
     RefreshCatalog,
     /// Load the durable UI state document.
     LoadUiState,
@@ -484,7 +484,7 @@ pub enum BridgeEvent {
         /// The stored title.
         title: String,
     },
-    /// The provider catalog changed after a cloud refresh.
+    /// The gateway's model list changed after a refresh.
     CatalogUpdated {
         /// Provider count in the refreshed catalog.
         providers: usize,
@@ -654,7 +654,7 @@ pub enum BridgeReply {
 pub struct CatalogInfo {
     /// The catalog document.
     pub document: Arc<CatalogDocument>,
-    /// Unix seconds of the successful cloud fetch; 0 for the baseline.
+    /// Unix seconds of the successful gateway read; 0 before the first.
     pub fetched_at: u64,
 }
 

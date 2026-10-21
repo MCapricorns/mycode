@@ -992,7 +992,11 @@ pub(crate) fn rename_indexed_session(
     if !path.exists() {
         return Ok(());
     }
-    let conn = open_connection(&path, false)?;
+    // A short-lived writer, but never the WAL-flipping pragma: the session
+    // actor already holds a writer connection to the same database, and a
+    // second `journal_mode=WAL` takes an exclusive lock that surfaces as
+    // "the session service is unavailable" while a turn runs.
+    let conn = open_writer(&path)?;
     if !table_ready(&conn)? {
         return Ok(());
     }
@@ -1016,13 +1020,27 @@ pub(crate) fn delete_indexed_session(
     if !path.exists() {
         return Ok(());
     }
-    let conn = open_connection(&path, false)?;
+    // See `rename_indexed_session`: a writer without the WAL pragma, so the
+    // actor's own connection is never lock-contended by this one.
+    let conn = open_writer(&path)?;
     if !table_ready(&conn)? {
         return Ok(());
     }
     conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
         .map_err(|_| StoreError::Storage)?;
     Ok(())
+}
+
+/// A writer connection that does not touch `journal_mode`: the database is
+/// already WAL once the actor opened it, and re-issuing the pragma from a
+/// second connection requires an exclusive lock.
+fn open_writer(path: &Path) -> Result<Connection, StoreError> {
+    let conn = Connection::open(path).map_err(|_| StoreError::Storage)?;
+    conn.busy_timeout(std::time::Duration::from_secs(3))
+        .map_err(|_| StoreError::Storage)?;
+    conn.execute_batch("PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
+        .map_err(|_| StoreError::Storage)?;
+    Ok(conn)
 }
 
 fn open_reader(path: &Path) -> Result<Connection, StoreError> {

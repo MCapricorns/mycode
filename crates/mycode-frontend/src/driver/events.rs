@@ -127,12 +127,20 @@ impl FrontendDriver {
                 return;
             }
             BridgeEvent::ContextCompacting { session_id, active } => {
+                // A held interrupt belongs to the session it was armed for,
+                // whether or not that chat is on screen. When the summary
+                // ends, the cancel goes to that session directly — the
+                // core indexes turn tokens per session, so a background
+                // chat is cancelled without touching the open one.
                 let interrupt =
                     !active && self.interrupt_after_compaction.as_ref() == Some(&session_id);
                 if interrupt {
                     self.interrupt_after_compaction = None;
                 }
                 if !matches_active(&session_id) {
+                    if interrupt {
+                        self.dispatch(BridgeCommand::CancelChat { session_id });
+                    }
                     return;
                 }
                 self.act(FrontendAction::ContextCompacting(active), out);

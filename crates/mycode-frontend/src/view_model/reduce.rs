@@ -148,9 +148,8 @@ fn reset_turn_view(state: &mut WorkspaceState) {
     state.turn_alert = None;
     retire_live_jobs(state);
     drop_preparing_rows(state);
-    // The conversation leaving the screen takes its runtime bookkeeping
-    // with it; the restored transcript has no clocks to show.
-    state.job_elapsed.clear();
+    // `retire_live_jobs` just parked each job's final runtime on the state
+    // for the transcript rows that stay behind; clearing here would undo it.
     state.changes_panel_open = false;
     state.pending_ask = None;
     state.ask_answers.clear();

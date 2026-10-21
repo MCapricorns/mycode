@@ -22,19 +22,19 @@ mycode-core      （叶子）
 | --- | --- | --- |
 | `mycode-core` | 消息、内容块、事件、工具规格、Provider 端口 | 叶子 crate。还声明 workspace 唯一的全局分配器（mimalloc）。没有协议、磁盘或策略 |
 | `mycode-config` | 家目录、严格 JSON 文档、settings/secrets/ui、压缩检查点、角色与资源发现 | 叶子 crate。路径纯词法解析，不跟随符号链接 |
-| `mycode-providers` | `anthropic-messages`、`openai-completions`、`openai-responses` 三种线协议，模型目录，Copilot/Codex 的 OAuth 设备流与刷新，代理测试 | 密钥由调用方传入；目录刷新也在这里，配置 crate 保持无网络依赖 |
-| `mycode-tools` | `Tool` trait、`ToolRegistry`、内置文件/搜索/进程/web/ask/agent 工具 | 每个工具用 schemars 生成一份 JSON Schema，模型规格和运行时校验共用；同名注册后者覆盖前者。搜索和读文件在进程内完成，不启动外部 `rg`/`fd` |
+| `mycode-providers` | 线协议适配、magpie 网关的模型列表、代理测试 | 密钥由调用方传入；网关列表读取也在这里，配置 crate 保持无网络依赖 |
+| `mycode-tools` | `Tool` trait、`ToolRegistry`、内置文件/搜索/进程/ask/agent 工具 | 每个工具用 schemars 生成一份 JSON Schema，模型规格和运行时校验共用；同名注册后者覆盖前者。搜索和读文件在进程内完成，不启动外部 `rg`/`fd` |
 | `mycode-agent` | `Agent` 回合循环、`TurnEnv`、`HookRunner`、system prompt、`SessionService` 会话账本 | 循环不依赖磁盘；账本是独立一层 |
-| `mycode-app` | `CoreBridge`、命令分发、回合装配、MCP、网页、子代理、OAuth、设置读写、导入导出、自更新 | `CoreBridge` 用独立线程上的 current-thread tokio；命令和事件都是无界通道 |
+| `mycode-app` | `CoreBridge`、命令分发、回合装配、MCP、子代理、magpie 网关读取、设置读写、导入导出、自更新 | `CoreBridge` 用独立线程上的 current-thread tokio；命令和事件都是无界通道 |
 | `mycode-frontend` | `FrontendDriver`、`WorkspaceState`、纯 reducer、`Effect`、i18n、git 状态、CLI 参数 | 产品行为集中在这里；reducer 是纯函数，返回的 `Effect` 由 GPUI 或 TUI 自己执行。前端只通过 `CoreBridge` 驱动后端 |
 | `mycode-desktop` | GPUI 渲染、输入、窗口 chrome、目录选择、git 文件监听 | 不跑模型回合，也不执行模型工具 |
 | `mycode-cli` | ratatui/crossterm 终端，共用同一个 `FrontendDriver` | 可执行文件名是 `mycode-cli` |
 
-工作区成员就是这九个。网页和 MCP 客户端是 `mycode-app` 的模块，没有独立 crate。
+工作区成员就是这九个。MCP 客户端是 `mycode-app` 的模块，没有独立 crate。
 
 `CoreBridge` 是前后端唯一接口。前端发 `BridgeCommand`，每个命令带一个 oneshot 回复；核心把会阻塞的存储和配置 I/O 放到 `spawn_blocking`，模型回合并发成任务。`BridgeEvent` 走单独的事件流，负责流式文本、思考、工具进度、用量和终止事件；`ChatDone` 和 `ChatFailed` 是每个回合唯一的终止信号。
 
-`mycode-app` 的模块按职责分开：`dispatch` 跑命令循环，`turn` 装配回合，`ledger` 读写账本，`tool_hosts` 提供 ask/web/agent 宿主，`mcp_client` 和 `mcp_tools` 处理 MCP，`web_client` 走网页后端，`oauth` 管设备流，`settings_io` 管设置和密钥，`projection` 生成显示条目，`updates` 和 `install` 管自更新，`export` 管导入导出。
+`mycode-app` 的模块按职责分开：`dispatch` 跑命令循环，`turn` 装配回合，`ledger` 读写账本，`tool_hosts` 提供 ask 宿主，`mcp_client` 和 `mcp_tools` 处理 MCP，`magpie` 读网关模型列表，`settings_io` 管设置和密钥，`projection` 生成显示条目，`updates` 和 `install` 管自更新，`export` 管导入导出。
 
 `mycode-agent` 的模块：`agent` 是循环，`turn` 管单个响应周期和工具派发，`env` 注入 provider/工具/取消/steer，`hooks` 是请求前钩子，`prompt` 拼默认 system prompt，`session` 包含 actor、store、runtime 和账本。
 
@@ -43,10 +43,10 @@ mycode-core      （叶子）
 1. 输入提交经过 frontend 的 `submit` 和 `FrontendAction`/`reduce`，先改界面状态；driver 发 `BridgeCommand::SendMessage`。
 2. `SendMessage` 在核心写账本：`HeadWriter` 预留事件，在期望分支头上 CAS；冲突时按新头重试。成功后回 `Sent { head, entry }`。
 3. 前端收到 `Sent` 才发 `ChatTurn`。`dispatch` 先取消这个会话正在跑的回合 token，再启动 `chat_turn`。
-4. `turn_credentials` 读 settings 和 secrets，短暂重试以避开并发保存；`resolve_request_auth` 处理 Copilot bearer 缓存和 Codex refresh。
+4. `turn_credentials` 读 settings 里的 magpie 绑定（地址、网关密钥、选中模型）。
 5. `ResolvedProvider` 解析 endpoint、协议和 headers；`ReqwestTransport` 建立 SSE 传输。
 6. 重新读分支头，按账本回放整条分支为 `Message` 列表。最后一条非空 user message 作为本回合 prompt；它后面的 assistant/tool 结果留在账本里，但这次请求不带。
-7. 连接 MCP（复用池，只重连失败或新加的 server），组装注册表：`read`、`write`、`edit`、`grep`、`find`、当前平台的 shell、`ask_user`、网页后端可用时的 `web_search`/`fetch_content`、按需注册的 `agent`，以及 MCP 工具。
+7. 连接 MCP（复用池，只重连失败或新加的 server），组装注册表：`read`、`write`、`edit`、`grep`、`find`、当前平台的 shell、`ask_user`、按需注册的 `agent`，以及 MCP 工具。
 8. 拼 system prompt：固定身份、工具说明、`AGENTS.md` 资源、skills 目录、MCP 提示、额外工作区目录、环境块。
 9. 回合前检查压缩：可用窗口是模型窗口的 95%，到其中 90% 触发；尾部随窗口变，最多约 20k token；到阈值时写 `compaction.json` 和一张摘要卡。
 10. `AgentConfig` 带 system prompt、会话 id 作 `prompt_cache_key`、输出上限和推理档位；启动 `LedgerPump`，`seed_history` 后调用 `Agent::prompt`。
@@ -64,11 +64,12 @@ mycode-core      （叶子）
 
 ```text
 <home>/
-├─ settings.json           提供商、MCP、网页、外观、代理、推理默认值、子代理、技能开关。不含密钥
-├─ secrets.json            API 密钥、OAuth 令牌、MCP/网页凭证（`mcp-<id>`、`web-<id>`）
+├─ settings.json           magpie 绑定、MCP、外观、代理、推理默认值、子代理、技能开关。网关密钥在 magpie 段里，由 magpie 的插件写入
+├─ secrets.json            MCP 服务器密钥（`mcp-<id>`）
 ├─ ui.json                 工作区、最近项目、会话归属、每个会话的模型/思考档位、窗口大小。可丢弃
-├─ catalog-cache.json      models.dev 目录缓存（最大 32 MiB；启动只校验信封，首次使用时才解析）
-├─ AGENTS.md               可选的全局指令
+├─ AGENTS.md               magpie Library 写入的全局规则（也可手写）
+├─ mcp.json                magpie Library 写入的 MCP 服务器
+├─ skills/                 magpie Library 写入的技能
 ├─ sessions.db             SQLite WAL 索引：标题、分支头、事件数、JSONL 偏移
 ├─ sessions/<项目键>/sess-YYYYMMDD-HHMMSS-<8 hex>/
 │  ├─ <br1-…>.jsonl        分支事件；一行一个 JSON
@@ -83,7 +84,7 @@ mycode-core      （叶子）
 └─ checkpoints/<session>/  旧版文件快照；不再写，删除会话时清掉
 ```
 
-`settings.json`、`secrets.json`、`ui.json` 是严格 JSON，`deny_unknown_fields`。解析或校验失败（包括尾逗号）会把原文件复制成 `*.broken-<nanos>`，保留还能解码的字段并发布默认值；没有“只修尾逗号”的就地改写。settings 和 secrets 带 revision；完整替换走 CAS。`ui.json` 是 advisory，最后写入者赢。会话账本不走这套修复。
+`settings.json`、`secrets.json`、`ui.json` 是严格 JSON，`deny_unknown_fields`。解析或校验失败（包括尾逗号）会把原文件复制成 `*.broken-<nanos>`，保留还能解码的字段并发布默认值；外部写入者（如 magpie 插件）改掉文件权限时，同样从移动后的字节里抢救再发布；没有“只修尾逗号”的就地改写。settings 和 secrets 带 revision；完整替换走 CAS。`ui.json` 是 advisory，最后写入者赢。会话账本不走这套修复。
 
 `settings.json`、`secrets.json`、`ui.json` 的上限分别是 256 KiB、64 KiB、256 KiB。密钥在 `secrets.json`，不在设置里。
 
@@ -123,11 +124,11 @@ mycode-core      （叶子）
 
 **MCP。** 支持 stdio 和 Streamable-HTTP。配置来自 `settings.json` 的 `mcpServers` 和工作区的 `.mycode/mcp.json`。单条消息最大 1 MiB，每个 server 最多 128 个工具。工具数不超过 4 且每个 schema 不超过 2048 字节的 server 直接按原始工具名注册，但不会覆盖已有的同名工具；其余工具不直接注册，模型用 `search_tool` 查 schema、用 `use_tool` 调用。客户端按 server 复用，settings 指纹变化时重建；单个握手最多等 20 秒，连接失败的 server 跳过，不会让回合失败。
 
-**子代理。** 角色来自内置的 `scout`、`artisan`，`<home>/agents/*.md` 和工作区 `.mycode/agents/*.md`；后一层覆盖前一层。`scout` 是硬只读，只能拿 `read`/`grep`/`find`/`web_search`/`fetch_content`。`artisan` 默认 `worktree` 隔离：在一个 detached git worktree 里工作，结束时把 diff（最多 256 KiB）附在结果后面并删除 worktree，不会合回主工作区，也不提交。只有可写角色能拿 worktree。单回合最多 8 个并发子代理。子代理不能再调用 `agent` 或 `ask_user`；它和主会话走同一套压缩，只在内存里进行，窗口按子代理自己的模型计算；只读角色的 MCP 工具按 `readOnlyHint` 过滤。子代理的提示同样带上会话工作区的 `AGENTS.md` 资源。
+**子代理。** 角色来自内置的 `scout`、`artisan`，`<home>/agents/*.md` 和工作区 `.mycode/agents/*.md`；后一层覆盖前一层。`scout` 是硬只读，只能拿 `read`/`grep`/`find` 和声明只读的 MCP 工具。`artisan` 默认 `worktree` 隔离：在一个 detached git worktree 里工作，结束时把 diff（最多 256 KiB）附在结果后面并删除 worktree，不会合回主工作区，也不提交。只有可写角色能拿 worktree。单回合最多 8 个并发子代理。子代理不能再调用 `agent` 或 `ask_user`；它和主会话走同一套压缩，只在内存里进行，窗口按子代理自己的模型计算；只读角色的 MCP 工具按 `readOnlyHint` 过滤。子代理的提示同样带上会话工作区的 `AGENTS.md` 资源。
 
-**模型与缓存。** provider 的地址、协议和模型来自 settings。endpoint 按协议补 `/v1/messages`、`/chat/completions` 或 `/responses`，base 已带路径时不重复；未知协议和 provider 未列出的 model 直接拒绝。请求体差异（thinking 开关、`cache_control`、`prompt_cache_key`）在 `family.rs` 的表里按主机/模型匹配，最后一行是通用兜底。会话 id 作为 `prompt_cache_key`（截到 64 个标量）；明确拒绝该字段的主机会在进程内被记住并跳过。OAuth refresh 用全局锁串行，避免 refresh token 被并发消耗。system prompt 在文件不变时保持字节稳定，所以同一会话的请求能命中前缀缓存。用量按 response cycle 累加，上下文表只取最近一次 prompt。
+**模型与缓存。** provider 的地址、协议和模型来自 settings 的 magpie 绑定加网关 `/v1/models` 列表。endpoint 补 `/chat/completions`，base 已带路径时不重复；provider 未列出的 model 直接拒绝。请求体差异（thinking 开关、`cache_control`、`prompt_cache_key`）在 `family.rs` 的表里按主机/模型匹配，最后一行是通用兜底。会话 id 作为 `prompt_cache_key`（截到 64 个标量）；明确拒绝该字段的主机会在进程内被记住并跳过。system prompt 在文件不变时保持字节稳定，所以同一会话的请求能命中前缀缓存。用量按 response cycle 累加，上下文表只取最近一次 prompt。
 
-**模型目录。** 完整目录从 models.dev 下载到 `catalog-cache.json`；24 小时内不重复请求，过期后用 ETag 条件 GET。失败保留旧缓存，再失败用编进二进制的 Codex/OpenDesign 保底行。CI 不维护打包的完整目录。
+**模型目录。** 唯一来源是 magpie 网关的 `GET /v1/models`，内存中保存，不落盘；刷新失败保留上一份列表。没有内置目录、没有 24 小时缓存。
 
 **上限。** 单条事件 8 MiB（usage 64 KiB），单条请求 8 MiB；shell 输出保留 50 KiB；MCP 内联结果 20 KiB；压缩摘要最多 24,000 字符；单个会话最多 512 MiB；`ui.json` 最多 128 个会话模型固定项；输入框最多 64K 字符，发送队列最多 8 条；每个回合最多 8 个子代理并发。
 
