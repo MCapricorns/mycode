@@ -197,7 +197,7 @@ pub fn shortcuts(surface: Surface) -> Vec<Shortcut> {
                 None,
             ),
             navigate(
-                "PageUp / PageDown".to_owned(),
+                "Wheel / PageUp / PageDown".to_owned(),
                 t("Scroll the transcript", "滚动对话"),
                 None,
             ),

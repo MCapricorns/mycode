@@ -74,7 +74,7 @@ impl Tui {
             self.on_overlay_key(key, ctrl, effects);
             return;
         }
-        let items = settings_items(self.driver.vm());
+        let items = settings_items(self.driver.vm(), self.driver.home());
         match (key.code, ctrl) {
             (KeyCode::Char('c'), true) => self.interrupt_or_quit(effects),
             (KeyCode::Char('o'), true) => self.driver.toggle_thinking_collapsed(effects),

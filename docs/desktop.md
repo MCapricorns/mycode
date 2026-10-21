@@ -44,7 +44,7 @@ BridgeCommand → CoreBridge
 | `git_status`（`mycode-frontend`） | 只读执行 `git status --porcelain=v1 -z -b --untracked-files=all` 和 `git diff HEAD`；带 `--no-optional-locks`、`--no-pager`、`--literal-pathspecs`。最多保留 80 个改动文件，diff 截断在 12,000 字节，改名/复制行打开新路径的 diff |
 | `i18n`（`mycode-frontend`） | `auto` 用系统 UI 语言（Windows / macOS），其它平台回退到 `LC_ALL` / `LC_MESSAGES` / `LANG`；也可固定 `en` 或 `zh` |
 
-终端版 `mycode-cli` 的代码在 `app.rs` 和 `app/` 下：`app.rs` 管驱动循环、终端保护和共享状态，`app/input.rs` 管按键、粘贴与三种发送，`app/clipboard.rs` 读剪贴板图片（Windows 原生剪贴板、macOS 走 `osascript` 并在只有 TIFF 时用 `sips` 转换），`app/attachments.rs` 把图片附加到下一次发送，附件行由 `app/ui.rs` 的 `draw_attachments` 绘制，`app/theme.rs` 按 `appearance.theme` 选终端墨色，`app/settings.rs` 管设置页游标和选择器，`app/settings_rows.rs` 生成设置行，`app/ui.rs` 负责每帧绘制，`app/render.rs` 构造转录行；`reply.rs` 给围栏代码着色，`main.rs` 处理参数、更新和自安装。`Ctrl+V` 附加剪贴板图片，粘贴内容只有一个图片路径或 `file://` URL 时附加该文件，`Ctrl+X` 清除待发送附件；`/new` 和 `Ctrl+N` 打开的空会话显示欢迎页而不是空白。
+终端版 `mycode-cli` 的代码在 `app.rs` 和 `app/` 下：`app.rs` 管驱动循环、终端保护和共享状态，`app/input.rs` 管按键、粘贴与三种发送，`app/clipboard.rs` 读剪贴板图片（Windows 原生剪贴板、macOS 走 `osascript` 并在只有 TIFF 时用 `sips` 转换），`app/attachments.rs` 把图片附加到下一次发送，附件行由 `app/ui.rs` 的 `draw_attachments` 绘制，`app/theme.rs` 按 `appearance.theme` 选终端墨色，`app/settings.rs` 管设置页游标和选择器，`app/settings_rows.rs` 生成设置行，`app/ui.rs` 负责每帧绘制，`app/render.rs` 构造转录行；`reply.rs` 给围栏代码着色，`main.rs` 处理参数、更新和自安装。`Ctrl+V` 附加剪贴板图片，粘贴内容只有一个图片路径或 `file://` URL 时附加该文件，`Ctrl+X` 清除待发送附件；`/new` 和 `Ctrl+N` 打开的空会话显示欢迎页而不是空白。转录区用 `PageUp` / `PageDown` 或鼠标滚轮滚动（一格三行，滚轮事件由 `app.rs` 的 `on_mouse` 处理），设置页的滚轮移动游标；开启鼠标上报后终端自己的划选要按住 `Shift`。设置页的 MCP 段同时列出 magpie Library 写入 `~/.mycode/mcp.json` 的服务器，这些行只读。
 
 ## 窗口
 
@@ -113,7 +113,7 @@ BridgeCommand → CoreBridge
 - **Magpie**：网关绑定状态（连接、当前模型、网关地址）、模型列表（来自 `GET /v1/models`）和「刷新模型」。未连接时显示安装步骤（`magpie plugin add github:MCapricorns/magpie-mycode`）。地址、密钥、模型由 magpie 的插件写入，这里只读。
 - **子代理**：Scout、Artisan 是两张主卡片，后面是主目录 `agents/` 或项目 `.mycode/agents/` 发现的其他角色。每张卡可启用、选模型和思考强度。每个父回合最多 8 个并发，不设超时；取消回合、单独取消、停止或删除对话时结束。
 - **技能**：每个技能一行开关。关掉后仍留在列表里（变淡、隐藏「使用」），但不出现在 `/` 菜单、命令面板和代理的技能列表里，改动立即保存。
-- **MCP**：服务器启停（启用前先探测）、导入 JSON、添加自定义服务器；magpie Library 写入的托管行只读显示。
+- **MCP**：服务器启停（启用前先探测）、导入 JSON、添加自定义服务器；magpie Library 写入的托管行只读显示。终端版设置页列出同一批托管行（含地址或命令行）；它会读到 `~/.mycode/mcp.json` 的解析错误并如实显示，而不是当成「没有配置」。
 - **数据**：导出 / 导入设置、界面状态和 MCP 密钥，明文 JSON，不含对话。导入会覆盖本机配置；文件改动 MCP 命令时需要二次确认。
 - **关于**：版本、自动更新开关、手动检查。
 

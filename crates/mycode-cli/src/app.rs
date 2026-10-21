@@ -19,7 +19,8 @@
 //! list, `Esc` dismisses the topmost layer, closes the settings page, or
 //! cancels a running turn, `Ctrl+C` cancels the turn and quits when idle,
 //! `Ctrl+N` starts a new task (the empty session keeps the welcome greeting),
-//! `Ctrl+O` folds or expands every thinking trace, `PageUp`/`PageDown` scroll.
+//! `Ctrl+O` folds or expands every thinking trace, `PageUp`/`PageDown` and the
+//! mouse wheel scroll.
 //! The settings page lists them from the shared table. A terminal that cannot
 //! report `Ctrl+Enter` (common outside Windows) sends `Enter` or `Ctrl+J`
 //! instead.
@@ -50,7 +51,10 @@ use std::io::{self, Stdout};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
+use crossterm::event::{
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
@@ -65,6 +69,7 @@ use tui_textarea::TextArea;
 
 use render::new_composer;
 use settings::SettingsOverlay;
+use settings_rows::settings_items;
 
 /// Wake channel payload: the driver thread signals "inbox has work".
 type WakeRx = mpsc::Receiver<()>;
@@ -122,6 +127,9 @@ struct Tui {
     /// Last frame time while a turn streams: the status line's elapsed
     /// seconds tick once a second without repainting at full poll speed.
     stream_paint: Instant,
+    /// Events read while checking for a paste burst, replayed in order
+    /// before the next poll.
+    pending_events: std::collections::VecDeque<Event>,
     quit: bool,
 }
 
@@ -169,17 +177,27 @@ impl TerminalGuard {
         }));
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(
+        if let Err(error) = execute!(
             stdout,
             EnterAlternateScreen,
+            EnableMouseCapture,
             SetTitle(format!("MYCode Cli {}", env!("CARGO_PKG_VERSION")))
-        )?;
+        ) {
+            restore_terminal(&mut stdout);
+            return Err(error);
+        }
         // Best effort: where the terminal reports pastes as one event, a
         // multi-line paste cannot submit line by line. Consoles that type a
         // paste out as keys are covered by the burst check in `on_key`.
         let _ = execute!(stdout, EnableBracketedPaste);
         let backend = CrosstermBackend::new(stdout);
-        Ok(Self(Terminal::new(backend)?))
+        match Terminal::new(backend) {
+            Ok(terminal) => Ok(Self(terminal)),
+            Err(error) => {
+                restore_terminal(&mut io::stdout());
+                Err(error)
+            }
+        }
     }
 }
 
@@ -189,11 +207,17 @@ impl Drop for TerminalGuard {
     }
 }
 
-/// Cooked mode, no bracketed paste, normal screen. Idempotent, so the panic
-/// hook and the guard's drop may both run it.
+/// Cooked mode, no bracketed paste or mouse capture, normal screen. Idempotent,
+/// so the panic hook and the guard's drop may both run it.
+///
+/// Mouse capture goes off first: on Windows crossterm restores the console
+/// input mode it snapshotted when capture was enabled, and that snapshot was
+/// taken in raw mode. Disabling it after `disable_raw_mode` would re-apply the
+/// raw flag and leave the shell without echo or line input.
 fn restore_terminal(out: &mut impl io::Write) {
+    let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste);
     let _ = disable_raw_mode();
-    let _ = execute!(out, DisableBracketedPaste, LeaveAlternateScreen);
+    let _ = execute!(out, LeaveAlternateScreen);
 }
 
 impl Tui {
@@ -215,6 +239,7 @@ impl Tui {
             settings_overlay: None,
             was_settings: false,
             stream_paint: Instant::now(),
+            pending_events: std::collections::VecDeque::new(),
             quit: false,
         }
     }
@@ -314,19 +339,45 @@ impl Tui {
                 self.driver.shutdown();
                 return 0;
             }
-            match event::poll(Duration::from_millis(60)) {
-                Ok(true) => {
-                    // Keys, pastes, resizes, and focus changes all repaint.
-                    self.dirty = true;
-                    match event::read() {
-                        Ok(Event::Key(key)) => self.on_key(key),
-                        Ok(Event::Paste(text)) => self.on_paste(&text),
-                        Ok(_) => {}
+            // A stashed event (read while checking for a paste burst) comes
+            // before anything still queued in the terminal.
+            let stashed = self.pending_events.pop_front();
+            let event = match stashed {
+                Some(event) => Some(event),
+                None => match event::poll(Duration::from_millis(60)) {
+                    Ok(true) => match event::read() {
+                        Ok(event) => Some(event),
                         Err(_) => return 1,
+                    },
+                    Ok(false) => None,
+                    Err(_) => return 1,
+                },
+            };
+            if let Some(event) = event {
+                match event {
+                    Event::Key(key) => {
+                        self.dirty = true;
+                        self.on_key(key);
                     }
+                    Event::Paste(text) => {
+                        self.dirty = true;
+                        self.on_paste(&text);
+                    }
+                    // Mouse capture reports motion and drags too; only a
+                    // notch changes what is on screen, so the rest does
+                    // not repaint the transcript.
+                    Event::Mouse(mouse) => {
+                        if matches!(
+                            mouse.kind,
+                            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                        ) {
+                            self.dirty = true;
+                            self.on_mouse(mouse.kind);
+                        }
+                    }
+                    // Resizes and focus changes repaint.
+                    _ => self.dirty = true,
                 }
-                Ok(false) => {}
-                Err(_) => return 1,
             }
         }
     }
@@ -362,6 +413,37 @@ impl Tui {
                 Effect::OlderPagePrepended { .. } => self.driver.note_scroll_hold(false),
                 _ => {}
             }
+        }
+    }
+
+    /// Wheel notches: three rows each, so one flick is not one line on a
+    /// trackpad. The settings page scrolls by moving its cursor.
+    fn on_mouse(&mut self, kind: MouseEventKind) {
+        const ROWS: usize = 3;
+        let back = match kind {
+            MouseEventKind::ScrollUp => true,
+            MouseEventKind::ScrollDown => false,
+            // Clicks, drags, and moves stay with the terminal.
+            _ => return,
+        };
+        if self.driver.vm().view == MainView::Settings {
+            // An open picker owns the keyboard; its arrows still move it.
+            if self.settings_overlay.is_some() {
+                return;
+            }
+            let items = settings_items(self.driver.vm(), self.driver.home());
+            if items.is_empty() {
+                return;
+            }
+            self.settings_cursor = if back {
+                self.settings_cursor.saturating_sub(ROWS)
+            } else {
+                (self.settings_cursor + ROWS).min(items.len() - 1)
+            };
+        } else if back {
+            self.scroll = self.scroll.saturating_add(ROWS);
+        } else {
+            self.scroll = self.scroll.saturating_sub(ROWS);
         }
     }
 
