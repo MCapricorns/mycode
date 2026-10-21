@@ -1,15 +1,22 @@
 //! `read` — read a UTF-8 text file with optional line windowing and
-//! output truncation (pi-style: ~2000 lines / 50 KiB with a notice).
+//! output truncation (pi-style: ~2000 lines / 50 KiB with a notice), or hand
+//! a picture to a model that can see one.
 //!
 //! Execution uses the host file kernel: a prepared handle-relative capability,
 //! chunked read under scan/line/deadline/cancel caps, UTF-8 (BOM stripped
 //! from displayed text; hash of raw bytes), and an opaque revision token.
+//! Pictures are detected by their magic bytes and returned as an image block,
+//! the same way OpenCode's `read` tool presents media directly to the model.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::builtin::fs_io::{FileAccess, anchor_file_path, read_file_async};
+use mycode_core::{BinaryData, ContentBlock, MAX_IMAGE_BASE64_BYTES, TextBlock};
+
+use crate::builtin::fs_io::{FileAccess, ReadOutcome, anchor_file_path, read_any_async};
 use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
 use crate::tool::{Tool, ToolError, ToolResult};
@@ -24,12 +31,12 @@ pub struct ReadArgs {
     /// session cwd.
     pub path: String,
     /// 1-based line number to start reading from (default: the first
-    /// line). Values below 1 are rejected.
+    /// line). Values below 1 are rejected. Text only.
     #[serde(default)]
     #[schemars(range(min = 1))]
     pub offset: Option<usize>,
     /// Maximum number of lines to return (default: all, up to the
-    /// tool's output cap).
+    /// tool's output cap). Text only.
     pub limit: Option<usize>,
 }
 
@@ -42,14 +49,21 @@ impl Tool for ReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read a UTF-8 text file from the local filesystem. Use offset/limit to \
-         window into large files; output is truncated with a notice beyond \
-         2000 lines or 50 KiB per call. Hidden files are readable. Returns an \
-         opaque revision token for later writes."
+        "Read a file from the local filesystem. Text files come back with each \
+         line prefixed by its 1-based number; use offset/limit to window a \
+         large file, and output is truncated with a notice beyond 2000 lines \
+         or 50 KiB per call. Pictures (PNG, JPEG, GIF, WebP) are presented \
+         directly to the model instead of as text, so a screenshot saved to \
+         disk can be read back and inspected; offset/limit do not apply to \
+         them. Hidden files are readable. \
+         Returns an opaque revision token for later writes."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
-        Some("read: fetch file contents (path, optional 1-based offset / limit).")
+        Some(
+            "read: fetch file contents (path, optional 1-based offset / limit); \
+             images are shown to the model.",
+        )
     }
 
     fn file_access(&self) -> Option<FileAccess> {
@@ -73,7 +87,7 @@ impl Tool for ReadTool {
             true,
             &args.path,
         );
-        let outcome = read_file_async(
+        let outcome = read_any_async(
             ctx.prepared_file.clone(),
             root,
             path,
@@ -82,26 +96,64 @@ impl Tool for ReadTool {
             ctx.cancel.clone(),
         )
         .await?;
-        Ok(ToolResult::text(outcome.displayed).with_details(json!({
-            "path": outcome.path_key,
-            "total_lines": outcome.total_lines,
-            "returned_lines": outcome.returned_lines,
-            "truncated": outcome.truncated,
-            "revision": outcome.revision.as_str(),
-        })))
+        match outcome {
+            ReadOutcome::Text(outcome) => {
+                Ok(ToolResult::text(outcome.displayed).with_details(json!({
+                    "path": outcome.path_key,
+                    "total_lines": outcome.total_lines,
+                    "returned_lines": outcome.returned_lines,
+                    "truncated": outcome.truncated,
+                    "revision": outcome.revision.as_str(),
+                })))
+            }
+            ReadOutcome::Image { bytes, mime, key } => image_result(&key, &bytes, mime),
+        }
     }
+}
+
+/// One picture as a text note plus the image block the adapter forwards.
+fn image_result(key: &str, bytes: &[u8], mime: &str) -> Result<ToolResult, ToolError> {
+    let data = BASE64_STANDARD.encode(bytes);
+    if data.len() > MAX_IMAGE_BASE64_BYTES {
+        return Err(ToolError::Execution(format!(
+            "{key}: encoded image is {} bytes, over the {MAX_IMAGE_BASE64_BYTES}-byte \
+             limit; crop or resize it to a smaller picture first",
+            data.len()
+        )));
+    }
+    let content = vec![
+        ContentBlock::Text(TextBlock::new(format!(
+            "Image: {key} ({mime}, {} bytes). The picture is presented directly to you.",
+            bytes.len()
+        ))),
+        ContentBlock::Image(BinaryData {
+            data,
+            mime_type: mime.to_owned(),
+        }),
+    ];
+    Ok(ToolResult {
+        is_error: false,
+        content,
+        details: Some(json!({
+            "path": key,
+            "mime": mime,
+            "bytes": bytes.len(),
+        })),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
+    use base64::Engine as _;
     use serde_json::json;
 
     use super::{ReadArgs, ReadTool};
     use crate::ctx::ToolCtx;
     use crate::stream::ToolStream;
     use crate::tool::{Tool, ToolError, validate_args};
+    use mycode_core::ContentBlock;
 
     #[test]
     fn offset_below_one_is_rejected_by_the_schema() {
@@ -110,6 +162,87 @@ mod tests {
         assert!(matches!(error, ToolError::InvalidArgs(_)), "{error}");
         validate_args::<ReadArgs>(&json!({"path": "a.txt", "offset": 1})).expect("offset 1");
         validate_args::<ReadArgs>(&json!({"path": "a.txt"})).expect("omitted offset");
+    }
+
+    #[tokio::test]
+    async fn an_image_file_comes_back_as_an_image_block() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-read-image-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("workspace");
+        let path = base.join("shot.png");
+        // A real PNG signature is all the tool inspects; the bytes are not
+        // decoded here, the provider decodes them.
+        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+        std::fs::write(&path, png).expect("write png");
+
+        let ctx = ToolCtx::new(&base);
+        let (mut stream, _rx) = ToolStream::channel();
+        let result = ReadTool
+            .execute(
+                ReadArgs {
+                    path: path.display().to_string(),
+                    offset: None,
+                    limit: None,
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect("read image");
+        assert!(!result.is_error, "{result:?}");
+        let image = result
+            .content
+            .iter()
+            .find_map(|block| match block {
+                ContentBlock::Image(image) => Some(image),
+                _ => None,
+            })
+            .expect("image block");
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(
+            image.data,
+            base64::engine::general_purpose::STANDARD.encode(png)
+        );
+        assert_eq!(result.details.expect("details")["bytes"], png.len());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn an_image_refuses_a_line_window() {
+        let base = std::env::temp_dir().join(format!(
+            "mycode-read-image-window-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("workspace");
+        let path = base.join("shot.png");
+        std::fs::write(
+            &path,
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0],
+        )
+        .expect("write png");
+
+        let ctx = ToolCtx::new(&base);
+        let (mut stream, _rx) = ToolStream::channel();
+        let error = ReadTool
+            .execute(
+                ReadArgs {
+                    path: path.display().to_string(),
+                    offset: Some(1),
+                    limit: Some(5),
+                },
+                &ctx,
+                &mut stream,
+            )
+            .await
+            .expect_err("offset on an image");
+        assert!(matches!(error, ToolError::InvalidArgs(_)), "{error}");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]

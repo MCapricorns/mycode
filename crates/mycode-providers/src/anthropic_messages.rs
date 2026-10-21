@@ -201,7 +201,7 @@ fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mu
             }
         }
         Message::ToolResult(result) => {
-            let content = crate::wire_common::join_text(&result.content);
+            let content = tool_result_content(&result.content);
             push_user_turn(
                 messages,
                 vec![json!({
@@ -235,6 +235,19 @@ fn push_user_turn(messages: &mut Vec<Value>, content: Vec<Value>) {
         return;
     }
     messages.push(json!({"role": "user", "content": content}));
+}
+
+/// One tool result's `content`: a plain string for text-only results (the
+/// bytes stay identical to older turns, keeping the prefix cache warm), an
+/// array of blocks only when a picture has to reach the model.
+fn tool_result_content(blocks: &[ContentBlock]) -> Value {
+    if !blocks
+        .iter()
+        .any(|block| matches!(block, ContentBlock::Image(_)))
+    {
+        return json!(crate::wire_common::join_text(blocks));
+    }
+    json!(block_content(blocks))
 }
 
 fn block_content(content: &[ContentBlock]) -> Vec<Value> {

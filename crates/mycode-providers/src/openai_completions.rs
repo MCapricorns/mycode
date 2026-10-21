@@ -20,6 +20,8 @@ use crate::wire_common::{
 #[must_use]
 pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Value {
     let mut messages = Vec::new();
+    // Images returned inside tool results, waiting for the end of their batch.
+    let mut tool_images: Vec<String> = Vec::new();
     if !request.system_prompt.is_empty() {
         messages.push(json!({
             "role": "system",
@@ -27,8 +29,15 @@ pub(crate) fn build_body(model: &str, endpoint: &str, request: &Request) -> Valu
         }));
     }
     for message in &request.messages {
-        convert_message(model, endpoint, message, &mut messages);
+        // Tool messages must sit directly after their assistant turn, so an
+        // image a tool returned travels in one user message after the whole
+        // batch instead of splitting it.
+        if !matches!(message.as_ref(), Message::ToolResult(_)) {
+            flush_tool_images(&mut messages, &mut tool_images);
+        }
+        convert_message(model, endpoint, message, &mut messages, &mut tool_images);
     }
+    flush_tool_images(&mut messages, &mut tool_images);
     let tools: Vec<Value> = request.tools.iter().map(convert_tool).collect();
     let mut body = json!({
         "model": model,
@@ -65,7 +74,13 @@ fn convert_tool(tool: &ToolSpec) -> Value {
     })
 }
 
-fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mut Vec<Value>) {
+fn convert_message(
+    model: &str,
+    endpoint: &str,
+    message: &Message,
+    messages: &mut Vec<Value>,
+    tool_images: &mut Vec<String>,
+) {
     match message {
         Message::User(user) => {
             messages.push(json!({"role": "user", "content": user_content(&user.content)}));
@@ -123,8 +138,33 @@ fn convert_message(model: &str, endpoint: &str, message: &Message, messages: &mu
                 "tool_call_id": result.tool_call_id,
                 "content": content,
             }));
+            // A chat tool message is text-only; the picture follows as a user
+            // part once the batch closes.
+            for block in &result.content {
+                if let ContentBlock::Image(image) = block {
+                    tool_images.push(format!("data:{};base64,{}", image.mime_type, image.data));
+                }
+            }
         }
     }
+}
+
+/// Appends the images tools returned in one closed batch as a user message.
+fn flush_tool_images(messages: &mut Vec<Value>, images: &mut Vec<String>) {
+    if images.is_empty() {
+        return;
+    }
+    let mut parts = vec![json!({
+        "type": "text",
+        "text": "The tool returned the image below.",
+    })];
+    parts.extend(images.drain(..).map(|url| {
+        json!({
+            "type": "image_url",
+            "image_url": {"url": url},
+        })
+    }));
+    messages.push(json!({"role": "user", "content": parts}));
 }
 
 /// Reasoning attached to one replayed assistant message.

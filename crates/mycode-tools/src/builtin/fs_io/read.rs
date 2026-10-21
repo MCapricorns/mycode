@@ -191,13 +191,108 @@ pub(super) fn read_raw_file(
     Ok(RawFile { raw, key, revision })
 }
 
-/// Reads a prepared (or internally prepared) UTF-8 file.
+/// Maximum bytes of one media file that may be ingested whole.
+///
+/// The model cap is [`mycode_core::MAX_IMAGE_BASE64_BYTES`] on the encoded
+/// payload, and base64 makes 3 bytes 4. No resizer runs in this path, so a
+/// bigger picture is refused with an instruction to crop or resize instead
+/// of being read and then rejected after encoding.
+pub const MAX_MEDIA_INGEST_BYTES: usize = mycode_core::MAX_IMAGE_BASE64_BYTES / 4 * 3;
+
+/// One `read` answer: an image the model can see, or a text window.
+pub enum ReadOutcome {
+    /// A supported picture, encoded later by the caller.
+    Image {
+        /// Raw file bytes.
+        bytes: Vec<u8>,
+        /// Media type from the magic bytes.
+        mime: &'static str,
+        /// Capability key the path resolved to.
+        key: String,
+    },
+    /// The text window [`read_file`] returns.
+    Text(FileRead),
+}
+
+/// Image media type from the file's leading bytes. Providers accept these
+/// four; PDFs and other documents stay text errors in this tool.
+fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    None
+}
+
+/// Reads one path once: image bytes when the content is a supported picture,
+/// otherwise the text window [`read_file`] returns.
+///
+/// # Errors
+///
+/// Returns [`ToolError`] when the capability is missing, the picture exceeds
+/// [`MAX_MEDIA_INGEST_BYTES`], encoding is rejected, or the call is cancelled.
+pub fn read_any(
+    prepared: Option<&PreparedFile>,
+    cwd: &Path,
+    path: &str,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    cancel: &CancellationToken,
+) -> Result<ReadOutcome, ToolError> {
+    if offset.is_some_and(|start| start < 1) {
+        return Err(ToolError::InvalidArgs(
+            "offset must be a 1-based line number".to_owned(),
+        ));
+    }
+    let raw = read_raw_file(prepared, cwd, path, cancel)?;
+    if let Some(mime) = image_mime(&raw.raw) {
+        if offset.is_some() || limit.is_some() {
+            return Err(ToolError::InvalidArgs(
+                "offset and limit apply to text, not to an image".to_owned(),
+            ));
+        }
+        if raw.raw.len() > MAX_MEDIA_INGEST_BYTES {
+            return Err(ToolError::Execution(format!(
+                "{path}: image is larger than {} bytes; crop or resize it first",
+                MAX_MEDIA_INGEST_BYTES
+            )));
+        }
+        return Ok(ReadOutcome::Image {
+            bytes: raw.raw,
+            mime,
+            key: raw.key,
+        });
+    }
+    let text = reject_encoding(&raw.raw)?;
+    let displayed = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let (window, total_lines, returned_lines, truncated) = window_text(displayed, offset, limit);
+    Ok(ReadOutcome::Text(FileRead {
+        displayed: append_revision(&window, &raw.revision),
+        truncated,
+        total_lines,
+        returned_lines,
+        revision: raw.revision,
+        path_key: raw.key,
+    }))
+}
+
+/// Reads a prepared (or internally prepared) UTF-8 file. Test-only: the
+/// `read` tool goes through [`read_any`], which also accepts pictures.
 ///
 /// # Errors
 ///
 /// Returns [`ToolError`] when the capability is missing, encoding is rejected,
 /// the file exceeds [`MAX_READ_SCAN_BYTES`], identity changes, or the call is
-/// cancelled. Cancel and timeout never return a partial window.
+/// cancelled. A picture is not text and is reported as such.
+#[cfg(test)]
 pub fn read_file(
     prepared: Option<&PreparedFile>,
     cwd: &Path,
@@ -206,23 +301,12 @@ pub fn read_file(
     limit: Option<usize>,
     cancel: &CancellationToken,
 ) -> Result<FileRead, ToolError> {
-    if offset.is_some_and(|start| start < 1) {
-        return Err(ToolError::InvalidArgs(
-            "offset must be a 1-based line number".to_owned(),
-        ));
+    match read_any(prepared, cwd, path, offset, limit, cancel)? {
+        ReadOutcome::Text(read) => Ok(read),
+        ReadOutcome::Image { .. } => Err(ToolError::Execution(format!(
+            "{path}: the file is an image, not text"
+        ))),
     }
-    let raw = read_raw_file(prepared, cwd, path, cancel)?;
-    let text = reject_encoding(&raw.raw)?;
-    let displayed = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let (window, total_lines, returned_lines, truncated) = window_text(displayed, offset, limit);
-    Ok(FileRead {
-        displayed: append_revision(&window, &raw.revision),
-        truncated,
-        total_lines,
-        returned_lines,
-        revision: raw.revision,
-        path_key: raw.key,
-    })
 }
 
 /// Reads a prepared (or internally prepared) UTF-8 file as a full snapshot.
@@ -270,18 +354,18 @@ pub async fn read_file_snapshot_async(
 ///
 /// # Errors
 ///
-/// Same as [`read_file`].
-pub async fn read_file_async(
+/// Same as [`read_any`].
+pub async fn read_any_async(
     prepared: Option<std::sync::Arc<PreparedFile>>,
     cwd: PathBuf,
     path: String,
     offset: Option<usize>,
     limit: Option<usize>,
     cancel: CancellationToken,
-) -> Result<FileRead, ToolError> {
+) -> Result<ReadOutcome, ToolError> {
     let deadline = Instant::now() + SEARCH_TIME_LIMIT;
     run_blocking_until("file read", &cancel, deadline, move |worker_cancel| {
-        read_file(
+        read_any(
             prepared.as_deref(),
             &cwd,
             &path,
@@ -299,8 +383,16 @@ mod tests {
 
     use tokio_util::sync::CancellationToken;
 
-    use super::{MAX_BYTES, read_file, window_text};
+    use super::{MAX_BYTES, MAX_MEDIA_INGEST_BYTES, read_file, window_text};
     use crate::tool::ToolError;
+
+    #[test]
+    fn the_ingest_cap_encodes_to_the_provider_ceiling() {
+        assert_eq!(
+            MAX_MEDIA_INGEST_BYTES / 3 * 4,
+            mycode_core::MAX_IMAGE_BASE64_BYTES
+        );
+    }
 
     #[test]
     fn a_byte_cut_window_reports_only_whole_lines() {

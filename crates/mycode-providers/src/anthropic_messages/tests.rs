@@ -234,6 +234,50 @@ fn parallel_tool_results_and_a_steer_share_one_user_turn() {
 }
 
 #[test]
+fn a_tool_returned_image_rides_inside_the_tool_result() {
+    use mycode_core::{BinaryData, ToolResultMessage};
+    let text_only = std::sync::Arc::new(Message::ToolResult(ToolResultMessage {
+        tool_call_id: "plain".to_owned(),
+        content: vec![ContentBlock::Text(mycode_core::TextBlock::new("ok"))],
+        is_error: false,
+        details: None,
+    }));
+    let with_image = std::sync::Arc::new(Message::ToolResult(ToolResultMessage {
+        tool_call_id: "shot".to_owned(),
+        content: vec![
+            ContentBlock::Text(mycode_core::TextBlock::new("Image: shot.png")),
+            ContentBlock::Image(BinaryData {
+                data: "aGVsbG8=".to_owned(),
+                mime_type: "image/png".to_owned(),
+            }),
+        ],
+        is_error: false,
+        details: None,
+    }));
+    let body = build_body(
+        "claude-sonnet-5",
+        "https://api.anthropic.com/v1/messages",
+        &Request {
+            messages: vec![text_only, with_image],
+            ..Request::default()
+        },
+    );
+    let messages = body["messages"].as_array().expect("messages");
+    // Parallel results share one user turn; each keeps its own content form.
+    assert_eq!(messages.len(), 1);
+    let content = messages[0]["content"].as_array().expect("content");
+    // Text-only results keep the string form so the prefix bytes stay stable.
+    assert_eq!(content[0]["content"], "ok");
+    let blocks = content[1]["content"]
+        .as_array()
+        .expect("image result becomes blocks");
+    assert_eq!(blocks[0]["type"], "text");
+    assert_eq!(blocks[1]["type"], "image");
+    assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+    assert_eq!(blocks[1]["source"]["data"], "aGVsbG8=");
+}
+
+#[test]
 fn a_tool_result_never_joins_a_text_turn() {
     use mycode_core::{ToolResultMessage, UserMessage};
     let request = Request {
