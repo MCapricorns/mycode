@@ -147,7 +147,7 @@ pub fn render_root(
                 .flex()
                 .flex_row()
                 .when(workspace.vm().view == MainView::Chat, |this| {
-                    this.child(sidebar::render_sidebar(workspace, cx))
+                    this.child(sidebar::render_sidebar(workspace, window, cx))
                 })
                 .child(main_pane(workspace, window, cx))
                 .when(inspector_docked, |this| {
