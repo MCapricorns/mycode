@@ -28,9 +28,50 @@ pub(super) enum SettingRow {
     },
 }
 
+/// magpie's shared servers, re-read only when `~/.mycode/mcp.json` changed.
+///
+/// The settings page repaints every frame while a turn streams and reads the
+/// rows again on every key and wheel notch; parsing a small file on each of
+/// those is wasted work. The stamp is (modified time, length), so magpie
+/// rewriting the file still shows up on the next paint.
+#[derive(Debug, Default)]
+pub(super) struct SharedServers {
+    stamp: Option<(std::time::SystemTime, u64)>,
+    servers: Vec<McpServerSettings>,
+    error: Option<String>,
+}
+
+impl SharedServers {
+    /// The shared servers and the error that stopped the last read, if any.
+    fn read(&mut self, home: &HomeLayout) -> (&[McpServerSettings], Option<&str>) {
+        let file = home.root().join("mcp.json");
+        let stamp = std::fs::metadata(&file)
+            .ok()
+            .and_then(|meta| meta.modified().ok().map(|modified| (modified, meta.len())));
+        if stamp != self.stamp {
+            self.stamp = stamp;
+            match mycode_config::global_mcp_servers(home) {
+                Ok(servers) => {
+                    self.servers = servers;
+                    self.error = None;
+                }
+                Err(error) => {
+                    self.servers = Vec::new();
+                    self.error = Some(error);
+                }
+            }
+        }
+        (&self.servers, self.error.as_deref())
+    }
+}
+
 /// The selectable items of the settings page, in display order.
-pub(super) fn settings_items(vm: &WorkspaceState, home: &HomeLayout) -> Vec<SettingItem> {
-    settings_rows(vm, home)
+pub(super) fn settings_items(
+    vm: &WorkspaceState,
+    home: &HomeLayout,
+    shared: &mut SharedServers,
+) -> Vec<SettingItem> {
+    settings_rows(vm, home, shared)
         .into_iter()
         .filter_map(|row| match row {
             SettingRow::Item { item, .. } => Some(item),
@@ -97,7 +138,11 @@ fn server_target(server: &McpServerSettings) -> String {
 }
 
 /// The full settings page: headers and rows in display order.
-pub(super) fn settings_rows(vm: &WorkspaceState, home: &HomeLayout) -> Vec<SettingRow> {
+pub(super) fn settings_rows(
+    vm: &WorkspaceState,
+    home: &HomeLayout,
+    shared: &mut SharedServers,
+) -> Vec<SettingRow> {
     let mut rows = Vec::new();
     let settings = vm.settings.as_ref();
 
@@ -203,10 +248,7 @@ pub(super) fn settings_rows(vm: &WorkspaceState, home: &HomeLayout) -> Vec<Setti
     }
     // magpie's Library file is read-only here: magpie owns it, and a server
     // that already uses the id wins, exactly as the connect merge decides.
-    let (library, library_error) = match mycode_config::global_mcp_servers(home) {
-        Ok(servers) => (servers, None),
-        Err(error) => (Vec::new(), Some(error)),
-    };
+    let (library, library_error) = shared.read(home);
     let library: Vec<&McpServerSettings> = library
         .iter()
         .filter(|server| {

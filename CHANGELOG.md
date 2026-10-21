@@ -8,7 +8,8 @@
 
 ### Added
 
-- 终端版可以滚屏：鼠标滚轮与 `PageUp` / `PageDown` 都能翻看转录（滚轮一格三行），设置页的滚轮移动游标。之前只开备用屏幕、不收滚轮事件，滚轮什么也不做。开启鼠标上报后终端自己的划选要按住 `Shift` 拖选、再用 `Ctrl+Shift+C` 复制。
+- magpie 侧按会话归组请求：会话请求带 `x-magpie-session: <会话 id>` 头（与 `prompt_cache_key` 同值），magpie 的 Sessions 页据此列出、录制和删除对话；标题生成和压缩摘要这类不属于对话的请求不带。只有打开 magpie 的「录制对话」时才保留正文，关闭时只看到会话本身。
+- 终端版可以滚屏：鼠标滚轮与 `PageUp` / `PageDown` 都能翻看转录（滚轮一格三行），设置页的滚轮移动游标。之前只开备用屏幕、不收滚轮事件，滚轮什么也不做。开启鼠标上报后终端自己的划选要让开鼠标：Windows 终端和 GNOME 终端按住 `Shift` 拖选、`Ctrl+Shift+C` 复制，iTerm2 等 macOS 终端按住 `Option` 拖选、`Cmd+C` 复制。
 
 ### Fixed
 

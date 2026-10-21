@@ -217,7 +217,7 @@ impl Tui {
     fn draw_settings(&mut self, frame: &mut Frame, area: Rect) {
         let vm = self.driver.vm();
         let palette = self.palette;
-        let rows = settings_rows(vm, self.driver.home());
+        let rows = settings_rows(vm, self.driver.home(), &mut self.shared_mcp);
         let mut item_index = 0usize;
         let mut cursor_line = 0usize;
         let mut lines: Vec<Line> = vec![

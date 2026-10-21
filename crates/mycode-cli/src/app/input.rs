@@ -141,16 +141,20 @@ impl Tui {
     }
 
     /// Whether typed input is already queued behind this Enter — a console
-    /// typing a paste out as keys. Anything that is not a key (mouse motion
-    /// from mouse capture, a resize, a focus change) is stashed for the event
-    /// loop and does not count, so moving the mouse cannot turn Enter into a
-    /// newline.
+    /// typing a paste out as keys. Anything that is not a key press (mouse
+    /// motion from mouse capture, a key release, a resize, a focus change) is
+    /// stashed for the event loop and does not count, so moving the mouse
+    /// cannot turn Enter into a newline.
     fn more_input_queued(&mut self) -> bool {
         while matches!(event::poll(Duration::ZERO), Ok(true)) {
             let Ok(event) = event::read() else {
                 return false;
             };
-            let typed = matches!(event, Event::Key(_) | Event::Paste(_));
+            let typed = match &event {
+                Event::Paste(_) => true,
+                Event::Key(key) => key.kind == KeyEventKind::Press,
+                _ => false,
+            };
             self.pending_events.push_back(event);
             if typed {
                 return true;
