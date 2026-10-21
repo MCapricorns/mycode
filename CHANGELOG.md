@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.21] - 2026-10-21
+
 ### Fixed
 
 - 桌面版侧栏的目录块不再固定 148px 高：它按标题栏、操作条、两个分段标题和底栏之外的剩余空间取一半，第三个目录的路径不再被「会话」标题切掉，会话列表整体下移；目录更多时在块内滚动，会话区保留另一半。
@@ -344,7 +346,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.20...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.21...HEAD
+[0.12.21]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.21
 [0.12.20]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.20
 [0.12.19]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.19
 [0.12.18]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.18
