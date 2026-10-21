@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use mycode_frontend::driver::{Effect, ToastKind};
 use mycode_frontend::view_model::{FrontendAction, MainView, MentionKind, preferred_slash_index};
 use tui_textarea::{CursorMove, Input, Key as TextareaKey, TextArea};
@@ -97,9 +97,7 @@ impl Tui {
             // A console that types a paste out as keys delivers its lines as
             // Enter presses with more input already waiting; those become
             // newlines instead of one submit per pasted line.
-            (KeyCode::Enter, false, false)
-                if !shift && !matches!(event::poll(Duration::ZERO), Ok(true)) =>
-            {
+            (KeyCode::Enter, false, false) if !shift && !self.more_input_queued() => {
                 self.submit_current(&mut effects);
             }
             (KeyCode::Enter, true, false) => self.interrupt_send_current(&mut effects),
@@ -140,6 +138,25 @@ impl Tui {
             }
         }
         self.apply_effects(effects);
+    }
+
+    /// Whether typed input is already queued behind this Enter — a console
+    /// typing a paste out as keys. Anything that is not a key (mouse motion
+    /// from mouse capture, a resize, a focus change) is stashed for the event
+    /// loop and does not count, so moving the mouse cannot turn Enter into a
+    /// newline.
+    fn more_input_queued(&mut self) -> bool {
+        while matches!(event::poll(Duration::ZERO), Ok(true)) {
+            let Ok(event) = event::read() else {
+                return false;
+            };
+            let typed = matches!(event, Event::Key(_) | Event::Paste(_));
+            self.pending_events.push_back(event);
+            if typed {
+                return true;
+            }
+        }
+        false
     }
 
     /// Rows in the open `/`/`@` menu, `0` when none is open.

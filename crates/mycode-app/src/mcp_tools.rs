@@ -635,14 +635,36 @@ inputSchema, then `use_tool`. Do not guess parameters.\n",
     }
 
     fn list_text(&self) -> String {
-        if self.deferred.is_empty() {
-            return "No deferred MCP tools. Direct tools are called by name.".to_owned();
+        let mut lines = Vec::new();
+        // The reason a server is missing belongs in the answer: a config that
+        // failed to load is not the same as no MCP configured.
+        if let Some(warning) = &self.warning {
+            lines.push(format!("MCP config: {warning}"));
         }
-        self.deferred
-            .iter()
-            .map(|(name, summary)| format!("{name} — {summary}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        if self.deferred.is_empty() {
+            if self.direct.is_empty() {
+                lines.push("No MCP tools are connected.".to_owned());
+            } else {
+                // Every tool is registered directly, so there is nothing to
+                // load — name them so the answer does not read as "no MCP".
+                lines.push(format!(
+                    "No deferred MCP tools. Direct tools are called by name: {}.",
+                    self.direct.join(", ")
+                ));
+            }
+        } else {
+            for (name, summary) in &self.deferred {
+                lines.push(format!("{name} — {summary}"));
+            }
+            if !self.direct.is_empty() {
+                lines.push(String::new());
+                lines.push(format!(
+                    "Direct tools, called by name: {}.",
+                    self.direct.join(", ")
+                ));
+            }
+        }
+        lines.join("\n")
     }
 
     /// Exact key first. Models also send a different case or prefix the
@@ -1225,10 +1247,46 @@ mod tests {
         let listed = catalog.list_text();
         assert!(listed.contains("remote"));
         assert!(listed.contains("does a thing"));
+        assert!(listed.contains("Direct tools, called by name: small."));
         assert!(!listed.contains("inputSchema"));
         let note = catalog.prompt_note();
         assert!(note.contains("list"));
         assert!(!note.contains("remote"));
+    }
+
+    /// Every tool direct is still a connected MCP server; the answer names
+    /// them instead of reading like "no MCP".
+    #[test]
+    fn list_names_direct_tools_when_nothing_is_deferred() {
+        let catalog = McpCatalog {
+            by_name: std::collections::HashMap::new(),
+            direct: vec![
+                "context7_query_docs".to_owned(),
+                "anysearch_search".to_owned(),
+            ],
+            deferred: Vec::new(),
+            warning: None,
+        };
+        assert_eq!(
+            catalog.list_text(),
+            "No deferred MCP tools. Direct tools are called by name: \
+             context7_query_docs, anysearch_search."
+        );
+    }
+
+    /// The config error is the reason a server is missing, so `"list"` keeps
+    /// it instead of claiming nothing is set up.
+    #[test]
+    fn list_keeps_the_config_error_above_the_tools() {
+        let catalog = McpCatalog {
+            by_name: std::collections::HashMap::new(),
+            direct: Vec::new(),
+            deferred: Vec::new(),
+            warning: Some("MCP config unreadable: access denied".to_owned()),
+        };
+        let listed = catalog.list_text();
+        assert!(listed.contains("MCP config: MCP config unreadable: access denied"));
+        assert!(listed.contains("No MCP tools are connected."));
     }
 
     struct ScriptedMcp {

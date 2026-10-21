@@ -3,6 +3,7 @@
 //! `WorkspaceState` on every paint.
 
 use mycode_app::{ProxyTestRoute, brief_error};
+use mycode_config::{HomeLayout, McpServerSettings};
 use mycode_frontend::shortcuts::{Surface, shortcuts};
 use mycode_frontend::view_model::{
     ProxyTestState, UpdateState, WorkspaceState, model_display_name, provider_display_name,
@@ -28,8 +29,8 @@ pub(super) enum SettingRow {
 }
 
 /// The selectable items of the settings page, in display order.
-pub(super) fn settings_items(vm: &WorkspaceState) -> Vec<SettingItem> {
-    settings_rows(vm)
+pub(super) fn settings_items(vm: &WorkspaceState, home: &HomeLayout) -> Vec<SettingItem> {
+    settings_rows(vm, home)
         .into_iter()
         .filter_map(|row| match row {
             SettingRow::Item { item, .. } => Some(item),
@@ -73,8 +74,30 @@ fn proxy_test_value(test: &ProxyTestState) -> String {
     }
 }
 
+/// What an MCP server points at: the command line, or the HTTP endpoint.
+fn server_target(server: &McpServerSettings) -> String {
+    if server.transport == "stdio" {
+        let mut line = server.command.clone().unwrap_or_default();
+        for arg in &server.args {
+            line.push(' ');
+            // Quoted like the form takes it, so an argument with spaces does
+            // not read as several.
+            if arg.contains(char::is_whitespace) {
+                line.push('"');
+                line.push_str(arg);
+                line.push('"');
+            } else {
+                line.push_str(arg);
+            }
+        }
+        line
+    } else {
+        server.endpoint.clone().unwrap_or_default()
+    }
+}
+
 /// The full settings page: headers and rows in display order.
-pub(super) fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
+pub(super) fn settings_rows(vm: &WorkspaceState, home: &HomeLayout) -> Vec<SettingRow> {
     let mut rows = Vec::new();
     let settings = vm.settings.as_ref();
 
@@ -164,23 +187,54 @@ pub(super) fn settings_rows(vm: &WorkspaceState) -> Vec<SettingRow> {
     });
 
     rows.push(SettingRow::Header("MCP".to_owned()));
-    if let Some(settings) = settings {
-        for (index, server) in settings.mcp_servers.iter().enumerate() {
-            let probing = if vm.mcp_probing.contains(&server.id) {
-                " · probing…"
-            } else {
-                ""
-            };
-            rows.push(SettingRow::Item {
-                item: SettingItem::Mcp(index),
-                label: format!("[{}] {}", if server.enabled { "x" } else { " " }, server.id),
-                value: format!("{}{}", server.transport, probing),
-                dim: !server.enabled,
-            });
-        }
-        if settings.mcp_servers.is_empty() {
-            rows.push(SettingRow::Header("  (none configured)".to_owned()));
-        }
+    let configured = settings.map_or(&[][..], |settings| settings.mcp_servers.as_slice());
+    for (index, server) in configured.iter().enumerate() {
+        let probing = if vm.mcp_probing.contains(&server.id) {
+            " · probing…"
+        } else {
+            ""
+        };
+        rows.push(SettingRow::Item {
+            item: SettingItem::Mcp(index),
+            label: format!("[{}] {}", if server.enabled { "x" } else { " " }, server.id),
+            value: format!("{}{}", server.transport, probing),
+            dim: !server.enabled,
+        });
+    }
+    // magpie's Library file is read-only here: magpie owns it, and a server
+    // that already uses the id wins, exactly as the connect merge decides.
+    let (library, library_error) = match mycode_config::global_mcp_servers(home) {
+        Ok(servers) => (servers, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let library: Vec<&McpServerSettings> = library
+        .iter()
+        .filter(|server| {
+            !configured
+                .iter()
+                .any(|configured| configured.id == server.id)
+        })
+        .collect();
+    for server in &library {
+        rows.push(SettingRow::Info {
+            label: server.id.clone(),
+            value: format!(
+                "{} · {} · magpie{}",
+                server.transport,
+                server_target(server),
+                // A disabled shared server is listed but never connects.
+                if server.enabled { "" } else { " · off" }
+            ),
+        });
+    }
+    if let Some(error) = &library_error {
+        rows.push(SettingRow::Info {
+            label: "magpie".to_owned(),
+            value: format!("✗ {error}"),
+        });
+    }
+    if configured.is_empty() && library.is_empty() && library_error.is_none() {
+        rows.push(SettingRow::Header("  (none configured)".to_owned()));
     }
 
     if !vm.skills.is_empty() {
