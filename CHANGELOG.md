@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.18] - 2026-10-21
+
 ### Added
 
 - 设置文档的权限被外部写入者（magpie 的 agent 插件替换文件）改掉后，启动修复现在会从隔离备份里抢救字段再重新发布：`magpie` 网关绑定不再因为插件重写 `settings.json` 而整段丢失。之前每次插件写入都会让 MCode 报「magpie 未连接」并清空模型列表，直到手工恢复。
@@ -309,7 +311,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.17...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.18...HEAD
+[0.12.18]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.18
 [0.12.17]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.17
 [0.12.16]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.16
 [0.12.15]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.15
