@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.17] - 2026-10-21
+
 ### Changed
 
 - 整套模型、MCP、技能和规则改为由 [magpie](https://usemagpie.ai) 统一提供：新增 `magpie` 设置段（网关地址、`magpie-mycode` 密钥、选中的模型），模型列表实时读取网关 `GET /v1/models`；自带供应商体系（models.dev 目录、厂商预设、Copilot/Codex 设备登录、手动 provider 配置）与 `catalog-cache.json` 全部移除。MCode 现在只通过本机 magpie 网关请求模型，关掉 magpie 就没有模型来源。
@@ -274,7 +276,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.16...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.17...HEAD
+[0.12.17]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.17
 [0.12.16]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.16
 [0.12.15]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.15
 [0.12.14]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.14
