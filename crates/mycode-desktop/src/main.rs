@@ -92,7 +92,7 @@ fn install_surface_panic_hook() {
             .map(str::to_owned)
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| info.to_string());
-        if let Some(notice) = mycode_frontend::cli::surface_failure_message(&message) {
+        if let Some(notice) = mycode_frontend::launch::surface_failure_message(&message) {
             eprintln!("{notice}");
             std::process::exit(1);
         }
@@ -103,21 +103,21 @@ fn install_surface_panic_hook() {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The self-update helper entry is shared with every `mycode*` binary.
-    if let Some(code) = mycode_frontend::cli::apply_update_from_args(&args) {
+    if let Some(code) = mycode_frontend::launch::apply_update_from_args(&args) {
         std::process::exit(code);
     }
-    if let Some(action) = mycode_frontend::cli::early_action(&args) {
+    if let Some(action) = mycode_frontend::launch::early_action(&args) {
         let text = match action {
-            mycode_frontend::cli::EarlyAction::Version => {
-                format!("{}\n", mycode_frontend::cli::version_line("mycode-desktop"))
+            mycode_frontend::launch::EarlyAction::Version => {
+                format!("{}\n", mycode_frontend::launch::version_line("mycode-desktop"))
             }
-            mycode_frontend::cli::EarlyAction::Help => {
-                mycode_frontend::cli::help_text("mycode-desktop")
+            mycode_frontend::launch::EarlyAction::Help => {
+                mycode_frontend::launch::help_text("mycode-desktop")
             }
-            mycode_frontend::cli::EarlyAction::Unknown(flag) => {
+            mycode_frontend::launch::EarlyAction::Unknown(flag) => {
                 emit_early_text(&format!(
                     "mycode: unknown option {flag}\n\n{}",
-                    mycode_frontend::cli::help_text("mycode-desktop")
+                    mycode_frontend::launch::help_text("mycode-desktop")
                 ));
                 std::process::exit(1);
             }
@@ -128,7 +128,7 @@ fn main() {
         std::process::exit(0);
     }
     install_surface_panic_hook();
-    let home = match mycode_frontend::cli::home() {
+    let home = match mycode_frontend::launch::home() {
         Ok(home) => home,
         Err(error) => {
             eprintln!("mycode home unavailable: {error}");
@@ -147,7 +147,7 @@ fn main() {
             std::process::exit(0);
         }
     };
-    let mycode_frontend::cli::Launch { home, update } = mycode_frontend::cli::settle(home, true);
+    let mycode_frontend::launch::Launch { home, update } = mycode_frontend::launch::settle(home, true);
     // A pending payload a previous session staged but never swapped — a
     // crash or a lost helper — re-arms here and this launch exits into it:
     // the process that comes back up is the new version. A payload that

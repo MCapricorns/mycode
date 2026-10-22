@@ -9,7 +9,6 @@ members = [
     "crates/mycode-app",
     "crates/mycode-frontend",
     "crates/mycode-desktop",
-    "crates/mycode-cli",
 ]
 # mod.rs is legacy module layout; modern foo.rs + foo/ is enforced.
 [workspace.lints]
@@ -77,6 +76,13 @@ sha2 = "0.11.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 semver = { version = "1.0.28", features = ["serde"] }
+# The clipboard hands a Windows screenshot over as a bitmap and a macOS one
+# as a TIFF; providers take PNG, so the desktop decodes and re-encodes those.
+image = { version = "0.25.10", default-features = false, features = [
+    "bmp",
+    "png",
+    "tiff",
+] }
 # Session grouping follows the user's local calendar, including DST boundaries.
 chrono = "0.4.45"
 

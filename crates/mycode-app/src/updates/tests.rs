@@ -455,34 +455,10 @@ fn release_assets() -> Vec<super::AssetJson> {
 }
 
 #[test]
-fn asset_prefix_names_each_binary_family() {
-    assert_eq!(super::asset_prefix("mycode-desktop"), "mycode-desktop-v");
-    assert_eq!(super::asset_prefix("mycode-cli"), "mycode-cli-v");
-}
-
-#[test]
-fn a_renamed_binary_keeps_the_desktop_family() {
-    assert_eq!(super::asset_family(Some("mycode-cli")), "mycode-cli");
-    assert_eq!(super::asset_family(Some("MYCode-Cli")), "mycode-cli");
-    // Pre-rename terminals update into the `mycode-cli` family.
-    assert_eq!(super::asset_family(Some("mycode")), "mycode-cli");
-    assert_eq!(
-        super::asset_family(Some("mycode-desktop")),
-        "mycode-desktop"
-    );
-    assert_eq!(
-        super::asset_family(Some("MYCode Desktop")),
-        "mycode-desktop"
-    );
-    assert_eq!(super::asset_family(None), "mycode-desktop");
-}
-
-#[test]
 fn windows_x86_64_selects_the_published_zip_not_the_checksum() {
     let offer = super::resolve_asset_for(
         "windows",
         "x86_64",
-        "mycode-desktop",
         "v0.9.18",
         "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
         &release_assets(),
@@ -518,62 +494,12 @@ fn an_asset_hosted_outside_the_release_is_refused() {
         let result = super::resolve_asset_for(
             "windows",
             "x86_64",
-            "mycode-desktop",
             "v0.9.18",
             "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
             &assets,
         );
         assert!(result.is_err(), "{url}");
     }
-}
-
-#[test]
-fn the_cli_stem_never_matches_desktop_assets() {
-    // `mycode-cli` shares the `mycode` prefix with `mycode-desktop`: the
-    // `-v` boundary keeps the CLI from installing the desktop archive.
-    let result = super::resolve_asset_for(
-        "windows",
-        "x86_64",
-        "mycode-cli",
-        "v0.9.18",
-        "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
-        &release_assets(),
-    );
-    assert!(
-        result.is_err(),
-        "a `mycode-cli` binary must not match `mycode-desktop-*` assets"
-    );
-}
-
-#[test]
-fn the_cli_stem_selects_the_cli_zip() {
-    let mut assets = release_assets();
-    assets.push(super::AssetJson {
-        name: "mycode-cli-v0.9.18-x86_64-pc-windows-msvc.zip".to_owned(),
-        browser_download_url:
-            "https://github.com/MCapricorns/mycode/releases/download/v0.9.18/mycode-cli-v0.9.18-x86_64-pc-windows-msvc.zip"
-                .to_owned(),
-    });
-    let offer = super::resolve_asset_for(
-        "windows",
-        "x86_64",
-        "mycode-cli",
-        "v0.9.18",
-        "https://github.com/MCapricorns/mycode/releases/tag/v0.9.18",
-        &assets,
-    )
-    .unwrap()
-    .expect("windows x86_64 is a published update target");
-    assert!(
-        offer
-            .asset_url
-            .ends_with("mycode-cli-v0.9.18-x86_64-pc-windows-msvc.zip")
-    );
-    assert!(
-        offer
-            .checksum_url
-            .ends_with("mycode-cli-v0.9.18-x86_64-pc-windows-msvc.zip.sha256")
-    );
 }
 
 #[test]
@@ -591,7 +517,7 @@ fn an_archive_entry_with_a_drive_prefix_is_refused() {
             .unwrap();
         writer.write_all(b"payload").unwrap();
         writer.finish().unwrap();
-        let error = super::extract_binary(&asset, &dir, "mycode-desktop").expect_err(name);
+        let error = super::extract_binary(&asset, &dir).expect_err(name);
         assert!(error.contains("unsafe"), "{name}: {error}");
     }
     let _ = std::fs::remove_dir_all(&dir);

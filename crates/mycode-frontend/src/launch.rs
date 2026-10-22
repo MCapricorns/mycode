@@ -73,7 +73,7 @@ pub fn apply_update_from_args(args: &[String]) -> Option<i32> {
 pub struct Launch {
     pub home: HomeLayout,
     /// A staged self-update: re-armed for this run's exit, or applied since
-    /// the last one. Each binary words it its own way.
+    /// the last one.
     pub update: mycode_app::PendingUpdate,
 }
 
@@ -86,12 +86,11 @@ pub fn home() -> Result<HomeLayout, ConfigError> {
     HomeLayout::from_env(HomeEnv::from_process())
 }
 
-/// The launch steps every `mycode*` binary runs before its UI: opens the
-/// home, clears self-update leftovers, and settles a staged update.
+/// The launch steps the desktop runs before its UI: opens the home, clears
+/// self-update leftovers, and settles a staged update.
 ///
-/// `relaunch` is [`mycode_app::reconcile_pending_update`]'s: the desktop
-/// exits into a re-armed update, the terminal keeps running and the swap
-/// lands when it exits.
+/// `relaunch` is [`mycode_app::reconcile_pending_update`]'s: a re-armed
+/// update makes this launch exit into the new version.
 ///
 /// # Errors
 ///
@@ -122,7 +121,7 @@ pub fn version_line(bin: &str) -> String {
 }
 
 /// Text for `--help`. `bin` is the invoking binary name shown in the usage
-/// line and the version header (`mycode-desktop`, `mycode-cli`).
+/// line and the version header.
 #[must_use]
 pub fn help_text(bin: &str) -> String {
     format!(
@@ -177,11 +176,13 @@ mod tests {
             other => panic!("unknown flag should be an error, got {other:?}"),
         }
         assert_eq!(early_action(&["folder"]), None);
-        let version = version_line("mycode-cli");
-        assert_eq!(version, format!("mycode-cli {}", env!("CARGO_PKG_VERSION")));
+        let version = version_line("mycode-desktop");
+        assert_eq!(
+            version,
+            format!("mycode-desktop {}", env!("CARGO_PKG_VERSION"))
+        );
         assert!(help_text("mycode-desktop").contains("--version"));
-        assert!(help_text("mycode-desktop").contains("mycode-desktop"));
-        assert!(help_text("mycode-cli").contains("Usage: mycode-cli "));
+        assert!(help_text("mycode-desktop").contains("Usage: mycode-desktop "));
     }
 
     #[test]

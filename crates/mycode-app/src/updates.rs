@@ -1,10 +1,9 @@
-//! GitHub-release based self-update for the MYCode binaries.
+//! GitHub-release based self-update for the MYCode desktop.
 //!
 //! The checker resolves the latest published release, picks the release
-//! asset matching the running platform and binary — published names are
-//! `<exe stem>-v<version>-<target>.zip`, so `mycode-cli` and
-//! `mycode-desktop` update from disjoint archives — and compares
-//! semantic versions. The
+//! asset matching the running platform — published names are
+//! `mycode-desktop-v<version>-<target>.zip` — and compares semantic
+//! versions. The
 //! installer downloads the asset plus its `.sha256` sidecar, verifies the
 //! digest, extracts the new binary, and persists it as the durable pending
 //! payload under `<home>/update/`. Staging arms the platform swap right
@@ -65,41 +64,14 @@ fn asset_suffix_for(os: &str, arch: &str) -> &'static str {
     }
 }
 
-/// Published asset family of the running executable: `mycode-cli` for the
-/// terminal binary, `mycode-desktop` otherwise.
-///
-/// Only two families are published, so the stem is mapped onto them rather
-/// than used verbatim: a desktop binary the user renamed (or a lookup
-/// failure) must keep updating from the desktop family instead of asking
-/// the release for an asset that never exists. A pre-rename `mycode`
-/// binary keeps updating into the CLI family — the installed copy lands as
-/// `mycode-cli` beside it.
-fn exe_stem() -> String {
-    let stem = std::env::current_exe().ok().and_then(|path| {
-        path.file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-    });
-    asset_family(stem.as_deref()).to_owned()
-}
+/// Release asset family, named after the only published executable stem.
+/// A renamed binary still updates from this family instead of asking the
+/// release for an asset that never exists.
+pub const ASSET_FAMILY: &str = "mycode-desktop";
 
-fn asset_family(stem: Option<&str>) -> &'static str {
-    match stem {
-        Some(stem)
-            if stem.eq_ignore_ascii_case("mycode-cli") || stem.eq_ignore_ascii_case("mycode") =>
-        {
-            "mycode-cli"
-        }
-        _ => "mycode-desktop",
-    }
-}
-
-/// Release-asset prefix for one executable stem: published names look
-/// like `{stem}-v0.9.18-x86_64-pc-windows-msvc.zip`. The trailing `-v`
-/// keeps the two families disjoint even though `mycode` is a strict
-/// prefix of `mycode-desktop`.
-fn asset_prefix(exe_stem: &str) -> String {
-    format!("{exe_stem}-v")
-}
+/// Release-asset prefix: published names look like
+/// `mycode-desktop-v0.12.21-x86_64-pc-windows-msvc.zip`.
+const ASSET_PREFIX: &str = "mycode-desktop-v";
 
 /// One installable update offer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -230,7 +202,6 @@ fn resolve_asset(
     resolve_asset_for(
         std::env::consts::OS,
         std::env::consts::ARCH,
-        &exe_stem(),
         tag,
         notes_url,
         assets,
@@ -243,7 +214,6 @@ fn resolve_asset(
 fn resolve_asset_for(
     os: &str,
     arch: &str,
-    exe_stem: &str,
     tag: &str,
     notes_url: &str,
     assets: &[AssetJson],
@@ -252,18 +222,15 @@ fn resolve_asset_for(
     if suffix.is_empty() {
         return Ok(None);
     }
-    // Published names look like
-    // `mycode-desktop-v0.9.18-x86_64-pc-windows-msvc.zip`. The `.sha256`
-    // sidecar shares the prefix and must not be selected.
-    let prefix = asset_prefix(exe_stem);
+    // The `.sha256` sidecar shares the prefix and must not be selected.
     let asset = assets.iter().find(|asset| {
-        asset.name.starts_with(&prefix)
+        asset.name.starts_with(ASSET_PREFIX)
             && asset.name.ends_with(suffix)
             && !asset.name.ends_with(".sha256")
     });
     let Some(asset) = asset else {
         return Err(format!(
-            "update check failed: release has no {prefix}*{suffix} asset"
+            "update check failed: release has no {ASSET_PREFIX}*{suffix} asset"
         ));
     };
     if !is_release_download(&asset.browser_download_url) {
@@ -346,10 +313,9 @@ pub async fn download_update(
     .await?;
 
     let verify_stage_dir = stage_dir.clone();
-    let exe = exe_stem();
     let verify_stage = tokio::task::spawn_blocking(move || -> Result<(PathBuf, String), String> {
         verify_checksum(&asset_path, &checksum_path)?;
-        let binary_path = extract_binary(&asset_path, &verify_stage_dir, &exe)?;
+        let binary_path = extract_binary(&asset_path, &verify_stage_dir)?;
         let binary_sha256 = file_sha256(&binary_path)?;
         let _ = std::fs::remove_file(&asset_path);
         let _ = std::fs::remove_file(&checksum_path);
@@ -458,7 +424,7 @@ fn verify_checksum(asset: &Path, checksum_file: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_binary(asset: &Path, stage_dir: &Path, exe_stem: &str) -> Result<PathBuf, String> {
+fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
     let file = std::fs::File::open(asset).map_err(|error| format!("asset open: {error}"))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|error| format!("asset open: {error}"))?;
     let mut entry_name: Option<String> = None;
@@ -474,7 +440,7 @@ fn extract_binary(asset: &Path, stage_dir: &Path, exe_stem: &str) -> Result<Path
             continue;
         }
         let base = name.split('/').next_back().unwrap_or(&name);
-        let executable = name.ends_with(".exe") || base == exe_stem;
+        let executable = name.ends_with(".exe") || base == ASSET_FAMILY;
         if !executable {
             continue;
         }
@@ -505,7 +471,7 @@ fn extract_binary(asset: &Path, stage_dir: &Path, exe_stem: &str) -> Result<Path
     let base_name = entry_name
         .split('/')
         .next_back()
-        .unwrap_or(exe_stem)
+        .unwrap_or(ASSET_FAMILY)
         .to_owned();
     let binary_path = stage_dir.join(&base_name);
     let mut entry = archive
@@ -547,9 +513,9 @@ fn extract_binary(asset: &Path, stage_dir: &Path, exe_stem: &str) -> Result<Path
 /// replaces the binary in place immediately — either way the next launch
 /// is the new version, no matter how this process ends.
 ///
-/// `relaunch` starts the target again after a verified replace. A terminal
-/// binary is never relaunched: it cannot get its console back, so the
-/// user's next `mycode-cli` run is simply the new version.
+/// `relaunch` starts the target again after a verified replace: an install
+/// click passes `true`, a staged download armed for the next exit passes
+/// `false`.
 ///
 /// Windows launches a copy of this executable with [`apply::APPLY_UPDATE_ARG`].
 /// macOS launches an `update-*.sh` script.
@@ -559,9 +525,6 @@ fn extract_binary(asset: &Path, stage_dir: &Path, exe_stem: &str) -> Result<Path
 /// Returns a failure message when the staged payload is corrupt and the
 /// target does not already carry it, or when the helper cannot start.
 pub fn arm_staged_update(prepared: &PreparedUpdate, relaunch: bool) -> Result<(), String> {
-    // A terminal binary can never relaunch: the helper cannot hand its
-    // console back, so the next `mycode-cli` run is the new version.
-    let relaunch = relaunch && !is_cli_binary();
     let current = std::env::current_exe().map_err(|error| format!("current exe: {error}"))?;
     let current = current.canonicalize().unwrap_or(current);
     // A sibling helper may already have landed the swap, and a winner may
@@ -650,7 +613,7 @@ pub fn persist_pending_update(
 ) -> Result<PreparedUpdate, String> {
     let dir = pending_dir(home);
     std::fs::create_dir_all(&dir).map_err(|error| format!("pending dir: {error}"))?;
-    let (pending, sha_file, version_file, _) = pending_paths(&dir, &exe_stem());
+    let (pending, sha_file, version_file, _) = pending_paths(&dir, ASSET_FAMILY);
     let staging = pending.with_extension("moving");
     std::fs::copy(&prepared.new_binary, &staging)
         .map_err(|error| format!("pending copy: {error}"))?;
@@ -674,15 +637,6 @@ pub fn persist_pending_update(
         stage_dir: dir,
         binary_sha256: prepared.binary_sha256.clone(),
     })
-}
-
-/// Whether the running executable updates from the `mycode-cli` asset
-/// family (vs `mycode-desktop`). The terminal binary is never relaunched
-/// by the swap: a helper cannot hand a console back to it, so the next
-/// `mycode-cli` run is the new version.
-#[must_use]
-pub fn is_cli_binary() -> bool {
-    exe_stem() == "mycode-cli"
 }
 
 /// What [`reconcile_pending_update`] found in the pending-update slot.
@@ -711,8 +665,7 @@ pub fn reconcile_pending_update(home: &mycode_config::HomeLayout, relaunch: bool
         return PendingUpdate::None;
     }
     let dir = pending_dir(home);
-    let stem = exe_stem();
-    let (pending, sha_file, version_file, attempts_file) = pending_paths(&dir, &stem);
+    let (pending, sha_file, version_file, attempts_file) = pending_paths(&dir, ASSET_FAMILY);
     let cleanup = |include_helpers: bool| {
         for path in [&pending, &sha_file, &version_file, &attempts_file] {
             let _ = std::fs::remove_file(path);
@@ -795,9 +748,8 @@ fn sweep_update_helpers(dir: &Path) {
 
 /// Removes stale staging directories left by interrupted updates.
 ///
-/// A stage is named after the process downloading into it. The terminal and
-/// the desktop share the temp directory, so a stage whose process still runs
-/// is that instance's download in flight and is kept.
+/// A stage is named after the process downloading into it, so a stage whose
+/// process still runs is that instance's download in flight and is kept.
 pub fn cleanup_stale_stages() {
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
         return;

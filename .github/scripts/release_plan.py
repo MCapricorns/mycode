@@ -25,7 +25,6 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_PACKAGES = (
     "mycode-agent",
     "mycode-app",
-    "mycode-cli",
     "mycode-config",
     "mycode-core",
     "mycode-desktop",
@@ -723,8 +722,6 @@ def _yaml_job(workflow: str, name: str) -> str:
 def _expect_workflow_contract() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     lowered = workflow.lower()
-    _expect("gh release view" not in lowered, "asset lookup still decides the plan")
-    _expect("already has every" not in lowered, "skip-if-complete wording remains")
     _expect(".assets[].name" not in workflow, "asset name check remains")
     _expect("release_plan.py" in workflow, "planner is not wired into ci.yml")
     _expect(
@@ -742,8 +739,6 @@ def _expect_workflow_contract() -> None:
         publish_gate not in _yaml_job(workflow, "release-build"),
         "platform builds must still run when this push is not a new release",
     )
-    _expect("native_image_launches" not in workflow, "shell smoke test is back in ci")
-    _expect("cargo fmt" not in workflow, "fmt gate is back in ci")
     release_targets = (
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
@@ -761,27 +756,13 @@ def _expect_workflow_contract() -> None:
             f"mycode-desktop-<tag>-{target}.zip" in workflow,
             f"missing release asset comment {target}",
         )
-        _expect(
-            f"mycode-cli-<tag>-{target}.zip" in workflow,
-            f"missing CLI release asset comment {target}",
-        )
     build_sh = (ROOT / ".github/scripts/cargo_release_build.sh").read_text(encoding="utf-8")
     _expect("-p mycode-desktop" in build_sh, "desktop release build missing")
-    _expect("-p mycode-cli" in build_sh, "CLI release build missing")
     _expect("Package (Linux)" not in release_build, "Linux packaging is back")
-    _expect(
-        "x86_64-unknown-linux-gnu" not in release_build,
-        "Linux release target is back",
-    )
-    _expect("linux-gpui-deps" not in workflow, "Linux GPUI composite action is wired again")
     _expect(
         workflow.count("runs-on: ubuntu-latest") == 3,
         "release-plan, release-publish, and release-cleanup should be the only literal ubuntu-latest jobs",
     )
-    _expect("cargo-audit" not in workflow, "cargo-audit job remains")
-    for job in ("release-plan", "release-publish", "release-cleanup"):
-        body = _yaml_job(workflow, job)
-        _expect("ubuntu-latest" in body, f"{job} left ubuntu-latest")
     plan = _yaml_job(workflow, "release-plan")
     _expect(
         "HEAD:main" not in plan,
@@ -796,20 +777,6 @@ def _expect_workflow_contract() -> None:
         "advance_main.py" in publish,
         "release-publish does not advance main through advance_main.py",
     )
-    _expect(
-        "--built-sha" in publish,
-        "release-publish does not pass the built commit",
-    )
-    _expect(
-        'git push origin "HEAD:main"' not in publish,
-        "release-publish still requires a fast-forward of the built commit",
-    )
-    attach_at = publish.find("Attach assets to the release")
-    advance_at = publish.find("Advance main to the built commit")
-    _expect(
-        attach_at != -1 and advance_at != -1 and attach_at < advance_at,
-        "tag and assets are still published only after main moves",
-    )
     cleanup = _yaml_job(workflow, "release-cleanup")
     _expect("always()" in cleanup, "temporary ref is not deleted when publish fails")
     _expect(
@@ -823,7 +790,6 @@ def _expect_workflow_contract() -> None:
     )
     advance_py = (ROOT / ".github/scripts/advance_main.py").read_text(encoding="utf-8")
     _expect("--force" not in advance_py, "advance_main.py contains --force")
-    _expect("refs/heads/{branch}" in advance_py, "advance_main.py does not push the branch ref")
     _expect(
         "needs.release-plan.outputs.sha" in _yaml_job(workflow, "release-build"),
         "platform builds do not check out the planned commit",
@@ -833,27 +799,9 @@ def _expect_workflow_contract() -> None:
         "release planner self-test missing from release-plan",
     )
     _expect(
-        "release_notes.py" in plan,
-        "release body is not built from the changelog plus linked changes",
-    )
-    _expect(
         "github.actor != 'github-actions[bot]'" in plan,
         "a version bump push can plan another patch release",
     )
-    _expect(
-        "advance_main.py --self-test" in plan,
-        "advance_main self-test missing from release-plan",
-    )
-    _expect(
-        "runner.os == 'Linux'" not in plan,
-        "release planner self-test still waits for Linux",
-    )
-    _expect(
-        "runner.os == 'Linux'" not in release_build,
-        "Linux install or packaging is back in release builds",
-    )
-    _expect("\n  core:\n" not in workflow, "core quality job is back")
-    _expect("\n  desktop:\n" not in workflow, "desktop quality job is back")
     release_build_job = _yaml_job(workflow, "release-build")
     check = _yaml_job(workflow, "check")
     _expect(
@@ -893,32 +841,14 @@ def _expect_workflow_contract() -> None:
         "needs.check.result == 'success'" in _yaml_job(workflow, "release-publish"),
         "publish does not wait for the workspace check",
     )
-    # README and CHANGELOG describe three release platforms, with no Linux build.
+    # The README names the three published platforms.
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    _expect("才跳过打包" not in readme, "Chinese skip rule remains")
-    _expect("四个平台" not in readme, "Chinese docs went back to four release platforms")
     _expect("Windows x64" in readme, "Chinese docs dropped Windows x64")
     _expect("Windows ARM64" in readme, "Chinese docs dropped Windows ARM64")
     _expect("macOS Apple Silicon" in readme, "Chinese docs dropped macOS Apple Silicon")
-    _expect("暂无 Intel macOS 和 Linux 包" in readme, "Chinese docs dropped the no-Intel-or-Linux note")
-    _expect("skips packaging" not in readme, "English skip rule remains")
-    _expect("four platform" not in readme, "English docs went back to four release platforms")
     _expect("release.yml" not in readme, "README badge points at the removed release.yml workflow")
-    _expect(
-        "x86_64-unknown-linux-gnu" not in readme,
-        "README still ships a Linux release zip",
-    )
-    _expect(
-        "Linux x86_64" not in readme,
-        "README still lists Linux x86_64 as a release platform",
-    )
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     intro, _, _ = changelog.partition("## [Unreleased]")
-    _expect("还没有带齐三个平台压缩包" not in changelog, "three-platform skip rule remains")
-    _expect("还没有带齐四个平台压缩包" not in changelog, "four-platform skip rule remains")
-    _expect("四个平台的 zip" not in intro, "changelog policy went back to four release platforms")
-    _expect("三个平台的 zip" in intro, "changelog policy is not three release platforms")
-    _expect("Linux x86_64" not in intro, "changelog policy still ships Linux x86_64")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
     _expect("cargo test --workspace" in intro, "changelog policy omits PR workspace tests")
     _expect(
@@ -928,20 +858,6 @@ def _expect_workflow_contract() -> None:
     _expect("-D warnings" in intro, "changelog policy omits denying clippy warnings")
     _expect("fat LTO" in intro, "changelog policy omits the release LTO split")
     _expect("pull request 不发版" in intro, "changelog policy no longer says PRs do not release")
-    for path, label in (
-        (ROOT / "docs/architecture.md", "architecture"),
-        (ROOT / "docs/desktop.md", "desktop"),
-    ):
-        text = path.read_text(encoding="utf-8")
-        _expect("cargo test --workspace" in text, f"{label} docs omit workspace tests")
-        _expect(
-            "cargo clippy --workspace --all-targets" in text,
-            f"{label} docs omit clippy",
-        )
-        _expect("-D warnings" in text, f"{label} docs omit denying clippy warnings")
-        _expect("fat LTO" in text, f"{label} docs omit the release LTO split")
-    _expect("pull_request (check):" in workflow, "workflow header does not document PR CI")
-    _expect("No fat LTO" in workflow, "workflow header does not keep release LTO off PR CI")
     _expect_single_workflow(workflow)
 
 

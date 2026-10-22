@@ -67,7 +67,7 @@ pub use updates::apply::{parse_apply_update_args, run_apply_update_helper};
 pub use updates::{PendingUpdate, PreparedUpdate, UpdateOffer};
 pub use updates::{
     arm_staged_update, brief_error, cleanup_previous_binary, cleanup_stale_stages, current_version,
-    is_cli_binary, reconcile_pending_update,
+    reconcile_pending_update,
 };
 pub use user_agent::default_user_agent;
 

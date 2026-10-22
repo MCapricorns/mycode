@@ -69,17 +69,14 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::DownloadUpdate { offer });
     }
 
-    /// Installs the staged update: the swap helper is armed, then the
-    /// frontend quits via [`Effect::Quit`] so the swap can replace the
-    /// binary. The desktop relaunches into the new version; the terminal
-    /// binary is not relaunched — a helper cannot hand its console back —
-    /// so the next `mycode-cli` run is the new version.
+    /// Installs the staged update: the swap helper is armed to relaunch,
+    /// then the frontend quits via [`Effect::Quit`] so the swap can replace
+    /// the binary and start the new version.
     pub fn install_update(&mut self, out: &mut Vec<Effect>) {
         let Some(prepared) = self.vm.prepared_update.clone() else {
             return;
         };
-        if let Err(message) = mycode_app::arm_staged_update(&prepared, !mycode_app::is_cli_binary())
-        {
+        if let Err(message) = mycode_app::arm_staged_update(&prepared, true) {
             self.act(FrontendAction::Failed(message), out);
             return;
         }

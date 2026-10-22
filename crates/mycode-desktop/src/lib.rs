@@ -11,7 +11,7 @@ pub mod instance;
 pub mod ui;
 pub mod workspace;
 
-pub use mycode_frontend::{cli, git_status, i18n, view_model};
+pub use mycode_frontend::{git_status, i18n, launch, view_model};
 
 /// Returns the wall-clock duration since the Unix epoch, saturating at zero
 /// when the system clock predates the epoch.
