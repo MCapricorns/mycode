@@ -62,6 +62,7 @@ pub(super) fn render_composer(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let composer = workspace.composer().clone();
+    let paste_target = cx.entity();
     if let Some((text, focus)) = workspace.take_composer_set() {
         composer.update(cx, |state, cx| state.set_value(text, window, cx));
         if focus {
@@ -282,7 +283,15 @@ pub(super) fn render_composer(
                                     Textarea::new(&composer)
                                         .appearance(false)
                                         .bordered(false)
-                                        .w_full(),
+                                        .w_full()
+                                        // A clipboard picture becomes an
+                                        // attachment; other pastes fall
+                                        // through to the text insertion.
+                                        .on_paste(move |item, _, cx| {
+                                            paste_target.update(cx, |workspace, cx| {
+                                                workspace.on_composer_paste(item, cx)
+                                            })
+                                        }),
                                 ),
                         )
                         .child(
