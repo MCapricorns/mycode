@@ -189,6 +189,10 @@ pub struct McpToolOutput {
 pub struct McpClient {
     channel: Arc<dyn JsonRpcChannel>,
     next_id: u64,
+    /// The server's own `instructions` from the handshake, bounded to
+    /// [`MAX_DETAIL_CHARS`]. The prompt note shows one line of it so the
+    /// model knows what the server is for before searching its tools.
+    instructions: Option<String>,
 }
 
 impl McpClient {
@@ -198,7 +202,14 @@ impl McpClient {
         Self {
             channel,
             next_id: 1,
+            instructions: None,
         }
+    }
+
+    /// The server's handshake instructions, if it sent any.
+    #[must_use]
+    pub fn instructions(&self) -> Option<&str> {
+        self.instructions.as_deref()
     }
 
     /// Performs the MCP initialize handshake and sends the initialized
@@ -221,6 +232,9 @@ impl McpClient {
                 }),
             )
             .await?;
+        self.instructions = result["instructions"]
+            .as_str()
+            .map(|text| text.chars().take(MAX_DETAIL_CHARS).collect());
         self.channel.notify("notifications/initialized").await?;
         Ok(result)
     }

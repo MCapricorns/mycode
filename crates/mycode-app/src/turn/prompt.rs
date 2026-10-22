@@ -162,7 +162,7 @@ pub(crate) fn session_system_prompt(
         system_prompt.push_str("\n\n<mcp>\n");
         system_prompt.push_str(note);
         system_prompt.push_str(
-            // The note already says how to reach direct and deferred tools.
+            // The note already says how to reach the servers' tools.
             "`search_tool` is a read: emit it in the same response as other independent \
 calls, `agent` included, instead of waiting for them.\n</mcp>",
         );
