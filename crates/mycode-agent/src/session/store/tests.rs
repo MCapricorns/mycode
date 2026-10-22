@@ -2,8 +2,8 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use mycode_config::HomeLayout;
-use mycode_core::{AssistantMessage, StopReason};
+use mycode_tools::HomeLayout;
+use mycode_tools::{AssistantMessage, StopReason};
 
 use crate::session::{
     BranchMutationKind, EventKind, HeadStamp, SessionError, SessionService, inspect_sessions,
@@ -58,7 +58,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 fn jsonl_path(home: &HomeLayout, session: &str, branch: &str) -> PathBuf {
     home.root()
         .join("sessions")
-        .join(mycode_config::NO_PROJECT_DIR)
+        .join(mycode_tools::NO_PROJECT_DIR)
         .join(session)
         .join(format!("{branch}.jsonl"))
 }
@@ -555,7 +555,7 @@ fn missing_or_lengthened_external_payload_and_bad_index_rows_report_corrupt() {
             .home
             .root()
             .join("sessions")
-            .join(mycode_config::NO_PROJECT_DIR)
+            .join(mycode_tools::NO_PROJECT_DIR)
             .join(created.session_id.as_str())
             .join("payloads")
             .join(format!("{}.bin", event_id.as_str()));
@@ -703,7 +703,7 @@ fn a_session_lives_in_its_project_folder_under_a_timestamped_name() {
             dir.display()
         );
         assert_eq!(
-            mycode_config::locate_session_dir(&scratch.home, id).expect("locate"),
+            mycode_tools::locate_session_dir(&scratch.home, id).expect("locate"),
             Some(format!("sessions/D--work-my-app/{id}"))
         );
         let head = append_text(

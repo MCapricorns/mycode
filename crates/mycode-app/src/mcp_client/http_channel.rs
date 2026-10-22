@@ -126,12 +126,12 @@ impl HttpChannel {
             }
         }
         headers.extend(self.options.headers.iter().cloned());
-        let response = mycode_providers::send_pinned(mycode_providers::PinnedRequest {
+        let response = mycode_agent::send_pinned(mycode_agent::PinnedRequest {
             method: reqwest::Method::POST,
             url: self.endpoint.clone(),
             headers,
-            body: Some(mycode_providers::PinnedBody::Bytes(body.into())),
-            mode: mycode_providers::PinMode::CheckRedirect,
+            body: Some(mycode_agent::PinnedBody::Bytes(body.into())),
+            mode: mycode_agent::PinMode::CheckRedirect,
             timeout: Some(self.options.timeout),
             read_timeout: None,
             user_agent: None,

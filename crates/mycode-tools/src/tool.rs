@@ -19,8 +19,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use mycode_core::message::{ContentBlock, TextBlock};
-use mycode_core::tool::ToolSpec;
+use mycode_providers::message::{ContentBlock, TextBlock};
+use mycode_providers::tool::ToolSpec;
 
 use crate::builtin::fs_io::FileAccess;
 use crate::builtin::fs_search::SearchAccess;
@@ -283,8 +283,8 @@ fn normalize_tool_schema(value: &mut Value) {
         object.remove("$id");
     }
     // Same expansion the wire adapters apply, so a builtin spec and the
-    // request body agree. See `mycode_core::inline_schema_refs`.
-    mycode_core::inline_schema_refs(value);
+    // request body agree. See `mycode_providers::inline_schema_refs`.
+    mycode_providers::inline_schema_refs(value);
     if let Some(object) = value.as_object_mut() {
         object.remove("$schema");
         if !object.contains_key("type")

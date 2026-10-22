@@ -1,4 +1,4 @@
-use mycode_core::ReasoningLevel;
+use mycode_config::ReasoningLevel;
 use serde_json::json;
 
 use super::{CHAT_THINKING, ChatFamily, anthropic_family_name, chat_family_name};

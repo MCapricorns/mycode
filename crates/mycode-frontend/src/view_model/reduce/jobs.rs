@@ -7,7 +7,7 @@
 use crate::i18n::t;
 use crate::view_model::{ConversationEntry, EntryKind, LiveJob, WorkspaceState};
 
-use mycode_tools::builtin::AGENT_PROGRESS_PREFIX;
+use mycode_app::builtin::AGENT_PROGRESS_PREFIX;
 
 use super::streaming::{set_streaming_status, tool_call_label};
 

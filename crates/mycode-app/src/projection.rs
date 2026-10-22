@@ -1,9 +1,9 @@
 //! Display projections: committed ledger events become the
 //! [`ConversationEntry`] rows a frontend renders.
 
+use mycode_agent::ToolResultMessage;
 use mycode_agent::session::{EventKind, SessionEvent};
-use mycode_core::ToolResultMessage;
-use mycode_core::{AssistantMessage, ContentBlock};
+use mycode_agent::{AssistantMessage, ContentBlock};
 
 use crate::ledger::decode_text;
 use crate::protocol::{ConversationEntry, EntryKind};
@@ -62,7 +62,7 @@ pub(crate) fn project_replayed_entry_with_meter(
                     assistant_meter(&message),
                 ),
                 Err(_) => {
-                    let text = match mycode_core::StoredUserMessage::from_payload(payload) {
+                    let text = match mycode_agent::StoredUserMessage::from_payload(payload) {
                         Some(stored) => stored.display_text(),
                         None => decode_text(payload),
                     };
@@ -101,7 +101,7 @@ pub(crate) fn project_replayed_entry_with_meter(
                 Some(ConversationEntry {
                     event_id: event.event_id.as_str().to_owned(),
                     kind: EntryKind::ToolCall,
-                    text: mycode_core::tool_label(name, target).into(),
+                    text: mycode_agent::tool_label(name, target).into(),
                     call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
                     thinking: String::new(),
                 }),
@@ -191,7 +191,7 @@ pub(crate) fn project_assistant_message(
     }
     // A user stop already shows as the frontends' red cancel banner; the
     // ledger keeps the marker so replayed context still records the cut.
-    mycode_core::strip_user_interruption(&mut text);
+    mycode_agent::strip_user_interruption(&mut text);
     ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::AssistantMessage,
@@ -228,16 +228,16 @@ mod tests {
 
     #[test]
     fn a_user_cancel_hides_the_marker_but_keeps_the_partial() {
-        let cancel = mycode_core::interrupted_response_text(mycode_core::USER_INTERRUPT_DETAIL);
+        let cancel = mycode_agent::interrupted_response_text(mycode_agent::USER_INTERRUPT_DETAIL);
         // A thinking-only interrupt paints no bare "[error] …" row under the
         // thinking box; the red cancel banner already says it.
-        let thinking_only = mycode_core::AssistantMessage {
+        let thinking_only = mycode_agent::AssistantMessage {
             blocks: vec![
-                mycode_core::ContentBlock::Thinking(mycode_core::ThinkingBlock::new("planning")),
-                mycode_core::ContentBlock::Text(mycode_core::TextBlock::new(cancel.clone())),
+                mycode_agent::ContentBlock::Thinking(mycode_agent::ThinkingBlock::new("planning")),
+                mycode_agent::ContentBlock::Text(mycode_agent::TextBlock::new(cancel.clone())),
             ],
             usage: None,
-            stop_reason: mycode_core::StopReason::Error,
+            stop_reason: mycode_agent::StopReason::Error,
         };
         let entry = super::project_assistant_message("evt-x", &thinking_only);
         assert!(
@@ -247,25 +247,25 @@ mod tests {
         );
         assert_eq!(entry.thinking, "planning");
         // A partial reply keeps its text; only the marker line goes.
-        let partial = mycode_core::AssistantMessage {
-            blocks: vec![mycode_core::ContentBlock::Text(
-                mycode_core::TextBlock::new(format!("half an answer\n{cancel}")),
+        let partial = mycode_agent::AssistantMessage {
+            blocks: vec![mycode_agent::ContentBlock::Text(
+                mycode_agent::TextBlock::new(format!("half an answer\n{cancel}")),
             )],
             usage: None,
-            stop_reason: mycode_core::StopReason::Error,
+            stop_reason: mycode_agent::StopReason::Error,
         };
         let entry = super::project_assistant_message("evt-x", &partial);
         assert_eq!(entry.text.as_ref(), "half an answer");
         // A genuine provider failure keeps its marker: it is the only
         // transcript record of what went wrong.
-        let failure = mycode_core::AssistantMessage {
-            blocks: vec![mycode_core::ContentBlock::Text(
-                mycode_core::TextBlock::new(mycode_core::interrupted_response_text(
+        let failure = mycode_agent::AssistantMessage {
+            blocks: vec![mycode_agent::ContentBlock::Text(
+                mycode_agent::TextBlock::new(mycode_agent::interrupted_response_text(
                     "the response ended early",
                 )),
             )],
             usage: None,
-            stop_reason: mycode_core::StopReason::Error,
+            stop_reason: mycode_agent::StopReason::Error,
         };
         let entry = super::project_assistant_message("evt-x", &failure);
         assert!(entry.text.contains("[error] the response was interrupted"));
@@ -273,18 +273,18 @@ mod tests {
 
     #[test]
     fn the_last_usage_snapshot_is_the_context_meter() {
-        let assistant = mycode_core::AssistantMessage {
-            blocks: vec![mycode_core::ContentBlock::Text(
-                mycode_core::TextBlock::new("done"),
+        let assistant = mycode_agent::AssistantMessage {
+            blocks: vec![mycode_agent::ContentBlock::Text(
+                mycode_agent::TextBlock::new("done"),
             )],
-            usage: Some(mycode_core::Usage {
+            usage: Some(mycode_agent::Usage {
                 input_tokens: 900,
                 output_tokens: 20,
                 cache_read_tokens: Some(41_472),
                 cache_write_tokens: None,
                 prompt_tokens: 42_365,
             }),
-            stop_reason: mycode_core::StopReason::Stop,
+            stop_reason: mycode_agent::StopReason::Stop,
         };
         let bytes = serde_json::to_vec(&assistant).expect("assistant");
         assert_eq!(

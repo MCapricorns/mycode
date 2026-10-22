@@ -344,7 +344,7 @@ fn compile_find_glob(pattern: &str) -> Result<PathGlob, ToolError> {
 
 #[cfg(test)]
 mod tests {
-    use mycode_core::message::ContentBlock;
+    use mycode_providers::message::ContentBlock;
 
     use super::{FindArgs, FindTool};
     use crate::ctx::ToolCtx;

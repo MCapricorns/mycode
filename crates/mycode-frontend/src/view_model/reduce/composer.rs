@@ -81,7 +81,7 @@ pub(super) fn parse_mention(text: &str) -> Option<ComposerMention> {
 pub(super) fn slash_items(
     fragment: &str,
     skills: &[SkillEntry],
-    servers: &[mycode_config::McpServerSettings],
+    servers: &[mycode_app::McpServerSettings],
     tools: &[(String, Vec<String>)],
 ) -> Vec<MentionItem> {
     let fragment = fragment.to_lowercase();
@@ -199,8 +199,8 @@ mod tests {
         }
     }
 
-    fn server(id: &str, enabled: bool) -> mycode_config::McpServerSettings {
-        mycode_config::McpServerSettings {
+    fn server(id: &str, enabled: bool) -> mycode_app::McpServerSettings {
+        mycode_app::McpServerSettings {
             id: id.to_owned(),
             enabled,
             transport: "http".to_owned(),

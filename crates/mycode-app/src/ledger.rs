@@ -4,13 +4,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use mycode_agent::HomeLayout;
+use mycode_agent::Message;
 use mycode_agent::session::{
     self, BranchId, EventKind, HeadStamp, SessionCallId, SessionError, SessionEvent,
     SessionEventId, SessionId, SessionService,
 };
-use mycode_config::HomeLayout;
-use mycode_core::Message;
-use mycode_core::{AssistantMessage, ToolResultMessage, UserMessage};
+use mycode_agent::{AssistantMessage, ToolResultMessage, UserMessage};
 
 use crate::projection::project_replayed_entry_with_meter;
 use crate::protocol::{
@@ -275,7 +275,7 @@ pub(crate) async fn ledger_history(
                     Err(_) => {
                         // A message with images is stored as the tagged
                         // envelope; everything older is raw prompt text.
-                        if let Some(stored) = mycode_core::StoredUserMessage::from_payload(payload)
+                        if let Some(stored) = mycode_agent::StoredUserMessage::from_payload(payload)
                         {
                             history.push(Arc::new(Message::User(stored.user_message())));
                             return Ok(());
@@ -326,7 +326,7 @@ fn order_tool_results(history: &mut [Arc<Message>]) {
                 .blocks
                 .iter()
                 .filter_map(|block| match block {
-                    mycode_core::ContentBlock::ToolCall(call) => Some(call.id.clone()),
+                    mycode_agent::ContentBlock::ToolCall(call) => Some(call.id.clone()),
                     _ => None,
                 })
                 .collect();
@@ -380,7 +380,7 @@ pub(crate) async fn recall_message(
     // summary of discarded work is ignored. The covered head alone is not
     // enough: a summary filed mid-turn covers that turn's later steps too,
     // and a recall of a steer inside the turn keeps the head but drops them.
-    if let Ok(Some(mut checkpoint)) = mycode_config::read_compaction(home, session.as_str())
+    if let Ok(Some(mut checkpoint)) = mycode_agent::read_compaction(home, session.as_str())
         && checkpoint.branch_id == branch.as_str()
         && let Some(covered) = SessionEventId::parse(&checkpoint.covered_head)
         && service
@@ -392,7 +392,7 @@ pub(crate) async fn recall_message(
             .is_ok_and(|history| checkpoint.covered_messages <= history.len())
     {
         checkpoint.branch_id = branched.branch_id.as_str().to_owned();
-        let _ = mycode_config::write_compaction(home, session.as_str(), &checkpoint);
+        let _ = mycode_agent::write_compaction(home, session.as_str(), &checkpoint);
     }
     read_branch(service, session, &branched.branch_id, &branched.head)
         .await
@@ -415,7 +415,7 @@ pub(crate) async fn send_message(
         branch,
         expected_head,
         text,
-        &mycode_core::Attachments::default(),
+        &mycode_agent::Attachments::default(),
     )
     .await
 }
@@ -426,7 +426,7 @@ pub(crate) async fn send_message_with(
     branch: &BranchId,
     expected_head: &HeadStamp,
     text: &str,
-    attachments: &mycode_core::Attachments,
+    attachments: &mycode_agent::Attachments,
 ) -> Result<(String, ConversationEntry), SessionError> {
     // The shared CAS append: reserve, compare-and-swap at the UI's head, and
     // re-commit at the durable tip on a moved head. Identical to every other
@@ -440,7 +440,7 @@ pub(crate) async fn send_message_with(
     let (payload, display) = if attachments.is_empty() {
         (text.as_bytes().to_vec(), text.to_owned())
     } else {
-        let stored = mycode_core::StoredUserMessage {
+        let stored = mycode_agent::StoredUserMessage {
             prompt: text.to_owned(),
             attachments: attachments.clone(),
         };
@@ -477,7 +477,7 @@ pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), 
     }
     // Find the directory before the row goes: it sits under the project the
     // session started in, which only the directory tree still records.
-    let session_dir = mycode_config::locate_session_dir(home, session_id)
+    let session_dir = mycode_agent::locate_session_dir(home, session_id)
         .map_err(|error| format!("delete: {error}"))?
         .map(|relative| home.owned_join(relative))
         .transpose()
@@ -512,8 +512,8 @@ pub(crate) fn delete_session(home: &HomeLayout, session_id: &str) -> Result<(), 
 pub(crate) fn forget_session_bindings(home: &HomeLayout, session_id: &str) -> Result<(), String> {
     // Repair a damaged document first; the locked edit rejects one it
     // cannot decode.
-    mycode_config::read_ui_state(home).map_err(|error| format!("ui state: {error}"))?;
-    mycode_config::update_ui_state(home, |ui_state| ui_state.forget_session(session_id))
+    mycode_agent::read_ui_state(home).map_err(|error| format!("ui state: {error}"))?;
+    mycode_agent::update_ui_state(home, |ui_state| ui_state.forget_session(session_id))
         .map_err(|error| format!("ui state: {error}"))
 }
 
@@ -686,7 +686,7 @@ mod tests {
     fn replayed_tool_results_follow_the_call_order() {
         use std::sync::Arc;
 
-        use mycode_core::{
+        use mycode_agent::{
             AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage,
             UserMessage,
         };
@@ -724,8 +724,8 @@ mod tests {
         assert_eq!(history.len(), 6);
         assert!(matches!(history[5].as_ref(), Message::User(_)));
     }
+    use mycode_agent::HomeLayout;
     use mycode_agent::session::{BranchId, EventKind, HeadStamp, SessionEventId, SessionService};
-    use mycode_config::HomeLayout;
 
     fn scratch() -> (std::path::PathBuf, HomeLayout) {
         // The clock alone is too coarse on Windows for parallel tests.
@@ -816,18 +816,18 @@ mod tests {
             let service = SessionService::new(&home);
             let created = service.create(None).await.expect("create");
             let mut head = HeadStamp::Empty;
-            let assistant = mycode_core::AssistantMessage {
-                blocks: vec![mycode_core::ContentBlock::Text(
-                    mycode_core::TextBlock::new("done"),
+            let assistant = mycode_agent::AssistantMessage {
+                blocks: vec![mycode_agent::ContentBlock::Text(
+                    mycode_agent::TextBlock::new("done"),
                 )],
-                usage: Some(mycode_core::Usage {
+                usage: Some(mycode_agent::Usage {
                     input_tokens: 1_000,
                     output_tokens: 10,
                     cache_read_tokens: Some(800),
                     cache_write_tokens: None,
                     prompt_tokens: 1_200,
                 }),
-                stop_reason: mycode_core::StopReason::Stop,
+                stop_reason: mycode_agent::StopReason::Stop,
             };
             let assistant_bytes = serde_json::to_vec(&assistant).expect("assistant");
             for (kind, payload) in [
@@ -877,7 +877,7 @@ mod tests {
             service.shutdown().await;
             (kept.session_id, gone.session_id)
         });
-        let sessions = root.join(mycode_config::SESSIONS_DIR);
+        let sessions = root.join(mycode_agent::SESSIONS_DIR);
         assert!(sessions.join("-work-b").join(gone.as_str()).is_dir());
         super::delete_session(&home, gone.as_str()).expect("delete");
         assert!(
@@ -927,12 +927,12 @@ mod tests {
                     .expect("history");
             assert_eq!(history.len(), 270, "must walk past the 256-event page");
 
-            mycode_config::write_compaction(
+            mycode_agent::write_compaction(
                 &home,
                 created.session_id.as_str(),
-                &mycode_config::CompactionCheckpoint {
-                    format_version: mycode_config::COMPACTION_FORMAT_VERSION,
-                    kind: mycode_config::COMPACTION_KIND.to_owned(),
+                &mycode_agent::CompactionCheckpoint {
+                    format_version: mycode_agent::COMPACTION_FORMAT_VERSION,
+                    kind: mycode_agent::COMPACTION_KIND.to_owned(),
                     session_id: created.session_id.as_str().to_owned(),
                     branch_id: created.branch_id.as_str().to_owned(),
                     covered_head: event_260.clone(),
@@ -954,7 +954,7 @@ mod tests {
             )
             .await
             .expect("recall");
-            let moved = mycode_config::read_compaction(&home, created.session_id.as_str())
+            let moved = mycode_agent::read_compaction(&home, created.session_id.as_str())
                 .expect("read")
                 .expect("checkpoint");
             assert_eq!(moved.branch_id, rewound.branch_id);
@@ -965,10 +965,10 @@ mod tests {
             let rewound_branch = BranchId::parse(&rewound.branch_id).expect("branch id");
             let rewound_head =
                 HeadStamp::Event(SessionEventId::parse(&rewound.head).expect("head"));
-            mycode_config::write_compaction(
+            mycode_agent::write_compaction(
                 &home,
                 created.session_id.as_str(),
-                &mycode_config::CompactionCheckpoint {
+                &mycode_agent::CompactionCheckpoint {
                     covered_messages: 265,
                     ..moved
                 },
@@ -984,7 +984,7 @@ mod tests {
             )
             .await
             .expect("second recall");
-            let kept = mycode_config::read_compaction(&home, created.session_id.as_str())
+            let kept = mycode_agent::read_compaction(&home, created.session_id.as_str())
                 .expect("read")
                 .expect("checkpoint");
             assert_ne!(kept.branch_id, again.branch_id);

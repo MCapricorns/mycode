@@ -5,7 +5,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use mycode_config::HomeLayout;
+use mycode_agent::HomeLayout;
 
 /// `git` for a worktree lease. On Windows the desktop process has no
 /// console, so a plain spawn of `git.exe` allocates a black window.
@@ -209,12 +209,12 @@ pub(crate) fn format_subagent_handoff(result: &str, diff: &str) -> String {
 /// checkout is removed only after that string is built.
 pub(crate) fn handoff_worktree(
     lease: WorktreeLease,
-    result: Result<String, mycode_tools::ToolError>,
-) -> Result<String, mycode_tools::ToolError> {
+    result: Result<String, mycode_agent::ToolError>,
+) -> Result<String, mycode_agent::ToolError> {
     let diff = capture_worktree_diff(&lease.path);
     let outcome = match result {
         Ok(text) => Ok(format_subagent_handoff(&text, &diff)),
-        Err(error) => Err(mycode_tools::ToolError::Execution(format_subagent_handoff(
+        Err(error) => Err(mycode_agent::ToolError::Execution(format_subagent_handoff(
             &error.to_string(),
             &diff,
         ))),

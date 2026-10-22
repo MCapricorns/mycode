@@ -51,7 +51,7 @@ pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
 /// The `ModelSelected` transition: the model picker selected a model.
 pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
     if let Some(provider) = state.selected_provider.clone() {
-        mycode_config::remember_model(&mut state.recent_models, &provider, &model);
+        mycode_app::remember_model(&mut state.recent_models, &provider, &model);
     }
     let changed = state.selected_model.as_deref() != Some(model.as_str());
     state.selected_model = Some(model);
@@ -211,7 +211,7 @@ pub(super) fn remember_session_model(state: &mut WorkspaceState, session_id: &st
         .settings
         .as_ref()
         .and_then(|settings| settings.reasoning.clone());
-    mycode_config::upsert_session_model(
+    mycode_app::upsert_session_model(
         &mut state.session_models,
         session_id,
         &provider,
@@ -223,7 +223,7 @@ pub(super) fn remember_session_model(state: &mut WorkspaceState, session_id: &st
 /// Restores `session_id`'s pin onto the picker. Returns false when this
 /// session has not chosen a model yet.
 pub(super) fn apply_session_model(state: &mut WorkspaceState, session_id: &str) -> bool {
-    let Some(pin) = mycode_config::session_model(&state.session_models, session_id).cloned() else {
+    let Some(pin) = mycode_app::session_model(&state.session_models, session_id).cloned() else {
         return false;
     };
     state.selected_provider = Some(pin.provider);
@@ -245,7 +245,7 @@ pub(super) fn apply_session_model(state: &mut WorkspaceState, session_id: &str) 
 /// the screen.
 pub(super) fn restore_live_reasoning(state: &mut WorkspaceState) {
     let pinned = state.active.as_ref().and_then(|active| {
-        mycode_config::session_model(&state.session_models, &active.session_id)
+        mycode_app::session_model(&state.session_models, &active.session_id)
             .map(|pin| pin.reasoning.clone())
     });
     let Some(settings) = state.settings.as_mut() else {
@@ -342,11 +342,11 @@ mod tests {
     use crate::view_model::{SettingsState, WorkspaceState};
 
     /// A catalog provider with one reasoning model advertising only `low`.
-    fn low_rung_catalog() -> std::sync::Arc<mycode_providers::catalog::CatalogDocument> {
-        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+    fn low_rung_catalog() -> std::sync::Arc<mycode_app::catalog::CatalogDocument> {
+        use mycode_app::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
         std::sync::Arc::new(CatalogDocument {
             providers: vec![CatalogProvider {
-                id: mycode_config::MAGPIE_PROVIDER_ID.to_owned(),
+                id: mycode_app::MAGPIE_PROVIDER_ID.to_owned(),
                 models: vec![CatalogModel {
                     id: "glm".to_owned(),
                     reasoning: true,
@@ -359,25 +359,25 @@ mod tests {
     }
 
     /// An active magpie binding for one model.
-    fn magpie_settings(model: &str) -> mycode_config::AppSettings {
-        mycode_config::AppSettings {
-            magpie: mycode_config::MagpieSettings {
+    fn magpie_settings(model: &str) -> mycode_app::AppSettings {
+        mycode_app::AppSettings {
+            magpie: mycode_app::MagpieSettings {
                 enabled: true,
                 base_url: "http://127.0.0.1:3425/v1".to_owned(),
                 api_key: "magpie-mycode".to_owned(),
                 model: model.to_owned(),
                 hidden_models: Vec::new(),
             },
-            ..mycode_config::AppSettings::default()
+            ..mycode_app::AppSettings::default()
         }
     }
 
     #[test]
     fn a_custom_model_keeps_the_stored_effort() {
         let mut state = WorkspaceState::default();
-        let document = mycode_config::AppSettings {
+        let document = mycode_app::AppSettings {
             reasoning_effort: Some("high".to_owned()),
-            ..mycode_config::AppSettings::default()
+            ..mycode_app::AppSettings::default()
         };
         state.settings = Some(SettingsState::from_settings(&document, 1));
         state.selected_provider = Some("zhipu".to_owned());
@@ -397,7 +397,7 @@ mod tests {
         if let Some(settings) = state.settings.as_mut() {
             settings.providers[0].models = vec!["glm-air".to_owned()];
         }
-        super::provider_selected(&mut state, mycode_config::MAGPIE_PROVIDER_ID.to_owned());
+        super::provider_selected(&mut state, mycode_app::MAGPIE_PROVIDER_ID.to_owned());
         assert_eq!(state.selected_model.as_deref(), Some("glm-air"));
     }
 
@@ -429,7 +429,7 @@ mod tests {
     fn a_remembered_rung_clamps_to_the_strongest_advertised_fit() {
         use std::sync::Arc;
 
-        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+        use mycode_app::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
 
         let mut state = state_with_low_rung_model(Some("max"));
         super::assign_fresh_session_model(&mut state, "ses1-clamp");
@@ -447,7 +447,7 @@ mod tests {
             settings: Some(SettingsState::from_settings(&document, 1)),
             catalog: Some(Arc::new(CatalogDocument {
                 providers: vec![CatalogProvider {
-                    id: mycode_config::MAGPIE_PROVIDER_ID.to_owned(),
+                    id: mycode_app::MAGPIE_PROVIDER_ID.to_owned(),
                     models: vec![CatalogModel {
                         id: "glm".to_owned(),
                         reasoning: true,
@@ -494,9 +494,9 @@ mod tests {
         // The stored pick stays; only the projection falls back to the
         // strongest advertised rung. Wiping it here is what made the effort
         // "not save" across model switches.
-        let document = mycode_config::AppSettings {
+        let document = mycode_app::AppSettings {
             reasoning_effort: Some("low".to_owned()),
-            ..mycode_config::AppSettings::default()
+            ..mycode_app::AppSettings::default()
         };
         let mut settings = SettingsState::from_settings(&document, 1);
         settings.reasoning = Some("high".to_owned());
@@ -532,7 +532,7 @@ mod tests {
     fn published_efforts_are_the_menu_and_custom_rows_do_not_guess() {
         use std::sync::Arc;
 
-        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+        use mycode_app::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
 
         let mut state = WorkspaceState {
             catalog: Some(Arc::new(CatalogDocument {
@@ -599,7 +599,7 @@ mod tests {
     /// A `UiStateLoaded` carrying `reasoning` and the given session pins.
     fn loaded_ui_state(
         reasoning: Option<&str>,
-        session_models: Vec<mycode_config::SessionModelPin>,
+        session_models: Vec<mycode_app::SessionModelPin>,
     ) -> crate::view_model::FrontendAction {
         crate::view_model::FrontendAction::UiStateLoaded {
             recents: Vec::new(),
@@ -647,7 +647,7 @@ mod tests {
         // The first new session pins the remembered effort.
         super::remember_session_model(&mut state, "ses-after-restart");
         assert_eq!(
-            mycode_config::session_model(&state.session_models, "ses-after-restart")
+            mycode_app::session_model(&state.session_models, "ses-after-restart")
                 .and_then(|pin| pin.reasoning.as_deref()),
             Some("max")
         );
@@ -668,7 +668,7 @@ mod tests {
             context_used: 0,
             context_cache: 0,
         });
-        let pins = vec![mycode_config::SessionModelPin {
+        let pins = vec![mycode_app::SessionModelPin {
             session_id: "ses".to_owned(),
             provider: "zai".to_owned(),
             model: "glm".to_owned(),
@@ -694,7 +694,7 @@ mod tests {
         // Imports and magpie's plugin reload the document; the swap must not
         // drop the pick the chip and the session pin already carry.
         let mut state = state_with_low_rung_model(Some("max"));
-        state.selected_provider = Some(mycode_config::MAGPIE_PROVIDER_ID.to_owned());
+        state.selected_provider = Some(mycode_app::MAGPIE_PROVIDER_ID.to_owned());
         state.selected_model = Some("glm".to_owned());
         if let Some(settings) = state.settings.as_mut() {
             settings.reasoning = Some("max".to_owned());

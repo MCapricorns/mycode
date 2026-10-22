@@ -5,9 +5,9 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mycode_core::Provider;
-use mycode_core::events::AgentEvent;
+use mycode_tools::Provider;
 use mycode_tools::ToolRegistry;
+use mycode_tools::events::AgentEvent;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -67,7 +67,7 @@ pub struct TurnEnv<'a> {
     /// the turn ends with [`TurnOutcome::Aborted`], and state stays
     /// consistent. Incomplete tool calls are not executed.
     ///
-    /// [`TurnOutcome::Aborted`]: mycode_core::events::TurnOutcome::Aborted
+    /// [`TurnOutcome::Aborted`]: mycode_tools::events::TurnOutcome::Aborted
     pub cancel: CancellationToken,
     /// Fan-out bus for Agent events (UI and telemetry subscribe).
     pub events: broadcast::Sender<AgentEvent>,

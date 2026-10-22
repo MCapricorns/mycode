@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use mycode_config::HomeLayout;
+use mycode_tools::HomeLayout;
 
 use super::super::dto::{EventKind, HeadStamp, SessionError, SessionResult};
 use super::super::generation::GenerationFence;
@@ -67,7 +67,7 @@ fn unwrap_complete(pull: Result<SessionPull, OpFail>) -> SessionResult {
 /// Creates one session and returns its ids.
 fn create(core: &mut SessionCore) -> (SessionId, BranchId) {
     let (session, branch) = mint().expect("ids");
-    let dir = mycode_config::new_session_dir(None, session.as_str()).expect("dir");
+    let dir = mycode_tools::new_session_dir(None, session.as_str()).expect("dir");
     match unwrap_complete(core.action_create(&session, &branch, &dir)) {
         SessionResult::Created(_) => (session, branch),
         other => panic!("create returned {other:?}"),

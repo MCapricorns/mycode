@@ -19,11 +19,11 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use mycode_app::HomeLayout;
 use mycode_app::{
     BranchId, BridgeCommand, BridgeEvent, BridgeReply, CoreBridge, HeadStamp, SessionEventId,
     SessionId,
 };
-use mycode_config::HomeLayout;
 
 use crate::view_model::{FrontendAction, MainView, MentionKind, WorkspaceState, reduce};
 
@@ -69,7 +69,7 @@ pub enum Effect {
     },
     /// Put picked attachments back in the composer after a send did not
     /// take them: a failed send or a dropped welcome start.
-    AttachmentsRestored(mycode_core::Attachments),
+    AttachmentsRestored(mycode_app::Attachments),
     /// One ask-card free-text field was cleared (a choice replaced typing).
     AskTextCleared {
         /// Question row index.
@@ -285,7 +285,7 @@ pub struct FrontendDriver {
     welcome_send_session: Option<String>,
     /// Attachments that ride the held welcome draft. They are not in the
     /// view model, so they live beside the session that will carry them.
-    welcome_attachments: mycode_core::Attachments,
+    welcome_attachments: mycode_app::Attachments,
     /// The held welcome text is only the attachment note synthesized so the
     /// first message has a title; the durable message must not repeat it.
     welcome_send_is_note: bool,
@@ -353,7 +353,7 @@ pub struct FrontendDriver {
     import_confirm: Option<PathBuf>,
     /// Roles resolved from built-ins, the home `agents` directory, and the
     /// open project's `.mycode/agents`. `None` until a surface asks for them.
-    agent_roles: Option<Arc<mycode_config::RoleCatalog>>,
+    agent_roles: Option<Arc<mycode_app::RoleCatalog>>,
     /// Project directory the cached role catalog was built for.
     agent_roles_project: Option<String>,
     /// The roles surface was opened again, or the project changed.
@@ -374,7 +374,7 @@ pub struct FrontendDriver {
     held_send: Option<BridgeCommand>,
     /// Attachments of sends still waiting for their `Sent` reply, keyed by
     /// session. A failed send hands them back instead of dropping them.
-    pending_send_attachments: BTreeMap<String, mycode_core::Attachments>,
+    pending_send_attachments: BTreeMap<String, mycode_app::Attachments>,
     /// Session whose interrupt waits for its automatic compaction to end;
     /// see [`FrontendDriver::interrupt_send`].
     interrupt_after_compaction: Option<String>,
@@ -422,7 +422,7 @@ impl FrontendDriver {
             vm: WorkspaceState::default(),
             home,
             welcome_send_session: None,
-            welcome_attachments: mycode_core::Attachments::default(),
+            welcome_attachments: mycode_app::Attachments::default(),
             welcome_send_is_note: false,
             pending_open: None,
             pending_project: None,
@@ -538,14 +538,14 @@ impl FrontendDriver {
     /// bounds change; only a size difference arms the debounce and only the
     /// last generation wins the write.
     pub fn note_window_resized(&mut self, width: f32, height: f32) {
-        let size = mycode_config::WindowSize {
+        let size = mycode_app::WindowSize {
             width: width.round().max(0.) as u32,
             height: height.round().max(0.) as u32,
         };
         if size.width == 0
             || size.height == 0
-            || size.width > mycode_config::MAX_WINDOW_EDGE_PX
-            || size.height > mycode_config::MAX_WINDOW_EDGE_PX
+            || size.width > mycode_app::MAX_WINDOW_EDGE_PX
+            || size.height > mycode_app::MAX_WINDOW_EDGE_PX
             || self.vm.window_size == Some(size)
         {
             return;
@@ -879,7 +879,7 @@ impl FrontendDriver {
             return;
         }
         let root = project.as_deref().map(Path::new);
-        self.agent_roles = Some(Arc::new(mycode_config::discover_roles(&self.home, root)));
+        self.agent_roles = Some(Arc::new(mycode_app::discover_roles(&self.home, root)));
         self.agent_roles_project = project;
         self.agent_roles_stale = false;
     }
@@ -887,10 +887,10 @@ impl FrontendDriver {
     /// Role catalog last resolved for settings. Built-ins only before the
     /// first resolution. Shared, so a settings paint does not copy every
     /// role prompt.
-    pub fn agent_roles(&self) -> Arc<mycode_config::RoleCatalog> {
+    pub fn agent_roles(&self) -> Arc<mycode_app::RoleCatalog> {
         self.agent_roles
             .clone()
-            .unwrap_or_else(|| Arc::new(mycode_config::builtin_roles()))
+            .unwrap_or_else(|| Arc::new(mycode_app::builtin_roles()))
     }
 
     /// Marks the roles cache dirty so the next read re-scans.
@@ -940,7 +940,7 @@ impl FrontendDriver {
 
     /// Records documents reset at startup and toasts their names once the
     /// settings and UI replies have had a chance to arrive.
-    pub fn note_config_repairs(&mut self, repairs: &[mycode_config::DocumentRepair]) {
+    pub fn note_config_repairs(&mut self, repairs: &[mycode_app::DocumentRepair]) {
         let mut added = false;
         for repair in repairs {
             if self

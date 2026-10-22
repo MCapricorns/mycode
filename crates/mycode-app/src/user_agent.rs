@@ -43,7 +43,7 @@ fn arch() -> &'static str {
 }
 
 fn shell() -> &'static str {
-    mycode_tools::resolved_shell().kind.as_str()
+    mycode_agent::resolved_shell().kind.as_str()
 }
 
 fn os_release() -> String {

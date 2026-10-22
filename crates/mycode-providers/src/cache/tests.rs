@@ -1,4 +1,4 @@
-use mycode_core::{
+use mycode_config::{
     AssistantMessage, ContentBlock, Message, ReasoningLevel, Request, StopReason, TextBlock,
     ThinkingBlock, ToolSpec, UserMessage,
 };
@@ -13,7 +13,7 @@ use crate::anthropic_messages::build_body as anthropic_body;
 use crate::openai_completions::build_body as chat_body;
 use crate::openai_responses::build_body as responses_body;
 use crate::wire_common::usage_from_value;
-use mycode_core::{ProviderError, ProviderErrorKind};
+use mycode_config::{ProviderError, ProviderErrorKind};
 
 fn tool(name: &str) -> ToolSpec {
     ToolSpec {

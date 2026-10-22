@@ -157,21 +157,21 @@ fn main() {
     // the process that comes back up is the new version. A payload that
     // already landed is reported once, so the swap is never silent.
     let applied_update = match update {
-        mycode_app::PendingUpdate::Armed(_) => return,
-        mycode_app::PendingUpdate::Applied(version) => Some(version),
-        mycode_app::PendingUpdate::None => None,
+        mycode_frontend::PendingUpdate::Armed(_) => return,
+        mycode_frontend::PendingUpdate::Applied(version) => Some(version),
+        mycode_frontend::PendingUpdate::None => None,
     };
     // Relocate a downloaded binary into the install dir: the installed copy
     // is spawned with the source path, this process exits, and the new copy
     // deletes the download and writes the desktop shortcut.
-    match mycode_app::install::ensure_desktop_installed(&home) {
-        mycode_app::install::DesktopInstall::Exit => std::process::exit(0),
-        mycode_app::install::DesktopInstall::Run {
+    match mycode_frontend::install::ensure_desktop_installed(&home) {
+        mycode_frontend::install::DesktopInstall::Exit => std::process::exit(0),
+        mycode_frontend::install::DesktopInstall::Run {
             cleanup: Some(source),
         } => {
-            std::thread::spawn(move || mycode_app::install::cleanup_installed_source(source));
+            std::thread::spawn(move || mycode_frontend::install::cleanup_installed_source(source));
         }
-        mycode_app::install::DesktopInstall::Run { cleanup: None } => {}
+        mycode_frontend::install::DesktopInstall::Run { cleanup: None } => {}
     }
     gpui_kit::application()
         .with_assets(BrandAssets)

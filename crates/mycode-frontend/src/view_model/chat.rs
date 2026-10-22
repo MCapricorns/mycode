@@ -91,7 +91,7 @@ impl LiveJob {
         match self.step.as_str() {
             "" | "starting" => crate::i18n::t("starting", "启动中").to_owned(),
             "queued" => crate::i18n::t("queued", "排队中").to_owned(),
-            mycode_tools::builtin::AGENT_COMPACTED_STEP => {
+            mycode_app::builtin::AGENT_COMPACTED_STEP => {
                 crate::i18n::t("context compacted", "已压缩上下文").to_owned()
             }
             other => other.to_owned(),

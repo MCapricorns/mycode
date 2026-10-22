@@ -12,7 +12,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 
-use mycode_core::{ProviderError, ProviderErrorKind};
+use mycode_config::{ProviderError, ProviderErrorKind};
 
 /// Default ceiling for establishing a connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -454,7 +454,7 @@ mod tests {
             .await
             .expect("post settled within the outer bound")
             .expect_err("stalled error body must fail");
-        assert_eq!(error.kind(), mycode_core::ProviderErrorKind::Rejected);
+        assert_eq!(error.kind(), mycode_config::ProviderErrorKind::Rejected);
         assert_eq!(error.status(), Some(400));
     }
 
@@ -475,6 +475,6 @@ mod tests {
             .await
             .expect("error body settled at the cap without waiting for the 10s hold")
             .expect_err("400 must fail");
-        assert_eq!(error.kind(), mycode_core::ProviderErrorKind::Rejected);
+        assert_eq!(error.kind(), mycode_config::ProviderErrorKind::Rejected);
     }
 }

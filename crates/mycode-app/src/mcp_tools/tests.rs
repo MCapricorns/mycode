@@ -17,7 +17,7 @@ fn a_project_server_cannot_take_a_user_id_or_its_key() {
         }}"#,
     )
     .unwrap();
-    let user = vec![mycode_config::McpServerSettings {
+    let user = vec![mycode_agent::McpServerSettings {
         id: "context7".to_owned(),
         enabled: false,
         transport: "http".to_owned(),
@@ -32,7 +32,7 @@ fn a_project_server_cannot_take_a_user_id_or_its_key() {
         mcp_servers: user,
         ..super::AppSettings::default()
     };
-    let home = mycode_config::HomeLayout::from_root(&root).unwrap();
+    let home = mycode_agent::HomeLayout::from_root(&root).unwrap();
     let merged = super::merged_mcp_servers(&home, &settings, Some(&root));
     let _ = std::fs::remove_dir_all(&root);
     assert!(
@@ -51,7 +51,7 @@ fn a_project_server_cannot_take_a_user_id_or_its_key() {
             .is_some_and(|text| text.contains("context7"))
     );
 
-    let secrets = mycode_config::ProviderSecrets::new()
+    let secrets = mycode_agent::ProviderSecrets::new()
         .with_key("mcp-local", Some("stale-key"))
         .with_key("mcp-context7", Some("user-key"));
     assert_eq!(
@@ -71,7 +71,7 @@ fn a_project_server_cannot_take_a_user_id_or_its_key() {
 
 use super::{McpCatalog, bound_mcp_result, mcp_server_is_direct};
 use crate::mcp_client::McpTool;
-use mycode_tools::ToolDyn;
+use mycode_agent::ToolDyn;
 
 fn tool(name: &str, schema_bytes: usize) -> McpTool {
     let filler = "x".repeat(schema_bytes.saturating_sub(20));
@@ -319,7 +319,7 @@ async fn direct_mcp_call_runs_the_server_tool() {
     assert_eq!(scout[0].spec().name, "lookup");
     assert!(tools.iter().any(|tool| tool.spec().name == "write-note"));
 
-    let registry = mycode_tools::ToolRegistry::new();
+    let registry = mycode_agent::ToolRegistry::new();
     registry.register(scout[0].clone());
     let prompt = mycode_agent::build_system_prompt(&registry);
     assert!(
@@ -336,9 +336,9 @@ async fn direct_mcp_call_runs_the_server_tool() {
         crate::unix_now().as_nanos()
     ));
     std::fs::create_dir_all(&root).unwrap();
-    let ctx = mycode_tools::ToolCtx::new(&root);
-    let (mut stream, rx) = mycode_tools::ToolStream::channel();
-    let result = mycode_tools::ToolDyn::execute_dyn(
+    let ctx = mycode_agent::ToolCtx::new(&root);
+    let (mut stream, rx) = mycode_agent::ToolStream::channel();
+    let result = mycode_agent::ToolDyn::execute_dyn(
         scout[0].as_ref(),
         serde_json::json!({"query": "direct"}),
         &ctx,
@@ -352,7 +352,7 @@ async fn direct_mcp_call_runs_the_server_tool() {
         .content
         .iter()
         .filter_map(|block| match block {
-            mycode_core::message::ContentBlock::Text(text) => Some(text.text.as_str()),
+            mycode_agent::message::ContentBlock::Text(text) => Some(text.text.as_str()),
             _ => None,
         })
         .collect::<String>();
@@ -360,8 +360,8 @@ async fn direct_mcp_call_runs_the_server_tool() {
     assert!(text.contains("pong"), "{text}");
     // A required field under another framework's spelling is repaired
     // before validation instead of costing the model a turn.
-    let (mut stream, rx) = mycode_tools::ToolStream::channel();
-    let repaired = mycode_tools::ToolDyn::execute_dyn(
+    let (mut stream, rx) = mycode_agent::ToolStream::channel();
+    let repaired = mycode_agent::ToolDyn::execute_dyn(
         scout[0].as_ref(),
         serde_json::json!({"q": "repaired"}),
         &ctx,

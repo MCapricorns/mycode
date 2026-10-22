@@ -2,7 +2,7 @@
 //! saves, and key storage. A document that fails strict validation is
 //! quarantined and reset by the repair layer rather than edited here.
 
-use mycode_config::{
+use mycode_agent::{
     AppSettings, AuthorityRevision, DocumentRepair, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES,
     SETTINGS_FORMAT_VERSION, SETTINGS_PATH, read_app_settings_with_repair, read_owned_file,
     read_provider_secrets_with_repair, replace_app_settings, update_provider_key,
@@ -108,15 +108,15 @@ pub(crate) fn save_settings(
 
 /// Installs the document's proxy preference for every later request.
 pub(crate) fn apply_network(settings: &AppSettings) {
-    mycode_providers::set_proxy_preference(settings.proxy_preference());
+    mycode_agent::set_proxy_preference(settings.proxy_preference());
 }
 
-pub(crate) fn render_config_error(error: &mycode_config::ConfigError) -> String {
+pub(crate) fn render_config_error(error: &mycode_agent::ConfigError) -> String {
     format!("settings error: {}", error.summary())
 }
 
 /// Splits stored secret ids into provider and MCP key markers.
-fn split_key_ids(secrets: &mycode_config::ProviderSecrets) -> (Vec<String>, Vec<String>) {
+fn split_key_ids(secrets: &mycode_agent::ProviderSecrets) -> (Vec<String>, Vec<String>) {
     let mut provider_keys = Vec::new();
     let mut mcp_keys = Vec::new();
     for id in secrets.provider_ids() {
@@ -145,7 +145,7 @@ pub(crate) fn save_provider_key(
     // A damaged store is quarantined and reset (keeping intact keys) first;
     // the locked update below rejects a document it cannot decode.
     read_provider_secrets_with_repair(home).map_err(|error| render_config_error(&error))?;
-    let api_key = mycode_config::normalize_api_key(api_key);
+    let api_key = mycode_agent::normalize_api_key(api_key);
     let updated = update_provider_key(
         home,
         provider_id,

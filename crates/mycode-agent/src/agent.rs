@@ -22,9 +22,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use mycode_core::MycodeError;
-use mycode_core::events::{AgentEvent, TurnOutcome};
-use mycode_core::message::{ContentBlock, Message, SharedMessage, StopReason, ToolCall};
+use mycode_tools::MycodeError;
+use mycode_tools::events::{AgentEvent, TurnOutcome};
+use mycode_tools::message::{ContentBlock, Message, SharedMessage, StopReason, ToolCall};
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -38,7 +38,7 @@ pub struct AgentConfig {
     /// with every request of the session.
     pub system_prompt: Arc<[String]>,
     /// Requested reasoning effort for providers that support it.
-    pub reasoning: Option<mycode_core::ReasoningLevel>,
+    pub reasoning: Option<mycode_tools::ReasoningLevel>,
     /// models.dev output cap forwarded onto each provider request.
     pub max_output_tokens: Option<u64>,
     /// Published effort spelling that is not a built-in level.
@@ -68,7 +68,10 @@ impl AgentConfig {
 
     /// Requests a reasoning effort level.
     #[must_use]
-    pub fn with_reasoning(mut self, level: impl Into<Option<mycode_core::ReasoningLevel>>) -> Self {
+    pub fn with_reasoning(
+        mut self,
+        level: impl Into<Option<mycode_tools::ReasoningLevel>>,
+    ) -> Self {
         self.reasoning = level.into();
         self
     }
@@ -488,7 +491,7 @@ fn drain_steers(env: &TurnEnv<'_>, state: &mut AgentState) -> bool {
         turn::push_message(
             env,
             state,
-            Message::User(mycode_core::UserMessage::text(text)),
+            Message::User(mycode_tools::UserMessage::text(text)),
         );
         appended = true;
     }

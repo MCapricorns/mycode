@@ -248,7 +248,7 @@ mod tests {
             .content
             .iter()
             .filter_map(|block| match block {
-                mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                mycode_providers::ContentBlock::Text(text) => Some(text.text.as_str()),
                 _ => None,
             })
             .collect()

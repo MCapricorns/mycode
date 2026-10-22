@@ -388,7 +388,7 @@ pub(crate) fn select_model(
 
 fn pin_row(
     workspace: &Workspace,
-    pin: &mycode_config::ModelPin,
+    pin: &mycode_frontend::ModelPin,
     target: &ModelPickerTarget,
     highlighted: bool,
     cx: &Context<Workspace>,

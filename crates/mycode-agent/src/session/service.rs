@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use mycode_config::HomeLayout;
+use mycode_tools::HomeLayout;
 
 use crate::session::generation::GenerationFence;
 use crate::session::runtime::{TaskActorClient, TaskActorError, TaskCloseSignal};

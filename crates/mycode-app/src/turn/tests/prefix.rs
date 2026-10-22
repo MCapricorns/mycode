@@ -4,9 +4,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use mycode_agent::ProviderError;
 use mycode_agent::session::HeadStamp;
-use mycode_core::ProviderError;
-use mycode_providers::{SseTransport, TransportCall};
+use mycode_agent::{SseTransport, TransportCall};
 
 use super::{parse_head, run_scripted_turn, turn_fixture};
 
@@ -52,7 +52,7 @@ impl SseTransport for ReplayTransport {
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    Output = Result<mycode_agent::transport::ByteStream, ProviderError>,
                 > + Send
                 + 'a,
         >,

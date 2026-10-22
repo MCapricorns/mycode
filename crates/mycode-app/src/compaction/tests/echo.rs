@@ -1,4 +1,4 @@
-use mycode_core::{ContentBlock, TextBlock, ToolCall};
+use mycode_agent::{ContentBlock, TextBlock, ToolCall};
 
 use super::scripted::{assistant_message, large_history, scripted_wire, tool_result_message};
 use super::{
@@ -48,7 +48,7 @@ fn the_newest_user_messages_that_fit_are_kept_oldest_first() {
     assert_eq!(all, ["from the last checkpoint", "ask one"]);
 }
 
-fn read_call(id: &str) -> std::sync::Arc<mycode_core::Message> {
+fn read_call(id: &str) -> std::sync::Arc<mycode_agent::Message> {
     assistant_message(vec![ContentBlock::ToolCall(ToolCall::new(
         id,
         "read",

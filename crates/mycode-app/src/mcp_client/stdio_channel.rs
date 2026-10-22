@@ -25,7 +25,7 @@ use tokio::process::Child;
 use tokio::sync::Mutex;
 
 #[cfg(windows)]
-use mycode_tools::WindowsStdioProcess;
+use mycode_agent::WindowsStdioProcess;
 
 #[cfg(windows)]
 type HostChild = WindowsStdioProcess;
@@ -70,7 +70,7 @@ impl StdioChannel {
         env: &[(String, String)],
         timeout: Duration,
     ) -> Result<Self, McpError> {
-        if !mycode_config::is_mcp_executable(command) {
+        if !mycode_agent::is_mcp_executable(command) {
             return Err(McpError::transport(
                 "MCP command must be an executable path, not a shell string".to_owned(),
             ));
@@ -398,7 +398,7 @@ fn resolve_program(command: &str) -> Option<PathBuf> {
 fn resolve_on_path_windows(command: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     let pathext = std::env::var("PATHEXT").unwrap_or_default();
-    mycode_tools::first_program_on_path(command, &path_var, &pathext)
+    mycode_agent::first_program_on_path(command, &path_var, &pathext)
 }
 
 /// Environment variables a stdio MCP child may inherit: the MCP SDK's

@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{ClipboardEntry, ClipboardItem, ImageFormat};
-use mycode_core::MAX_IMAGE_BYTES;
+use mycode_frontend::MAX_IMAGE_BYTES;
 
 use crate::i18n::t;
 
@@ -19,7 +19,7 @@ use crate::i18n::t;
 pub(super) struct ClipboardPicture {
     /// Encoded bytes in the format `mime` names.
     pub(super) bytes: Vec<u8>,
-    /// One of [`mycode_core::IMAGE_MEDIA_TYPES`].
+    /// One of [`mycode_frontend::IMAGE_MEDIA_TYPES`].
     pub(super) mime: &'static str,
 }
 
@@ -67,7 +67,7 @@ fn clipboard_picture(item: &ClipboardItem) -> Result<Option<ClipboardPicture>, S
         if image.bytes.len() > MAX_IMAGE_BYTES {
             return Err(t("image is larger than 3.75 MB", "图片超过 3.75 MB").to_owned());
         }
-        if let Some(mime) = mycode_core::image_media_type(&image.bytes) {
+        if let Some(mime) = mycode_frontend::image_media_type(&image.bytes) {
             return Ok(Some(ClipboardPicture {
                 bytes: image.bytes.clone(),
                 mime,
@@ -118,7 +118,7 @@ fn read_file(path: &Path) -> Result<ClipboardPicture, String> {
         ));
     }
     let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mime = mycode_core::image_media_type(&bytes).ok_or_else(|| {
+    let mime = mycode_frontend::image_media_type(&bytes).ok_or_else(|| {
         format!(
             "{}: {}",
             path.display(),
@@ -267,6 +267,6 @@ mod tests {
     fn a_bitmap_is_reencoded_as_png() {
         let png = reencoded_as_png(&tiny_bmp()).expect("png");
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
-        assert_eq!(mycode_core::image_media_type(&png), Some("image/png"));
+        assert_eq!(mycode_frontend::image_media_type(&png), Some("image/png"));
     }
 }

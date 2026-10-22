@@ -154,7 +154,7 @@ impl FrontendDriver {
             .active
             .as_ref()
             .and_then(|active| {
-                mycode_config::session_model(&self.vm.session_models, &active.session_id)
+                mycode_app::session_model(&self.vm.session_models, &active.session_id)
                     .and_then(|pin| pin.reasoning.clone())
             })
             .or_else(|| {
@@ -219,7 +219,7 @@ impl FrontendDriver {
     /// runs, a normal send, or an explicit send of the held queue on an
     /// empty draft. `draft` is the composer text the frontend just read.
     pub fn submit(&mut self, draft: &str, out: &mut Vec<Effect>) {
-        let _ = self.submit_with(draft, mycode_core::Attachments::default(), out);
+        let _ = self.submit_with(draft, mycode_app::Attachments::default(), out);
     }
 
     /// [`Self::submit`] with images and code files picked in the composer.
@@ -231,9 +231,9 @@ impl FrontendDriver {
     pub fn submit_with(
         &mut self,
         draft: &str,
-        attachments: mycode_core::Attachments,
+        attachments: mycode_app::Attachments,
         out: &mut Vec<Effect>,
-    ) -> Option<mycode_core::Attachments> {
+    ) -> Option<mycode_app::Attachments> {
         // The widget's text is the source of truth: mirror it so mentions,
         // the queue, and a later recall all work on what is on screen.
         if draft != self.vm.composer_draft {
@@ -376,9 +376,9 @@ impl FrontendDriver {
     fn submit_from_welcome(
         &mut self,
         draft: &str,
-        attachments: mycode_core::Attachments,
+        attachments: mycode_app::Attachments,
         out: &mut Vec<Effect>,
-    ) -> Option<mycode_core::Attachments> {
+    ) -> Option<mycode_app::Attachments> {
         if self.vm.pending_welcome_send.is_some() {
             return Some(attachments);
         }
@@ -396,7 +396,7 @@ impl FrontendDriver {
                 self.act(FrontendAction::WelcomeSendHeld(text), out);
                 if !self.new_session(out) {
                     self.welcome_send_is_note = false;
-                    self.welcome_attachments = mycode_core::Attachments::default();
+                    self.welcome_attachments = mycode_app::Attachments::default();
                     self.act(FrontendAction::WelcomeSendConsumed, out);
                     return Some(attachments);
                 }
@@ -564,7 +564,7 @@ impl FrontendDriver {
         }
         let draft = self.vm.queued[0].clone();
         self.act(FrontendAction::QueuedMessageTaken, out);
-        let _ = self.send_text(draft, false, mycode_core::Attachments::default(), out);
+        let _ = self.send_text(draft, false, mycode_app::Attachments::default(), out);
     }
 
     /// Hands welcome attachments back when the start that held them failed.
@@ -583,7 +583,7 @@ impl FrontendDriver {
         }
         let Some(text) = self.vm.pending_welcome_send.clone() else {
             self.welcome_send_session = None;
-            self.welcome_attachments = mycode_core::Attachments::default();
+            self.welcome_attachments = mycode_app::Attachments::default();
             self.welcome_send_is_note = false;
             return;
         };
@@ -613,7 +613,7 @@ impl FrontendDriver {
         &mut self,
         draft: String,
         clear_composer: bool,
-        attachments: mycode_core::Attachments,
+        attachments: mycode_app::Attachments,
         out: &mut Vec<Effect>,
     ) -> bool {
         if draft.trim().is_empty() && attachments.is_empty() {

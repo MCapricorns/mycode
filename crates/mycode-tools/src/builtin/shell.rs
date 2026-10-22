@@ -610,7 +610,7 @@ fn format_result(
     }
 
     ToolResult {
-        content: vec![mycode_core::message::ContentBlock::Text(text.into())],
+        content: vec![mycode_providers::message::ContentBlock::Text(text.into())],
         is_error,
         details: Some(details),
     }

@@ -13,7 +13,7 @@ pub const DEFAULT_PROXY_URL: &str = "http://127.0.0.1:7890";
 /// Saving an empty or whitespace-only key field is a no-op so the replace-key
 /// flow cannot delete a stored credential.
 pub fn normalized_key_input(raw: &str) -> Option<String> {
-    let key = mycode_config::normalize_api_key(raw);
+    let key = mycode_app::normalize_api_key(raw);
     (!key.is_empty() && !key.eq_ignore_ascii_case("bearer")).then_some(key)
 }
 
@@ -21,7 +21,7 @@ pub fn normalized_key_input(raw: &str) -> Option<String> {
 /// commas or whitespace, values optionally quoted. Empty input is no env.
 pub fn parse_env_line(line: &str) -> Result<BTreeMap<String, String>, String> {
     let mut env = BTreeMap::new();
-    for word in mycode_config::split_command_line(&space_separate_env(line)) {
+    for word in mycode_app::split_command_line(&space_separate_env(line)) {
         let Some((key, value)) = word.split_once('=') else {
             return Err(format!(
                 "{} '{word}'",
@@ -41,20 +41,20 @@ pub fn parse_env_line(line: &str) -> Result<BTreeMap<String, String>, String> {
         }
         env.insert(key.to_owned(), value.to_owned());
     }
-    if env.len() > mycode_config::MAX_MCP_ENV_VARS {
+    if env.len() > mycode_app::MAX_MCP_ENV_VARS {
         return Err(format!(
             "{} {}",
             crate::i18n::t(
                 "Env entries per server, at most:",
                 "每个服务器的环境变量上限："
             ),
-            mycode_config::MAX_MCP_ENV_VARS
+            mycode_app::MAX_MCP_ENV_VARS
         ));
     }
     Ok(env)
 }
 
-/// Maps commas to spaces outside quotes so [`mycode_config::split_command_line`]
+/// Maps commas to spaces outside quotes so [`mycode_app::split_command_line`]
 /// sees one word per `KEY=VALUE` while a quoted value keeps its commas.
 fn space_separate_env(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
@@ -95,7 +95,7 @@ pub fn build_mcp_server(
     endpoint: &str,
     command: &str,
     env_line: &str,
-) -> Result<mycode_config::McpServerSettings, String> {
+) -> Result<mycode_app::McpServerSettings, String> {
     let server = match transport {
         "http" => {
             if endpoint.is_empty() {
@@ -104,7 +104,7 @@ pub fn build_mcp_server(
                         .to_owned(),
                 );
             }
-            mycode_config::McpServerSettings {
+            mycode_app::McpServerSettings {
                 id: id.to_owned(),
                 enabled: true,
                 transport: transport.to_owned(),
@@ -120,7 +120,7 @@ pub fn build_mcp_server(
             // The form takes the whole line the server docs publish
             // (`npx -y @scope/server --flag`); split it here so the
             // child gets a program plus argv, not one giant program name.
-            let mut words = mycode_config::split_command_line(command).into_iter();
+            let mut words = mycode_app::split_command_line(command).into_iter();
             let Some(program) = words.next().filter(|word| !word.is_empty()) else {
                 return Err(
                     crate::i18n::t("stdio servers need a command", "stdio 服务器需要命令")
@@ -128,7 +128,7 @@ pub fn build_mcp_server(
                 );
             };
             let env = parse_env_line(env_line)?;
-            mycode_config::McpServerSettings {
+            mycode_app::McpServerSettings {
                 id: id.to_owned(),
                 enabled: true,
                 transport: transport.to_owned(),
@@ -148,9 +148,9 @@ pub fn build_mcp_server(
             .to_owned());
         }
     };
-    let probe = mycode_config::AppSettings {
+    let probe = mycode_app::AppSettings {
         mcp_servers: vec![server.clone()],
-        ..mycode_config::AppSettings::default()
+        ..mycode_app::AppSettings::default()
     };
     probe
         .validate()

@@ -3,10 +3,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use mycode_agent::ProviderError;
 use mycode_agent::session::{BranchId, EventKind, HeadStamp, SessionId};
-use mycode_config::{AppSettings, AuthorityRevision, replace_app_settings};
-use mycode_core::ProviderError;
-use mycode_providers::{ResolvedProvider, SseTransport, TransportCall};
+use mycode_agent::{AppSettings, AuthorityRevision, replace_app_settings};
+use mycode_agent::{ResolvedProvider, SseTransport, TransportCall};
 
 use super::scratch;
 use crate::protocol::EntryKind;
@@ -28,7 +28,7 @@ impl SseTransport for TurnTransport {
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    Output = Result<mycode_agent::transport::ByteStream, ProviderError>,
                 > + Send
                 + 'a,
         >,
@@ -100,7 +100,7 @@ fn tool_sse() -> String {
 async fn hook_compaction_waits_until_the_turn_commits() {
     let (root, home) = scratch();
     let settings = AppSettings {
-        magpie: mycode_config::MagpieSettings {
+        magpie: mycode_agent::MagpieSettings {
             enabled: true,
             base_url: "http://127.0.0.1:3425/v1".to_owned(),
             api_key: "test-key".to_owned(),
@@ -110,7 +110,7 @@ async fn hook_compaction_waits_until_the_turn_commits() {
         ..AppSettings::default()
     };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+    let cwd = home.root().join(mycode_agent::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
     std::fs::write(
         cwd.join("a.txt"),
@@ -416,7 +416,7 @@ impl SseTransport for ChainTransport {
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    Output = Result<mycode_agent::transport::ByteStream, ProviderError>,
                 > + Send
                 + 'a,
         >,
@@ -491,7 +491,7 @@ impl SseTransport for MeasuredTransport {
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    Output = Result<mycode_agent::transport::ByteStream, ProviderError>,
                 > + Send
                 + 'a,
         >,
@@ -553,7 +553,7 @@ async fn measured_turn(reported: u64) -> Arc<MeasuredTransport> {
 async fn turn_in_a_100k_window(transport: Arc<dyn SseTransport>) {
     let (root, home) = scratch();
     let settings = AppSettings {
-        magpie: mycode_config::MagpieSettings {
+        magpie: mycode_agent::MagpieSettings {
             enabled: true,
             base_url: "http://127.0.0.1:3425/v1".to_owned(),
             api_key: "test-key".to_owned(),
@@ -563,7 +563,7 @@ async fn turn_in_a_100k_window(transport: Arc<dyn SseTransport>) {
         ..AppSettings::default()
     };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+    let cwd = home.root().join(mycode_agent::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
     std::fs::write(cwd.join("a.txt"), "alpha-body").expect("a");
     let state = CoreState::new(home, Vec::new());
@@ -620,7 +620,7 @@ impl SseTransport for OverflowTransport {
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    Output = Result<mycode_agent::transport::ByteStream, ProviderError>,
                 > + Send
                 + 'a,
         >,
@@ -637,7 +637,7 @@ impl SseTransport for OverflowTransport {
             } else if refused {
                 self.kinds.lock().expect("kinds").push("refused");
                 return Err(ProviderError::with_message(
-                    mycode_core::ProviderErrorKind::Rejected,
+                    mycode_agent::ProviderErrorKind::Rejected,
                     "HTTP 400 Bad Request: {\"error\":{\"message\":\"This model's maximum \
                      context length is 100000 tokens.\",\"code\":\"context_length_exceeded\"}}",
                 )
@@ -754,7 +754,7 @@ async fn a_turn_that_compacts_four_times_loses_nothing_and_the_next_turn_resumes
     const ROUNDS: usize = 6;
     let (root, home) = scratch();
     let settings = AppSettings {
-        magpie: mycode_config::MagpieSettings {
+        magpie: mycode_agent::MagpieSettings {
             enabled: true,
             base_url: "http://127.0.0.1:3425/v1".to_owned(),
             api_key: "test-key".to_owned(),
@@ -764,7 +764,7 @@ async fn a_turn_that_compacts_four_times_loses_nothing_and_the_next_turn_resumes
         ..AppSettings::default()
     };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+    let cwd = home.root().join(mycode_agent::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
     let line = format!("{}\n", "b".repeat(79));
     for round in 1..=ROUNDS {
@@ -822,7 +822,7 @@ async fn a_turn_that_compacts_four_times_loses_nothing_and_the_next_turn_resumes
 
     // The newest summary is on disk, aligned with the ledger replay.
     let session_id = session.as_str().to_owned();
-    let checkpoint = mycode_config::read_compaction(&home, &session_id)
+    let checkpoint = mycode_agent::read_compaction(&home, &session_id)
         .expect("read checkpoint")
         .expect("checkpoint written");
     assert!(

@@ -46,7 +46,7 @@ fn a_finished_turn_promotes_its_live_meter_to_last_turn() {
 #[test]
 fn a_new_session_inherits_the_open_chat_model() {
     let mut settings =
-        crate::view_model::SettingsState::from_settings(&mycode_config::AppSettings::default(), 1);
+        crate::view_model::SettingsState::from_settings(&mycode_app::AppSettings::default(), 1);
     settings.reasoning = Some("on".to_owned());
     let mut state = WorkspaceState {
         settings: Some(settings),
@@ -78,11 +78,11 @@ fn a_new_session_inherits_the_open_chat_model() {
             corrupt: false,
         }),
     );
-    let inherited = mycode_config::session_model(&state.session_models, "new").expect("pin");
+    let inherited = mycode_app::session_model(&state.session_models, "new").expect("pin");
     assert_eq!(inherited.provider, "zai");
     assert_eq!(inherited.model, "glm-4.7");
     assert_eq!(inherited.reasoning.as_deref(), Some("on"));
-    let previous = mycode_config::session_model(&state.session_models, "old").expect("old");
+    let previous = mycode_app::session_model(&state.session_models, "old").expect("old");
     assert_eq!(previous.model, "glm-4.7");
 }
 

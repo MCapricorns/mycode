@@ -1,4 +1,4 @@
-use mycode_core::{
+use mycode_config::{
     AssistantMessage, ContentBlock, Message, Request, StopReason, TextBlock, ThinkingBlock,
     UserMessage,
 };
@@ -29,11 +29,11 @@ fn thinking_of(message: &AssistantMessage) -> String {
         .collect()
 }
 
-fn take_done(events: Vec<mycode_core::StreamEvent>) -> AssistantMessage {
+fn take_done(events: Vec<mycode_config::StreamEvent>) -> AssistantMessage {
     events
         .into_iter()
         .find_map(|event| match event {
-            mycode_core::StreamEvent::Done { message } => Some(message),
+            mycode_config::StreamEvent::Done { message } => Some(message),
             _ => None,
         })
         .expect("done")
@@ -79,7 +79,7 @@ fn glm_error_finish_keeps_thinking() {
     );
     assert!(deltas.iter().any(|event| matches!(
         event,
-        mycode_core::StreamEvent::ThinkingDelta(text) if text == "plan the page"
+        mycode_config::StreamEvent::ThinkingDelta(text) if text == "plan the page"
     )));
     reducer
         .feed(r#"{"choices":[{"delta":{},"finish_reason":"error"}],"usage":{"prompt_tokens":3}}"#);
@@ -223,7 +223,7 @@ fn invalid_json_after_thinking_assembles_the_partial() {
 fn eof_without_finish_reason_notes_the_partial() {
     let mut reducer = CompletionsReducer::new();
     reducer.feed(r#"{"choices":[{"delta":{"reasoning_content":"mid"}}]}"#);
-    let mycode_core::StreamEvent::Done { message } = reducer.finish() else {
+    let mycode_config::StreamEvent::Done { message } = reducer.finish() else {
         panic!("done");
     };
     assert_eq!(thinking_of(&message), "mid");
@@ -325,7 +325,7 @@ fn minimax_replays_reasoning_details_verbatim_and_stays_stable() {
             usage: None,
             stop_reason: StopReason::Stop,
         }))],
-        reasoning: Some(mycode_core::ReasoningLevel::Max),
+        reasoning: Some(mycode_config::ReasoningLevel::Max),
         ..Request::default()
     };
     let endpoint = "https://api.minimaxi.com/v1/chat/completions";
@@ -368,11 +368,11 @@ fn leading_think_tag_becomes_a_thinking_block() {
         .feed(r#"{"choices":[{"delta":{"content":"<think>plan the page</think>\nhello"}}]}"#);
     assert!(deltas.iter().any(|event| matches!(
         event,
-        mycode_core::StreamEvent::ThinkingDelta(text) if text == "plan the page"
+        mycode_config::StreamEvent::ThinkingDelta(text) if text == "plan the page"
     )));
     assert!(deltas.iter().any(|event| matches!(
         event,
-        mycode_core::StreamEvent::TextDelta(text) if text == "hello"
+        mycode_config::StreamEvent::TextDelta(text) if text == "hello"
     )));
     let message = take_done(reducer.feed("[DONE]"));
     assert_eq!(thinking_of(&message), "plan the page");
@@ -391,7 +391,7 @@ fn think_tag_split_across_chunks_stays_out_of_the_reply() {
         reducer
             .feed(r#"{"choices":[{"delta":{"content":"<thi"}}]}"#)
             .iter()
-            .all(|event| !matches!(event, mycode_core::StreamEvent::TextDelta(_)))
+            .all(|event| !matches!(event, mycode_config::StreamEvent::TextDelta(_)))
     );
     reducer.feed(r#"{"choices":[{"delta":{"content":"nk>plan</thi"}}]}"#);
     reducer.feed(r#"{"choices":[{"delta":{"content":"nk>\nanswer"}}]}"#);
@@ -407,7 +407,7 @@ fn plain_text_is_not_held_for_a_think_tag() {
     let deltas = reducer.feed(r#"{"choices":[{"delta":{"content":"hello"}}]}"#);
     assert!(deltas.iter().any(|event| matches!(
         event,
-        mycode_core::StreamEvent::TextDelta(text) if text == "hello"
+        mycode_config::StreamEvent::TextDelta(text) if text == "hello"
     )));
 }
 
@@ -432,11 +432,11 @@ fn minimax_reasoning_details_map_to_a_thinking_block() {
     let deltas = reducer.feed(&chunk.to_string());
     assert!(deltas.iter().any(|event| matches!(
         event,
-        mycode_core::StreamEvent::ThinkingDelta(text) if text == "plan the edit exactly"
+        mycode_config::StreamEvent::ThinkingDelta(text) if text == "plan the edit exactly"
     )));
     assert!(deltas.iter().all(|event| !matches!(
         event,
-        mycode_core::StreamEvent::ThinkingDelta(text) if text.contains("duplicate")
+        mycode_config::StreamEvent::ThinkingDelta(text) if text.contains("duplicate")
     )));
     let message = take_done(reducer.feed("[DONE]"));
     assert_eq!(thinking_of(&message), "plan the edit exactly");
@@ -503,7 +503,7 @@ fn distinct_detail_items_are_charged_against_the_stream_cap() {
         if events.iter().any(|event| {
             matches!(
                 event,
-                mycode_core::StreamEvent::Error(error) if error
+                mycode_config::StreamEvent::Error(error) if error
                     .message()
                     .is_some_and(|message| message.contains("stream exceeded the output limit"))
             )
@@ -519,14 +519,14 @@ fn distinct_detail_items_are_charged_against_the_stream_cap() {
 }
 
 /// Event names in order, so a test can pin where `ToolCallStarted` lands.
-fn started_then_deltas(events: &[mycode_core::StreamEvent]) -> Vec<String> {
+fn started_then_deltas(events: &[mycode_config::StreamEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            mycode_core::StreamEvent::ToolCallStarted { id, name } => {
+            mycode_config::StreamEvent::ToolCallStarted { id, name } => {
                 Some(format!("started {id} {name}"))
             }
-            mycode_core::StreamEvent::ToolCallDelta { id, .. } => Some(format!("delta {id}")),
+            mycode_config::StreamEvent::ToolCallDelta { id, .. } => Some(format!("delta {id}")),
             _ => None,
         })
         .collect()
@@ -558,7 +558,7 @@ fn each_streamed_call_announces_its_name_once_before_its_arguments() {
 
 #[test]
 fn a_tool_returned_image_waits_for_the_tool_batch() {
-    use mycode_core::{BinaryData, TextBlock, ToolCall, ToolResultMessage, UserMessage};
+    use mycode_config::{BinaryData, TextBlock, ToolCall, ToolResultMessage, UserMessage};
     use std::sync::Arc;
 
     let result = |id: &str, image: bool| {
@@ -613,7 +613,7 @@ fn a_tool_returned_image_waits_for_the_tool_batch() {
 
 #[test]
 fn a_text_only_tool_result_keeps_the_plain_string() {
-    use mycode_core::{ToolCall, ToolResultMessage};
+    use mycode_config::{ToolCall, ToolResultMessage};
     use std::sync::Arc;
 
     let request = Request {

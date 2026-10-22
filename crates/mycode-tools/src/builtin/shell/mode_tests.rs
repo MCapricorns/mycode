@@ -171,7 +171,7 @@ async fn invalid_mode_mix_does_not_spawn() {
 
 fn result_text(result: &crate::tool::ToolResult) -> String {
     match result.content.first() {
-        Some(mycode_core::message::ContentBlock::Text(block)) => block.text.clone(),
+        Some(mycode_providers::message::ContentBlock::Text(block)) => block.text.clone(),
         other => panic!("expected text content, got {other:?}"),
     }
 }

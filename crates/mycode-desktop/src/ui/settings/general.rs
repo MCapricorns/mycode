@@ -123,8 +123,8 @@ pub(super) fn render_general_section(
 
 /// Mode chip id for one stored proxy value.
 fn proxy_mode(stored: &str) -> &'static str {
-    match mycode_config::ProxyPreference::parse(stored) {
-        Some(mycode_config::ProxyPreference::Url(_)) => "manual",
+    match mycode_frontend::ProxyPreference::parse(stored) {
+        Some(mycode_frontend::ProxyPreference::Url(_)) => "manual",
         _ => "system",
     }
 }
@@ -132,7 +132,7 @@ fn proxy_mode(stored: &str) -> &'static str {
 /// One line for the proxy test result and whether it reads as success
 /// (`None` while idle or running).
 fn proxy_test_line(test: &ProxyTestState) -> (String, Option<bool>) {
-    use mycode_app::ProxyTestRoute;
+    use mycode_frontend::ProxyTestRoute;
     match test {
         ProxyTestState::Idle => (
             t(
@@ -167,7 +167,7 @@ fn proxy_test_line(test: &ProxyTestState) -> (String, Option<bool>) {
                     format!(
                         "{} · {route} · {}",
                         t("google.com unreachable", "google.com 不通"),
-                        mycode_app::brief_error(message)
+                        mycode_frontend::brief_error(message)
                     ),
                     Some(false),
                 ),
@@ -207,8 +207,8 @@ fn proxy_field(
     let input = (mode == "manual").then(|| workspace.settings_proxy_input(window, cx));
     let invalid = input.as_ref().is_some_and(|input| {
         !matches!(
-            mycode_config::ProxyPreference::parse(input.read(cx).value().trim()),
-            Some(mycode_config::ProxyPreference::Url(_))
+            mycode_frontend::ProxyPreference::parse(input.read(cx).value().trim()),
+            Some(mycode_frontend::ProxyPreference::Url(_))
         )
     });
     let chips = choice_chips(

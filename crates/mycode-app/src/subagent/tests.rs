@@ -1,7 +1,7 @@
 use super::worktree::{
     LeaseGuard, WorktreeLease, format_subagent_handoff, git_command, handoff_worktree,
 };
-use mycode_config::{HomeLayout, SubagentSettings, builtin_roles};
+use mycode_agent::{HomeLayout, SubagentSettings, builtin_roles};
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -190,7 +190,7 @@ fn parent_dispatch_names_scout_and_artisan_only() {
     assert!(!text.contains("wall-clock"));
     assert!(text.contains(&format!(
         "At most {} subagents",
-        mycode_config::SUBAGENT_CONCURRENCY
+        mycode_agent::SUBAGENT_CONCURRENCY
     )));
     assert!(!text.contains("steward"));
     assert!(!text.contains("sentinel"));
@@ -225,12 +225,12 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
     let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-agents")).unwrap();
     let scout = builtin_roles().role("scout").expect("scout").clone();
     let allowed = scout.resolve_tools(super::PARENT_TOOL_NAMES);
-    let shell = mycode_tools::DetectedShell {
-        kind: mycode_tools::ShellKind::Bash,
+    let shell = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::Bash,
         program: std::path::PathBuf::from("/bin/bash"),
     };
     let registry =
-        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
+        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
     let workspace = super::ChildWorkspace {
         resources: vec!["# AGENTS.md (workspace)\n\nRun `just check` before reporting.".to_owned()],
         mcp_note: Some(super::child_mcp_note(
@@ -267,14 +267,14 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
     assert!(!note.contains("readOnlyHint"), "{note}");
 }
 
-fn shell_tool(kind: mycode_tools::ShellKind, program: &str) -> mycode_tools::ShellTool {
-    mycode_tools::ShellTool::forcing(mycode_tools::DetectedShell {
+fn shell_tool(kind: mycode_agent::ShellKind, program: &str) -> mycode_agent::ShellTool {
+    mycode_agent::ShellTool::forcing(mycode_agent::DetectedShell {
         kind,
         program: std::path::PathBuf::from(program),
     })
 }
 
-fn shell_names(registry: &mycode_tools::ToolRegistry) -> Vec<String> {
+fn shell_names(registry: &mycode_agent::ToolRegistry) -> Vec<String> {
     registry
         .names()
         .into_iter()
@@ -301,15 +301,15 @@ fn child_registry_keeps_one_shell_tool_for_every_allowlist_alias() {
     ];
     let cases = [
         (
-            mycode_tools::ShellKind::WindowsPowerShell,
+            mycode_agent::ShellKind::WindowsPowerShell,
             "powershell.exe",
             "powershell",
         ),
-        (mycode_tools::ShellKind::Pwsh, "pwsh.exe", "powershell"),
-        (mycode_tools::ShellKind::Bash, "/bin/bash", "bash"),
-        (mycode_tools::ShellKind::Zsh, "/bin/zsh", "zsh"),
-        (mycode_tools::ShellKind::Sh, "/bin/sh", "sh"),
-        (mycode_tools::ShellKind::Cmd, "cmd.exe", "cmd"),
+        (mycode_agent::ShellKind::Pwsh, "pwsh.exe", "powershell"),
+        (mycode_agent::ShellKind::Bash, "/bin/bash", "bash"),
+        (mycode_agent::ShellKind::Zsh, "/bin/zsh", "zsh"),
+        (mycode_agent::ShellKind::Sh, "/bin/sh", "sh"),
+        (mycode_agent::ShellKind::Cmd, "cmd.exe", "cmd"),
     ];
     for (kind, program, expected) in cases {
         let registry = super::child_registry_with(&aliases, shell_tool(kind, program));
@@ -335,12 +335,12 @@ fn artisan_on_windows_powershell_does_not_receive_bash() {
         allowed.iter().any(|name| name == "shell"),
         "artisan inherits the shell allowlist token, got {allowed:?}"
     );
-    let shell = mycode_tools::DetectedShell {
-        kind: mycode_tools::ShellKind::WindowsPowerShell,
+    let shell = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::WindowsPowerShell,
         program: std::path::PathBuf::from("powershell.exe"),
     };
     let registry =
-        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
+        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
     assert_eq!(shell_names(&registry), vec!["powershell".to_owned()]);
     let prompt = super::subagent_system_prompt(
         &artisan,
@@ -370,13 +370,13 @@ fn the_scratch_root_is_listed_apart_from_workspace_folders() {
     let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-scratch")).unwrap();
     let role = builtin_roles().role("artisan").expect("artisan").clone();
     let allowed = role.resolve_tools(&["read", "shell"]);
-    let shell = mycode_tools::DetectedShell {
-        kind: mycode_tools::ShellKind::Pwsh,
+    let shell = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::Pwsh,
         program: std::path::PathBuf::from("pwsh.exe"),
     };
     let registry =
-        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
-    let scratch = mycode_tools::os_scratch_root();
+        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
+    let scratch = mycode_agent::os_scratch_root();
     let prompt = super::subagent_system_prompt(
         &role,
         &registry,
@@ -407,12 +407,12 @@ fn a_bash_allowlist_entry_still_launches_the_active_powershell_tool() {
     role.tools = Some(vec!["read".into(), "bash".into()]);
     let allowed = role.resolve_tools(&["read", "shell"]);
     assert_eq!(allowed, vec!["read".to_owned(), "bash".to_owned()]);
-    let shell = mycode_tools::DetectedShell {
-        kind: mycode_tools::ShellKind::Pwsh,
+    let shell = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::Pwsh,
         program: std::path::PathBuf::from("pwsh.exe"),
     };
     let registry =
-        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
+        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
     assert_eq!(shell_names(&registry), vec!["powershell".to_owned()]);
     let prompt = super::subagent_system_prompt(
         &role,
@@ -438,12 +438,12 @@ fn zsh_and_cmd_subagents_match_that_interpreter() {
     let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-zsh")).unwrap();
     let artisan = builtin_roles().role("artisan").expect("artisan").clone();
     let allowed = ["read".to_owned(), "shell".to_owned()];
-    let zsh = mycode_tools::DetectedShell {
-        kind: mycode_tools::ShellKind::Zsh,
+    let zsh = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::Zsh,
         program: std::path::PathBuf::from("/bin/zsh"),
     };
     let registry =
-        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(zsh.clone()));
+        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(zsh.clone()));
     assert_eq!(shell_names(&registry), vec!["zsh".to_owned()]);
     let prompt = super::subagent_system_prompt(
         &artisan,
@@ -463,12 +463,12 @@ fn zsh_and_cmd_subagents_match_that_interpreter() {
     assert!(!prompt.contains("Git Bash"), "{prompt}");
     assert!(!prompt.contains("translated"), "{prompt}");
 
-    let cmd = mycode_tools::DetectedShell {
-        kind: mycode_tools::ShellKind::Cmd,
+    let cmd = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::Cmd,
         program: std::path::PathBuf::from(r"C:\Windows\System32\cmd.exe"),
     };
     let registry =
-        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(cmd.clone()));
+        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(cmd.clone()));
     assert_eq!(shell_names(&registry), vec!["cmd".to_owned()]);
     let prompt = super::subagent_system_prompt(
         &artisan,
@@ -505,12 +505,12 @@ fn scout_stays_read_only_and_does_not_list_a_shell() {
         }),
         "scout must not inherit a shell tool, got {allowed:?}"
     );
-    let shell = mycode_tools::DetectedShell {
-        kind: mycode_tools::ShellKind::WindowsPowerShell,
+    let shell = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::WindowsPowerShell,
         program: std::path::PathBuf::from("powershell.exe"),
     };
     let registry =
-        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
+        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
     assert!(shell_names(&registry).is_empty(), "{:?}", registry.names());
     let prompt = super::subagent_system_prompt(
         &scout,
@@ -559,12 +559,12 @@ fn scout_prompt_lists_workspace_skills() {
             .map(|name| (*name).to_owned())
             .collect::<Vec<_>>(),
     );
-    let shell = mycode_tools::DetectedShell {
-        kind: mycode_tools::ShellKind::Bash,
+    let shell = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::Bash,
         program: std::path::PathBuf::from("/bin/bash"),
     };
     let registry =
-        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
+        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
     let prompt = super::subagent_system_prompt(
         &scout,
         &registry,
@@ -591,12 +591,12 @@ fn artisan_gets_the_same_tool_guidance_as_the_parent() {
             .collect::<Vec<_>>(),
     );
     assert!(allowed.iter().any(|name| name == "edit"), "{allowed:?}");
-    let shell = mycode_tools::DetectedShell {
-        kind: mycode_tools::ShellKind::Bash,
+    let shell = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::Bash,
         program: std::path::PathBuf::from("/bin/bash"),
     };
     let registry =
-        super::child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
+        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
     let prompt = super::subagent_system_prompt(
         &artisan,
         &registry,
@@ -621,10 +621,8 @@ fn artisan_gets_the_same_tool_guidance_as_the_parent() {
         !prompt.contains("Do not do that research inline"),
         "{prompt}"
     );
-    let directive = super::delegation_directive(
-        &builtin_roles(),
-        &mycode_config::SubagentSettings::default(),
-    );
+    let directive =
+        super::delegation_directive(&builtin_roles(), &mycode_agent::SubagentSettings::default());
     assert!(
         directive.contains("instead of a long chain of searches"),
         "{directive}"
@@ -656,7 +654,7 @@ async fn a_cancelled_child_stops_a_run_that_never_answers() {
     let child = CancellationToken::new();
     let mut run = tokio::spawn(async {
         std::future::pending::<()>().await;
-        Ok::<String, mycode_tools::ToolError>("never".to_owned())
+        Ok::<String, mycode_agent::ToolError>("never".to_owned())
     });
     let stopper = child.clone();
     tokio::spawn(async move {
@@ -673,7 +671,7 @@ async fn a_cancelled_child_stops_a_run_that_never_answers() {
 async fn a_finished_run_returns_its_answer() {
     let cancel = CancellationToken::new();
     let child = CancellationToken::new();
-    let mut run = tokio::spawn(async { Ok::<String, mycode_tools::ToolError>("done".to_owned()) });
+    let mut run = tokio::spawn(async { Ok::<String, mycode_agent::ToolError>("done".to_owned()) });
     let outcome = super::finish_subagent_task(&mut run, &cancel, &child).await;
     match outcome {
         super::SubagentFinish::Finished(Ok(text)) => assert_eq!(text, "done"),
@@ -689,7 +687,7 @@ async fn parent_cancel_stops_the_run_and_its_child_token() {
     cancel.cancel();
     let mut run = tokio::spawn(async {
         std::future::pending::<()>().await;
-        Ok::<String, mycode_tools::ToolError>("no".to_owned())
+        Ok::<String, mycode_agent::ToolError>("no".to_owned())
     });
     let outcome = super::finish_subagent_task(&mut run, &cancel, &child).await;
     assert!(matches!(outcome, super::SubagentFinish::Cancelled));
@@ -719,7 +717,7 @@ fn child_cancel_registration_preserves_a_successor_token_with_the_same_call_id()
 
 #[test]
 fn role_with_only_unknown_or_parent_tools_stays_read_only() {
-    use mycode_config::{RoleIsolation, RoleOrigin, RoleThinking, SubagentRole};
+    use mycode_agent::{RoleIsolation, RoleOrigin, RoleThinking, SubagentRole};
 
     let role = SubagentRole {
         name: "reviewer".to_owned(),
@@ -745,12 +743,12 @@ fn role_with_only_unknown_or_parent_tools_stays_read_only() {
 
 fn assistant_msg(
     text: &str,
-    stop: mycode_core::StopReason,
-) -> std::sync::Arc<mycode_core::Message> {
-    std::sync::Arc::new(mycode_core::Message::Assistant(
-        mycode_core::AssistantMessage {
-            blocks: vec![mycode_core::ContentBlock::Text(
-                mycode_core::TextBlock::new(text),
+    stop: mycode_agent::StopReason,
+) -> std::sync::Arc<mycode_agent::Message> {
+    std::sync::Arc::new(mycode_agent::Message::Assistant(
+        mycode_agent::AssistantMessage {
+            blocks: vec![mycode_agent::ContentBlock::Text(
+                mycode_agent::TextBlock::new(text),
             )],
             usage: None,
             stop_reason: stop,
@@ -760,15 +758,15 @@ fn assistant_msg(
 
 #[test]
 fn an_interrupted_child_answers_as_a_tool_error() {
-    let text = mycode_core::interrupted_response_text("provider unavailable: transport failed");
+    let text = mycode_agent::interrupted_response_text("provider unavailable: transport failed");
     let messages = vec![
-        std::sync::Arc::new(mycode_core::Message::User(mycode_core::UserMessage::text(
-            "brief",
-        ))),
-        assistant_msg(&text, mycode_core::StopReason::Error),
+        std::sync::Arc::new(mycode_agent::Message::User(
+            mycode_agent::UserMessage::text("brief"),
+        )),
+        assistant_msg(&text, mycode_agent::StopReason::Error),
     ];
     let result = super::subagent_answer(
-        Ok(mycode_core::TurnOutcome::Completed),
+        Ok(mycode_agent::TurnOutcome::Completed),
         &messages,
         "artisan",
     );
@@ -776,12 +774,12 @@ fn an_interrupted_child_answers_as_a_tool_error() {
     assert!(error.to_string().contains("transport failed"), "{error}");
     // A real answer followed by an interrupted retry still fails closed.
     let messages = vec![
-        assistant_msg("done so far", mycode_core::StopReason::Stop),
-        assistant_msg(&text, mycode_core::StopReason::Error),
+        assistant_msg("done so far", mycode_agent::StopReason::Stop),
+        assistant_msg(&text, mycode_agent::StopReason::Error),
     ];
     assert!(
         super::subagent_answer(
-            Ok(mycode_core::TurnOutcome::Completed),
+            Ok(mycode_agent::TurnOutcome::Completed),
             &messages,
             "artisan",
         )
@@ -792,21 +790,21 @@ fn an_interrupted_child_answers_as_a_tool_error() {
 #[test]
 fn a_stopped_child_answers_with_its_last_text() {
     let messages = vec![
-        assistant_msg("earlier", mycode_core::StopReason::ToolUse),
-        assistant_msg("the answer", mycode_core::StopReason::Stop),
+        assistant_msg("earlier", mycode_agent::StopReason::ToolUse),
+        assistant_msg("the answer", mycode_agent::StopReason::Stop),
     ];
     let answer =
-        super::subagent_answer(Ok(mycode_core::TurnOutcome::Completed), &messages, "scout")
+        super::subagent_answer(Ok(mycode_agent::TurnOutcome::Completed), &messages, "scout")
             .expect("answer");
     assert_eq!(answer, "the answer");
     assert!(
-        super::subagent_answer(Ok(mycode_core::TurnOutcome::Aborted), &messages, "scout",)
+        super::subagent_answer(Ok(mycode_agent::TurnOutcome::Aborted), &messages, "scout",)
             .expect_err("aborted")
             .to_string()
             .contains("scout")
     );
     assert!(
-        super::subagent_answer(Ok(mycode_core::TurnOutcome::Completed), &[], "scout")
+        super::subagent_answer(Ok(mycode_agent::TurnOutcome::Completed), &[], "scout")
             .expect_err("empty")
             .to_string()
             .contains("no answer")
@@ -817,8 +815,8 @@ fn a_stopped_child_answers_with_its_last_text() {
 fn a_child_sizes_its_window_from_its_own_model() {
     use std::sync::Arc;
 
-    use mycode_config::{AppSettings, MagpieSettings, SubagentRoleSettings};
-    use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+    use mycode_agent::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+    use mycode_agent::{AppSettings, MagpieSettings, SubagentRoleSettings};
 
     let mut settings = AppSettings {
         magpie: MagpieSettings {
@@ -833,7 +831,7 @@ fn a_child_sizes_its_window_from_its_own_model() {
     settings.subagents.roles.push(SubagentRoleSettings {
         role: "scout".to_owned(),
         enabled: true,
-        provider: Some(mycode_config::MAGPIE_PROVIDER_ID.to_owned()),
+        provider: Some(mycode_agent::MAGPIE_PROVIDER_ID.to_owned()),
         model: Some("wide-model".to_owned()),
         thinking: None,
     });
@@ -855,7 +853,7 @@ fn a_child_sizes_its_window_from_its_own_model() {
     })));
     let parent = crate::magpie::provider_row(&settings.magpie, &catalog.read().unwrap())
         .expect("gateway row");
-    let resolved = mycode_providers::ResolvedProvider::resolve(&parent, "parent-model", "k", "ua")
+    let resolved = mycode_agent::ResolvedProvider::resolve(&parent, "parent-model", "k", "ua")
         .expect("resolve");
     let host = || {
         super::BridgeAgentHost::new(

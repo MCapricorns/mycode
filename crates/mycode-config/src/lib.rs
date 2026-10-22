@@ -1,16 +1,10 @@
 //! Strict owned configuration authorities for MYCode.
 //!
-//! [`HomeLayout`] resolves the relocatable owned home root lexically, without
-//! filesystem I/O. Authority files are lazy, bounded, strict JSON documents
-//! published through the locked owned-file machinery. Settings and secrets
-//! carry a revision compare-and-swap; advisory state is last-writer-wins.
-//! There is no alias, layered merge, or fallback for obsolete layouts:
-//! unrelated paths are never inputs.
-//!
-//! Product documents (`settings.json`, `secrets.json`, `ui.json`) are strict:
-//! a file that cannot be parsed or validated is copied aside and republished,
-//! keeping whatever fields still decode so startup can continue. Session
-//! ledgers are not repaired that way.
+//! [`HomeLayout`] resolves the owned home root lexically; authority files are
+//! lazy, bounded, strict JSON documents under locked owned-file machinery.
+//! Settings and secrets carry a revision CAS; advisory state is
+//! last-writer-wins. Unparseable product documents are copied aside and
+//! republished so startup can continue; session ledgers are not repaired.
 
 #![warn(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -18,6 +12,9 @@
 mod authority;
 mod compaction;
 mod document_repair;
+// Private; shadows the forwarded `error` module path on purpose (root-level
+// error types are re-exported instead).
+#[allow(hidden_glob_reexports)]
 mod error;
 mod home;
 mod mcp_import;
@@ -28,6 +25,10 @@ mod secure_fs;
 mod settings;
 mod subagents;
 mod ui_state;
+
+// Chain re-export: successors see every lower layer through this crate only.
+#[doc(inline)]
+pub use mycode_core::*;
 
 #[doc(inline)]
 pub use authority::AuthorityRevision;
@@ -94,11 +95,3 @@ pub use ui_state::{
     replace_ui_state, salvage_ui_state, same_project_path, session_model, update_ui_state,
     upsert_session_model,
 };
-
-/// Returns the wall-clock duration since the Unix epoch, saturating at zero
-/// when the system clock predates the epoch.
-pub(crate) fn unix_now() -> std::time::Duration {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-}

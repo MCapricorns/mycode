@@ -6,12 +6,12 @@ use super::{CompactStatus, padded, scratch_home, summary_wire_with, user, user_t
 #[tokio::test]
 async fn a_checkpoint_that_does_not_fit_the_ledger_is_ignored() {
     let (root, home) = scratch_home();
-    mycode_config::write_compaction(
+    mycode_agent::write_compaction(
         &home,
         "session-a",
-        &mycode_config::CompactionCheckpoint {
-            format_version: mycode_config::COMPACTION_FORMAT_VERSION,
-            kind: mycode_config::COMPACTION_KIND.to_owned(),
+        &mycode_agent::CompactionCheckpoint {
+            format_version: mycode_agent::COMPACTION_FORMAT_VERSION,
+            kind: mycode_agent::COMPACTION_KIND.to_owned(),
             session_id: "session-a".to_owned(),
             branch_id: "branch-a".to_owned(),
             covered_head: "head-0".to_owned(),

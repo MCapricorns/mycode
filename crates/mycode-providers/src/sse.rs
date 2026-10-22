@@ -4,7 +4,7 @@
 //! tolerates CRLF and LF endings, ignores comments and non-data fields, and
 //! fails closed on oversized frames instead of buffering without bound.
 
-use mycode_core::{ProviderError, ProviderErrorKind};
+use mycode_config::{ProviderError, ProviderErrorKind};
 
 /// Maximum accepted size of one line, and so of one data payload.
 pub(crate) const MAX_FRAME_BYTES: usize = 1024 * 1024;

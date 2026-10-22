@@ -1,14 +1,8 @@
-//! First-party provider runtime.
-//!
-//! Resolves one endpoint (the local magpie gateway) into a streaming
-//! [`Provider`] over one of three wire protocols (`anthropic-messages`,
-//! `openai-completions`, `openai-responses`). Streaming completions egress
-//! through the injectable [`SseTransport`] seam, and the pinned HTTP client
-//! carries the gateway's model list. The application fixes the User-Agent on
-//! provider requests.
-//!
-//! [`catalog`] is the model list magpie publishes; MCode ships no vendor
-//! presets, keys, or OAuth flows of its own.
+//! First-party provider runtime: resolves the magpie gateway into a
+//! streaming [`Provider`] over one of three wire protocols
+//! (`anthropic-messages`, `openai-completions`, `openai-responses`),
+//! egressing through the injectable [`SseTransport`] seam. [`catalog`] is
+//! magpie's model list; no vendor presets or OAuth flows ship here.
 mod anthropic_messages;
 mod cache;
 pub mod catalog;
@@ -29,8 +23,8 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use mycode_config::ProviderSettings;
-use mycode_core::{EventStream, Provider, ProviderError, ProviderErrorKind, Request};
+// Chain re-export: successors see every lower layer through this crate only.
+pub use mycode_config::*;
 
 pub use family::keeps_thinking_when_off;
 pub use http_pin::{
@@ -258,7 +252,7 @@ impl Provider for WireProvider {
 mod tests {
     use super::{MAGPIE_SESSION_HEADER, ResolvedProvider, request_headers};
     use mycode_config::ProviderSettings;
-    use mycode_core::Request;
+    use mycode_config::Request;
 
     fn resolved() -> ResolvedProvider {
         let settings = ProviderSettings::magpie(

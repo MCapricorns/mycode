@@ -3,7 +3,7 @@
 //!
 //! A file dropped on the composer attaches to the next prompt instead of
 //! switching the project, and a pasted picture attaches the same way. Limits
-//! mirror what hosted vision APIs accept; see [`mycode_core::attachments`]. A
+//! mirror what hosted vision APIs accept; see [`mycode_frontend::attachments`]. A
 //! folder dropped on the composer binds as the project.
 
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use gpui_kit::Context;
 
-use mycode_core::{AttachError, MAX_FILE_BYTES, MAX_IMAGE_BYTES};
+use mycode_frontend::{AttachError, MAX_FILE_BYTES, MAX_IMAGE_BYTES};
 
 use super::Workspace;
 use super::clipboard;
@@ -176,7 +176,7 @@ impl Workspace {
     /// Puts attachments a failed send handed back into the composer.
     pub(crate) fn on_attachments_restored(
         &mut self,
-        attachments: mycode_core::Attachments,
+        attachments: mycode_frontend::Attachments,
         cx: &mut Context<Self>,
     ) {
         for image in attachments.images {
@@ -246,7 +246,7 @@ fn read_image(path: &Path) -> Result<(&'static str, String), String> {
         ));
     }
     let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mime = mycode_core::image_media_type(&bytes).ok_or_else(|| {
+    let mime = mycode_frontend::image_media_type(&bytes).ok_or_else(|| {
         format!(
             "{}: {}",
             path.display(),

@@ -154,7 +154,7 @@ fn model_items(state: &WorkspaceState) -> Vec<PaletteItem> {
     let Some(settings) = state.settings.as_ref() else {
         return Vec::new();
     };
-    let enabled: Vec<&mycode_config::ProviderSettings> = settings
+    let enabled: Vec<&mycode_app::ProviderSettings> = settings
         .providers
         .iter()
         .filter(|provider| provider.enabled)
@@ -364,17 +364,17 @@ mod tests {
     }
 
     fn populated() -> WorkspaceState {
-        let mut document = mycode_config::AppSettings {
-            magpie: mycode_config::MagpieSettings {
+        let mut document = mycode_app::AppSettings {
+            magpie: mycode_app::MagpieSettings {
                 enabled: true,
                 base_url: "http://127.0.0.1:3425/v1".to_owned(),
                 api_key: "magpie-mycode".to_owned(),
                 model: "gpt-5".to_owned(),
                 hidden_models: vec!["hidden-model".to_owned()],
             },
-            ..mycode_config::AppSettings::default()
+            ..mycode_app::AppSettings::default()
         };
-        document.mcp_servers.push(mycode_config::McpServerSettings {
+        document.mcp_servers.push(mycode_app::McpServerSettings {
             id: "docs".to_owned(),
             enabled: true,
             transport: "stdio".to_owned(),
@@ -400,7 +400,7 @@ mod tests {
             mcp_tools: vec![("docs".to_owned(), vec!["search".to_owned()])],
             selected_provider: Some("magpie".to_owned()),
             selected_model: Some("gpt-5".to_owned()),
-            recent_models: vec![mycode_config::ModelPin::new("magpie", "gpt-5")],
+            recent_models: vec![mycode_app::ModelPin::new("magpie", "gpt-5")],
             ..WorkspaceState::default()
         }
     }

@@ -1,17 +1,8 @@
 //! `mycode-core` — the shared vocabulary every other crate speaks.
 //!
-//! Two layers live here, and nothing else:
-//!
-//! - **Conversation data**: messages, content blocks, usage, events, ids, and
-//!   tool specs. Plain values with serde support, so they flow through agent
-//!   event broadcasts and provider payloads unchanged.
-//! - **The provider port** ([`provider`]): the request, error, and bounded
-//!   stream contracts between the agent loop and a wire adapter. Contracts
-//!   only — no wire protocol, transport, or selection policy.
-//!
-//! This is a leaf crate: it has no dependency on any other MYCode crate, which
-//! is what lets the agent, the tools, and the desktop all agree on one set of
-//! types. See `wiki/index.html`.
+//! Conversation data (messages, content blocks, usage, events, ids, tool
+//! specs) plus the provider port ([`provider`]): request, error, and bounded
+//! stream contracts only. Leaf crate: no MYCode dependencies.
 
 pub mod attachments;
 pub mod error;
@@ -21,13 +12,9 @@ pub mod message;
 pub mod provider;
 pub mod tool;
 
-/// Global allocator for every binary that links this leaf crate.
-///
-/// Declared once here — the only crate no workspace member conflicts with —
-/// so the desktop binary and every test target share mimalloc's page-aligned
-/// segments and per-thread free lists instead of the default allocator's
-/// retained RSS. A second `#[global_allocator]` anywhere in the graph is a
-/// compile error, which is the intended guard.
+/// Global allocator for every binary that links this leaf crate (the whole
+/// chain does). A second `#[global_allocator]` in the graph is a compile
+/// error, which is the intended guard.
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

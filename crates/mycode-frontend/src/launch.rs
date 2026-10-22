@@ -3,7 +3,7 @@
 //! `--help` and `--version` print and exit. [`launch`] runs the steps every
 //! `mycode*` binary takes before its UI.
 
-use mycode_config::{ConfigError, HomeEnv, HomeLayout};
+use mycode_app::{ConfigError, HomeEnv, HomeLayout};
 
 /// What `main` should print before it exits.
 #[derive(Clone, Debug, Eq, PartialEq)]

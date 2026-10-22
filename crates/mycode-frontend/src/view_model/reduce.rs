@@ -777,7 +777,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             state.project_dir = Some(project.clone());
             state.recents.retain(|existing| existing != &project);
             state.recents.insert(0, project);
-            state.recents.truncate(mycode_config::MAX_RECENT_PROJECTS);
+            state.recents.truncate(mycode_app::MAX_RECENT_PROJECTS);
         }
         FrontendAction::SessionProjectBound {
             session_id,

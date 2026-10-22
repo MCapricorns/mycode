@@ -84,7 +84,7 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
     let theme = cx.theme();
     let mcp_row_elements: Vec<AnyElement> =
         mcp_rows.into_iter().map(|row| mcp_row(row, cx)).collect();
-    let magpie_servers = mycode_config::global_mcp_servers(workspace.home()).unwrap_or_default();
+    let magpie_servers = mycode_frontend::global_mcp_servers(workspace.home()).unwrap_or_default();
     let magpie_rows: Vec<AnyElement> = magpie_servers
         .iter()
         .map(|server| {

@@ -24,7 +24,7 @@ mod tests;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use mycode_config::HomeLayout;
+use mycode_tools::HomeLayout;
 
 use crate::session::generation::GenerationFence;
 use crate::session::runtime::admission::AdmissionLedger;
@@ -295,7 +295,7 @@ impl SessionCore {
                 else {
                     return failed(admission, SessionError::Unavailable);
                 };
-                let Ok(dir) = mycode_config::new_session_dir(project.as_deref(), session.as_str())
+                let Ok(dir) = mycode_tools::new_session_dir(project.as_deref(), session.as_str())
                 else {
                     return failed(admission, SessionError::Unavailable);
                 };

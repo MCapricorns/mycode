@@ -3,7 +3,7 @@
 /// Canonical appearance id. Unknown values fall back to dark.
 #[must_use]
 pub fn normalize_theme(theme: &str) -> &'static str {
-    mycode_config::VALID_THEMES
+    mycode_app::VALID_THEMES
         .into_iter()
         .find(|id| *id == theme)
         .unwrap_or("dark")
@@ -12,7 +12,7 @@ pub fn normalize_theme(theme: &str) -> &'static str {
 /// Canonical font-size id. Unknown values fall back to medium.
 #[must_use]
 pub fn normalize_font_size(id: &str) -> &'static str {
-    mycode_config::VALID_FONT_SIZES
+    mycode_app::VALID_FONT_SIZES
         .into_iter()
         .find(|item| *item == id)
         .unwrap_or("m")

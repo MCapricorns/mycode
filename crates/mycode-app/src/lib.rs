@@ -1,34 +1,14 @@
 //! `mycode-app` — the application core, with no frontend dependency.
 //!
-//! Everything a MYCode frontend needs to drive is here: sessions, model
-//! turns, tools and their hosts, MCP servers, provider
-//! credentials, self-update, and the durable settings. A frontend owns none
-//! of it. It starts a [`CoreBridge`], sends [`BridgeCommand`]s, awaits
-//! [`BridgeReply`]s, and renders the [`BridgeEvent`] stream; the values in
-//! those messages are defined in [`protocol`].
+//! Sessions, model turns, tool hosts, MCP servers, provider credentials,
+//! self-update, and durable settings. A frontend starts a [`CoreBridge`],
+//! sends [`BridgeCommand`]s, awaits [`BridgeReply`]s, and renders the
+//! [`BridgeEvent`] stream; values are defined in [`protocol`].
 //!
-//! [`CoreBridge`] owns a dedicated thread with a current-thread tokio runtime
-//! hosting the session service, so a frontend never touches tokio types and
-//! its own executor stays free. Replies ride tokio oneshot channels, whose
-//! receivers are executor-agnostic futures. Model turns run as concurrent
-//! runtime tasks streaming events back through a channel the frontend awaits;
-//! configuration reads stay synchronous on the same thread.
-//!
-//! The command channel is unbounded on purpose: the worker loop must `await`
-//! commands instead of blocking the runtime thread, or spawned tasks (chat
-//! turns, gateway-list refreshes) would starve until the next command
-//! arrives. `UnboundedSender::send` is synchronous, so the caller never
-//! touches async machinery.
-//!
-//! Module map: `dispatch` runs the command loop, `state` holds the shared
-//! core state, `ledger` reads and writes session ledgers, `turn` drives one
-//! model turn, `tool_hosts` bridges the host-backed tools, `magpie` reads the
-//! gateway's model list, `settings_io` persists settings and secrets,
-//! `projection` renders display entries, `search` backs the composer's
-//! `@` mention, `mcp_tools` bridges MCP servers, `subagent` hosts the `agent`
-//! tool, `user_agent` fixes the outbound identity, and `compaction`,
-//! `export`, `install`, `title`, `updates`, and `mcp_client`
-//! round out the housekeeping and I/O seams.
+//! [`CoreBridge`] owns a dedicated thread with a current-thread tokio runtime,
+//! so a frontend never touches tokio types. The command channel is unbounded
+//! on purpose: the worker loop must `await` commands or spawned tasks would
+//! starve.
 
 #[cfg(test)]
 mod bridge_tests;
@@ -42,6 +22,9 @@ mod mcp_client;
 mod mcp_tools;
 mod projection;
 pub mod protocol;
+
+// Chain re-export: successors see every lower layer through this crate only.
+pub use mycode_agent::*;
 
 pub use compaction::{
     display_summary_text, is_display_only_summary as is_compaction_summary, summary_body,
@@ -57,7 +40,7 @@ mod turn;
 mod updates;
 mod user_agent;
 
-pub use mycode_providers::{ProxyTestReport, ProxyTestRoute};
+pub use mycode_agent::{ProxyTestReport, ProxyTestRoute};
 pub use protocol::{
     ActiveConversation, AskPrompt, BranchId, CHAT_CANCELLED, ConversationEntry, EntryKind,
     HeadStamp, INTERRUPTED_RESPONSE_PREFIX, MAX_STREAMING_CHARS, OlderTranscript, SessionEventId,
@@ -75,8 +58,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use mycode_config::{HomeLayout, UiState};
-use mycode_providers::catalog::CatalogDocument;
+use mycode_agent::catalog::CatalogDocument;
+
 use tokio::sync::oneshot;
 
 // The event channel is unbounded on purpose: `send` never blocks, so a
@@ -109,16 +92,16 @@ pub enum BridgeCommand {
         /// Message text; nonempty and bounded by the view-model.
         text: String,
         /// Images and code files sent beside the text.
-        attachments: mycode_core::Attachments,
+        attachments: mycode_agent::Attachments,
     },
     /// Load the settings document with its revision and stored key ids.
     LoadSettings,
     /// Persist new settings under revision compare-and-swap.
     SaveSettings {
         /// The revision the editor loaded.
-        expected_revision: mycode_config::AuthorityRevision,
+        expected_revision: mycode_agent::AuthorityRevision,
         /// The complete replacement settings.
-        settings: mycode_config::AppSettings,
+        settings: mycode_agent::AppSettings,
     },
     /// Store or clear one provider API key in the secret store.
     SaveProviderKey {
@@ -206,7 +189,7 @@ pub enum BridgeCommand {
     McpListTools {
         /// The server row to probe. The whole row travels, not just its id,
         /// so the settings form can test a binding before it is saved.
-        server: Box<mycode_config::McpServerSettings>,
+        server: Box<mycode_agent::McpServerSettings>,
     },
     /// Load one page of committed events older than `before`.
     ///
@@ -555,15 +538,15 @@ pub enum BridgeEvent {
 #[derive(Debug)]
 pub struct SettingsSnapshot {
     /// The settings document.
-    pub settings: mycode_config::AppSettings,
+    pub settings: mycode_agent::AppSettings,
     /// Revision to send back with the next save.
-    pub revision: mycode_config::AuthorityRevision,
+    pub revision: mycode_agent::AuthorityRevision,
     /// Provider ids that already have a stored key.
     pub provider_keys: Vec<String>,
     /// MCP server ids that already have a stored key.
     pub mcp_keys: Vec<String>,
     /// Product documents backed up and replaced with defaults on this load.
-    pub repairs: Vec<mycode_config::DocumentRepair>,
+    pub repairs: Vec<mycode_agent::DocumentRepair>,
 }
 
 /// A reply from the core thread, already projected for the view-model.
@@ -593,7 +576,7 @@ pub enum BridgeReply {
     /// Settings load result.
     Settings(Result<SettingsSnapshot, String>),
     /// Settings save result: the new revision.
-    SettingsSaved(Result<mycode_config::AuthorityRevision, String>),
+    SettingsSaved(Result<mycode_agent::AuthorityRevision, String>),
     /// Provider key save result: refreshed key-id lists (providers, MCP).
     ProviderKeySaved(Result<(Vec<String>, Vec<String>), String>),
     /// Chat turn acceptance; streaming continues over the event channel.
@@ -632,7 +615,7 @@ pub enum BridgeReply {
     /// Provider catalog document with its freshness metadata.
     Catalog(Result<CatalogInfo, String>),
     /// Durable UI state load result, plus documents reset earlier in startup.
-    UiState(Result<(UiState, Vec<mycode_config::DocumentRepair>), String>),
+    UiState(Result<(UiState, Vec<mycode_agent::DocumentRepair>), String>),
     /// UI state persist result.
     UiStateSaved(Result<(), String>),
     /// Project directory bind result.
@@ -758,7 +741,3 @@ struct WithReply {
     command: BridgeCommand,
     reply: oneshot::Sender<BridgeReply>,
 }
-
-/// Returns the wall-clock duration since the Unix epoch, saturating at zero
-/// when the system clock predates the epoch.
-pub use mycode_core::unix_now;

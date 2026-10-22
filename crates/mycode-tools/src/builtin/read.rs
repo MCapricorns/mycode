@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 
-use mycode_core::{BinaryData, ContentBlock, MAX_IMAGE_BASE64_BYTES, TextBlock};
+use mycode_providers::{BinaryData, ContentBlock, MAX_IMAGE_BASE64_BYTES, TextBlock};
 
 use crate::builtin::fs_io::{FileAccess, ReadOutcome, anchor_file_path, read_any_async};
 use crate::ctx::ToolCtx;
@@ -153,7 +153,7 @@ mod tests {
     use crate::ctx::ToolCtx;
     use crate::stream::ToolStream;
     use crate::tool::{Tool, ToolError, validate_args};
-    use mycode_core::ContentBlock;
+    use mycode_providers::ContentBlock;
 
     #[test]
     fn offset_below_one_is_rejected_by_the_schema() {

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use mycode_config::{HomeLayout, read_ui_state, replace_ui_state, update_ui_state};
+use mycode_agent::{HomeLayout, read_ui_state, replace_ui_state, update_ui_state};
 
 use crate::ledger::{
     delete_session, forget_session_bindings, inspect_summaries, load_older, open_conversation,
@@ -215,8 +215,8 @@ pub(crate) fn run_core(
                 BridgeCommand::TestProxy { proxy } => {
                     let reply = with_reply.reply;
                     tokio::spawn(async move {
-                        let outcome = match mycode_config::ProxyPreference::parse(&proxy) {
-                            Some(preference) => Ok(mycode_providers::test_proxy(&preference).await),
+                        let outcome = match mycode_agent::ProxyPreference::parse(&proxy) {
+                            Some(preference) => Ok(mycode_agent::test_proxy(&preference).await),
                             None => {
                                 Err("not a proxy URL: http, https, socks5, or socks5h".to_owned())
                             }
@@ -287,8 +287,8 @@ pub(crate) fn run_core(
 }
 
 fn push_unique_repair(
-    repairs: &mut Vec<mycode_config::DocumentRepair>,
-    repair: mycode_config::DocumentRepair,
+    repairs: &mut Vec<mycode_agent::DocumentRepair>,
+    repair: mycode_agent::DocumentRepair,
 ) {
     if repairs.iter().any(|existing| existing.path == repair.path) {
         return;
@@ -601,7 +601,7 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             let workspace = state.project_dir(&session_id);
             BridgeReply::Resources(
                 blocking(move || {
-                    let files = mycode_config::discover_resources(&home, &workspace);
+                    let files = mycode_agent::discover_resources(&home, &workspace);
                     Ok(files
                         .iter()
                         .map(|file| {
@@ -628,7 +628,7 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             let pending = state.startup_repairs_snapshot();
             BridgeReply::UiState(
                 blocking(move || {
-                    let (ui_state, repair) = mycode_config::read_ui_state_with_repair(&home)
+                    let (ui_state, repair) = mycode_agent::read_ui_state_with_repair(&home)
                         .map_err(|error| render_config_error(&error))?;
                     let mut repairs = pending;
                     if let Some(repair) = repair {

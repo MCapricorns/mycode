@@ -47,8 +47,8 @@ impl Workspace {
                 .map(|settings| settings.proxy.clone())
                 .filter(|proxy| {
                     matches!(
-                        mycode_config::ProxyPreference::parse(proxy),
-                        Some(mycode_config::ProxyPreference::Url(_))
+                        mycode_frontend::ProxyPreference::parse(proxy),
+                        Some(mycode_frontend::ProxyPreference::Url(_))
                     )
                 })
                 .unwrap_or_default();

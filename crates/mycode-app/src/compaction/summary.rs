@@ -3,7 +3,7 @@
 
 use super::*;
 pub(super) fn summary_max_output(model: &str) -> u64 {
-    if mycode_providers::keeps_thinking_when_off(model) {
+    if mycode_agent::keeps_thinking_when_off(model) {
         SUMMARY_OUTPUT_WITH_THINKING
     } else {
         SUMMARY_OUTPUT_TOKENS
@@ -110,13 +110,13 @@ happen. Never copy secrets (API keys, tokens, passwords) into the summary. Write
 language the user writes in. Stay under about {words} words; drop detail that the next steps \
 do not need."
         ))
-        .with_message(Message::User(mycode_core::UserMessage::text(
+        .with_message(Message::User(mycode_agent::UserMessage::text(
             summary_user_text(transcript),
         )));
     // `Off` is applied by the provider adapter: Anthropic and GLM/Z.AI send
     // `thinking.type = disabled`, Qwen sends `enable_thinking: false`, and
     // the other families use their own off or lowest-effort field.
-    request.reasoning = Some(mycode_core::ReasoningLevel::Off);
+    request.reasoning = Some(mycode_agent::ReasoningLevel::Off);
     request.max_output_tokens = Some(max_output_tokens);
     request
 }
@@ -150,10 +150,10 @@ async fn request_summary(
             _ => {}
         }
     };
-    if stop == mycode_core::StopReason::Length {
+    if stop == mycode_agent::StopReason::Length {
         return Ok(SummaryAttempt::Truncated);
     }
-    if stop == mycode_core::StopReason::Error {
+    if stop == mycode_agent::StopReason::Error {
         return Err("summary stream failed".to_owned());
     }
     let summary = elide(&summary, MAX_MODEL_SUMMARY_CHARS);
