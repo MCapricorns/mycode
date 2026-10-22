@@ -18,7 +18,10 @@ pub(super) fn summary_waits_for_the_reply(state: &WorkspaceState) -> bool {
 
 /// Cuts a composer text to [`crate::view_model::MAX_COMPOSER_CHARS`] in place.
 pub(super) fn bounded_draft(mut text: String) -> String {
-    if let Some((cut, _)) = text.char_indices().nth(crate::view_model::MAX_COMPOSER_CHARS) {
+    if let Some((cut, _)) = text
+        .char_indices()
+        .nth(crate::view_model::MAX_COMPOSER_CHARS)
+    {
         text.truncate(cut);
     }
     text
@@ -128,7 +131,10 @@ pub(super) fn end_turn(state: &mut WorkspaceState) {
     state.turn_started_ms = 0;
 }
 
-pub(super) fn push_entry_once(conversation: &mut ActiveConversation, entry: mycode_app::ConversationEntry) {
+pub(super) fn push_entry_once(
+    conversation: &mut ActiveConversation,
+    entry: mycode_app::ConversationEntry,
+) {
     let already = conversation
         .entries
         .iter()

@@ -228,9 +228,8 @@ impl crate::mcp_client::JsonRpcChannel for ScriptedMcp {
         params: serde_json::Value,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<serde_json::Value, crate::mcp_client::McpError>,
-                > + Send
+            dyn std::future::Future<Output = Result<serde_json::Value, crate::mcp_client::McpError>>
+                + Send
                 + 'a,
         >,
     > {
@@ -273,11 +272,7 @@ impl crate::mcp_client::JsonRpcChannel for ScriptedMcp {
         &'a self,
         _method: &'a str,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(), crate::mcp_client::McpError>>
-                + Send
-                + 'a,
-        >,
+        Box<dyn std::future::Future<Output = Result<(), crate::mcp_client::McpError>> + Send + 'a>,
     > {
         Box::pin(async { Ok(()) })
     }
@@ -455,8 +450,7 @@ fn a_direct_tool_named_like_a_builtin_is_served_by_search_tool() {
         catalog_tool("files", "read", "Read a remote file.", true),
         catalog_tool("files", "stat", "Stat a remote file.", true),
     ];
-    let catalog =
-        McpCatalog::from_tools_with_warning(tools, None, &|name| name == "read").unwrap();
+    let catalog = McpCatalog::from_tools_with_warning(tools, None, &|name| name == "read").unwrap();
     let note = catalog.prompt_note();
     assert!(note.contains("Direct MCP tools: stat."), "{note}");
     assert!(note.contains("search_tool"), "{note}");

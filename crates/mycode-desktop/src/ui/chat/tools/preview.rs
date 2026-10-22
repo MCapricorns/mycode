@@ -426,7 +426,12 @@ pub(super) fn line_number(number: Option<u32>, theme: &Theme) -> impl IntoElemen
         .child(number.map(|value| value.to_string()).unwrap_or_default())
 }
 
-pub(super) fn search_preview(tool: &str, lines: &[&str], theme: &Theme, desk: &Desk) -> impl IntoElement {
+pub(super) fn search_preview(
+    tool: &str,
+    lines: &[&str],
+    theme: &Theme,
+    desk: &Desk,
+) -> impl IntoElement {
     let hits = lines.iter().filter(|line| !is_search_notice(line)).count();
     let label = if tool == "find" {
         t("PATHS", "路径")
@@ -500,4 +505,3 @@ pub(super) fn preview_caption(label: &str, theme: &Theme) -> impl IntoElement {
         .child(label.to_owned())
         .font_family(theme.mono_font_family.clone())
 }
-

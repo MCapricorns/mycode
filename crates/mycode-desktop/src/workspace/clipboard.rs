@@ -118,14 +118,13 @@ fn read_file(path: &Path) -> Result<ClipboardPicture, String> {
         ));
     }
     let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mime = mycode_core::image_media_type(&bytes)
-        .ok_or_else(|| {
-            format!(
-                "{}: {}",
-                path.display(),
-                t("unsupported image type", "不支持这种图片格式")
-            )
-        })?;
+    let mime = mycode_core::image_media_type(&bytes).ok_or_else(|| {
+        format!(
+            "{}: {}",
+            path.display(),
+            t("unsupported image type", "不支持这种图片格式")
+        )
+    })?;
     Ok(ClipboardPicture { bytes, mime })
 }
 
@@ -208,7 +207,11 @@ mod tests {
         assert!(picture_at("hello world").expect("read").is_none());
         assert!(picture_at("two\nlines").expect("read").is_none());
         assert!(picture_at("").expect("read").is_none());
-        assert!(picture_at("C:/definitely/not/here.png").expect("read").is_none());
+        assert!(
+            picture_at("C:/definitely/not/here.png")
+                .expect("read")
+                .is_none()
+        );
     }
 
     #[test]
@@ -221,8 +224,14 @@ mod tests {
 
     #[test]
     fn a_windows_drive_url_keeps_its_letter() {
-        assert_eq!(local_path("file:///C:/x/a.png"), PathBuf::from("C:/x/a.png"));
-        assert_eq!(local_path("file://localhost/C:/x/a.png"), PathBuf::from("C:/x/a.png"));
+        assert_eq!(
+            local_path("file:///C:/x/a.png"),
+            PathBuf::from("C:/x/a.png")
+        );
+        assert_eq!(
+            local_path("file://localhost/C:/x/a.png"),
+            PathBuf::from("C:/x/a.png")
+        );
     }
 
     /// A 2x2 32-bit BI_RGB bitmap, the shape a screenshot tool publishes.
@@ -237,7 +246,12 @@ mod tests {
         dib.extend_from_slice(&0u32.to_le_bytes());
         dib.extend_from_slice(&16u32.to_le_bytes());
         dib.extend_from_slice(&[0u8; 16]);
-        for color in [[0, 0, 255, 0], [0, 255, 0, 0], [255, 0, 0, 0], [255, 255, 255, 0]] {
+        for color in [
+            [0, 0, 255, 0],
+            [0, 255, 0, 0],
+            [255, 0, 0, 0],
+            [255, 255, 255, 0],
+        ] {
             dib.extend_from_slice(&color);
         }
         let mut bmp = Vec::new();

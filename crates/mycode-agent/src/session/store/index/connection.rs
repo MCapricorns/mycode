@@ -43,7 +43,6 @@ CREATE INDEX IF NOT EXISTS events_by_id
     ON events (session_id, branch_id, event_id);
 ";
 
-
 use super::*;
 pub(super) fn open_writer(path: &Path) -> Result<Connection, StoreError> {
     let conn = Connection::open(path).map_err(|_| StoreError::Storage)?;

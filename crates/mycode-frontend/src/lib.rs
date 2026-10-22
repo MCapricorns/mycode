@@ -13,12 +13,12 @@
 //! in, replies and streaming events out. Frontends never talk to sessions,
 //! providers, tools, or credentials directly.
 
-pub mod launch;
 pub mod driver;
 pub mod forms;
 pub mod git_status;
 pub mod highlight;
 pub mod i18n;
+pub mod launch;
 pub mod picker;
 pub mod shortcuts;
 pub mod stream;
