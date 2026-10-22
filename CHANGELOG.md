@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.22] - 2026-10-22
+
 ### Added
 
 - 桌面版输入框支持粘贴剪贴板图片：`Ctrl+V`（macOS `Cmd+V`）把剪贴板里的图片附加到下一条消息，粘贴内容只有一个图片路径或 `file://` URL 时也按图片附加。平台剪贴板已给出 PNG / JPEG / WebP / GIF 的按原样使用，Windows 截图给的位图先转成 PNG；图片同样受 4 张 / 3.75 MB / 合计 6 MiB 和「所选模型能否看图」的限制，纯文本粘贴仍然照常插入正文。
@@ -371,7 +373,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.21...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.22...HEAD
+[0.12.22]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.22
 [0.12.21]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.21
 [0.12.20]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.20
 [0.12.19]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.19
