@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.24] - 2026-10-22
+
 ### Added
 
 - 系统提示词的 `<mcp>` 段现在列出本轮已连接的 MCP 服务器名（含 magpie Library 写入的服务器），再列直接注册的工具并说明其余工具走 `search_tool` / `use_tool`：之前只写「还有其他 MCP 工具」，模型无从知道哪台服务器在、该搜什么。
@@ -400,7 +402,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.23...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.24...HEAD
+[0.12.24]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.24
 [0.12.23]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.23
 [0.12.22]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.22
 [0.12.21]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.21
