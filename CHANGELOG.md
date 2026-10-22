@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.25] - 2026-10-22
+
 ### Changed
 
 - MCP 工具不再按服务器大小分两类：之前「工具不超过 4 个、且每个 schema 不超过 2048 字节」的服务器直接注册成普通工具，服务器多一个工具或改一次 schema 就换一类，模型工具表随之变动；现在一律不注册，只留 `search_tool` 与 `use_tool` 两个 schema，工具清单与服务器声明的工具无关。
@@ -407,7 +409,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.24...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.25...HEAD
+[0.12.25]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.25
 [0.12.24]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.24
 [0.12.23]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.23
 [0.12.22]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.22
