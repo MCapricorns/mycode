@@ -440,8 +440,8 @@ fn canonical_tool_name(name: &str) -> &str {
     }
 }
 
-/// Dispatch one registered, schema-valid tool call and return the
-/// resulting [`ToolResultMessage`].
+/// Run one registered, schema-valid tool call and return the resulting
+/// [`ToolResultMessage`].
 ///
 /// Lookup, search/file capability binding, argument validation,
 /// cancellation, and tool errors are lifecycle failures: they
@@ -453,21 +453,9 @@ fn canonical_tool_name(name: &str) -> &str {
 /// arguments once on a cancellable worker; the retained capability is passed
 /// to execution and never re-resolved. Same-name plugin overrides remain
 /// unbound unless they explicitly declare a search or file access mode.
-pub(crate) async fn dispatch_tool_call(
-    env: &TurnEnv<'_>,
-    token: &CancellationToken,
-    call: &ToolCall,
-) -> SharedMessage {
-    let message = run_tool_call(env, token, call).await;
-    // Yield so a ToolCompleted subscriber can commit the result before the
-    // next call in this response is dispatched.
-    tokio::task::yield_now().await;
-    message
-}
-
-/// [`dispatch_tool_call`] without its closing yield: the result returns in
-/// the same poll that emits [`AgentEvent::ToolCompleted`], so the caller can
-/// record it before a cancel stops polling.
+/// The result returns in the same poll that emits
+/// [`AgentEvent::ToolCompleted`], so a caller can record it before a cancel
+/// stops polling.
 pub(crate) async fn run_tool_call(
     env: &TurnEnv<'_>,
     token: &CancellationToken,

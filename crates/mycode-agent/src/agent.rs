@@ -380,6 +380,12 @@ async fn dispatch_response_calls(
     // result then, because completing it again closes its ledger call twice.
     let agent_results: Mutex<Vec<Option<SharedMessage>>> =
         Mutex::new(vec![None; agent_indexes.len()]);
+    // The same two facts for the other calls: a result stored in the poll
+    // that emits its ToolCompleted, and whether the call was polled at all
+    // (its ToolStarted row is out, so a stop owes it a closing row too).
+    let other_results: Mutex<Vec<Option<SharedMessage>>> =
+        Mutex::new(vec![None; other_indexes.len()]);
+    let other_started: Mutex<Vec<bool>> = Mutex::new(vec![false; other_indexes.len()]);
     let results = &agent_results;
     let agent_ids = agent_indexes.clone();
     let other_ids = other_indexes.clone();
@@ -391,71 +397,77 @@ async fn dispatch_response_calls(
             .map(|(slot, index)| async move {
                 let message = turn::run_tool_call(env, token, calls[*index]).await;
                 results.lock()[slot] = Some(message);
-                // The yield `dispatch_tool_call` ends with.
+                // Yield so a ToolCompleted subscriber can commit the result
+                // before the next call in this response is dispatched.
                 tokio::task::yield_now().await;
             })
             .collect::<Vec<_>>();
         futures_util::future::join_all(futures).await;
     };
+    let other_done = &other_results;
+    let other_polled = &other_started;
     let others = async move {
-        let mut messages = Vec::with_capacity(other_ids.len());
         let mut next = 0;
         while next < other_ids.len() {
             if token.is_cancelled() {
-                messages.push(turn::fail_cancelled_call(env, calls[other_ids[next]]));
-                next += 1;
-                continue;
+                return;
             }
+            // Adjacent parallel-safe calls share one batch; a call that can
+            // change something runs alone.
             let batch_len = other_ids[next..]
                 .iter()
                 .take_while(|index| is_parallel_safe(env, calls[**index]))
-                .count();
-            if batch_len > 1 {
-                let futures = other_ids[next..next + batch_len]
-                    .iter()
-                    .map(|index| turn::dispatch_tool_call(env, token, calls[*index]))
-                    .collect::<Vec<_>>();
-                messages.extend(futures_util::future::join_all(futures).await);
-                next += batch_len;
-            } else {
-                messages.push(turn::dispatch_tool_call(env, token, calls[other_ids[next]]).await);
-                next += 1;
-            }
+                .count()
+                .max(1);
+            let futures = other_ids[next..next + batch_len]
+                .iter()
+                .enumerate()
+                .map(|(offset, index)| {
+                    let slot = next + offset;
+                    async move {
+                        // Polling this future is what emits ToolStarted, so
+                        // the flag lands in the same poll.
+                        other_polled.lock()[slot] = true;
+                        let message = turn::run_tool_call(env, token, calls[*index]).await;
+                        other_done.lock()[slot] = Some(message);
+                        // Yield so a ToolCompleted subscriber can commit the
+                        // result before the next call is dispatched.
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .collect::<Vec<_>>();
+            futures_util::future::join_all(futures).await;
+            next += batch_len;
         }
-        messages
     };
     tokio::pin!(agents);
     tokio::pin!(others);
     let mut agents_done = false;
-    let mut other_messages: Option<Vec<SharedMessage>> = None;
-    let mut abandoned = false;
+    let mut others_done = false;
     loop {
         tokio::select! {
             biased;
-            () = token.cancelled(), if !abandoned && !agents_done => {
-                // Stop polling nested agent calls. Dropping `agents` when this
-                // function returns aborts work that ignores the token. Answers
-                // that have not arrived yet are not used.
-                abandoned = true;
-                if other_messages.is_some() {
-                    break;
-                }
+            () = token.cancelled(), if !(agents_done && others_done) => {
+                // Stop both batches now. Dropping `agents` and `others` when
+                // this function returns is what ends a running tool: a shell
+                // command's process tree dies with its dropped future instead
+                // of holding the stopped turn open until it finishes.
+                break;
             }
-            () = &mut agents, if !abandoned && !agents_done => {
+            () = &mut agents, if !agents_done => {
                 agents_done = true;
-                if other_messages.is_some() {
+                if others_done {
                     break;
                 }
             }
-            messages = &mut others, if other_messages.is_none() => {
-                other_messages = Some(messages);
-                if abandoned || agents_done {
+            () = &mut others, if !others_done => {
+                others_done = true;
+                if agents_done {
                     break;
                 }
             }
         }
     }
-    let other_messages = other_messages.unwrap_or_default();
     let mut slots: Vec<Option<SharedMessage>> = Vec::with_capacity(calls.len());
     slots.resize_with(calls.len(), || None);
     // A finished batch filled every result; only an abandoned one has gaps.
@@ -468,8 +480,16 @@ async fn dispatch_response_calls(
             None => turn::fail_cancelled_call(env, calls[index]),
         });
     }
-    for (index, message) in other_indexes.into_iter().zip(other_messages) {
-        slots[index] = Some(message);
+    let finished = std::mem::take(&mut *other_results.lock());
+    let started = std::mem::take(&mut *other_started.lock());
+    for (slot, (result, started)) in finished.into_iter().zip(started).enumerate() {
+        let index = other_indexes[slot];
+        slots[index] = Some(match result {
+            Some(message) => message,
+            // Its ToolStarted row is already out, so it only owes a close.
+            None if started => turn::discard_running_call(env, calls[index]),
+            None => turn::fail_cancelled_call(env, calls[index]),
+        });
     }
     slots
         .into_iter()
