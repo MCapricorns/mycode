@@ -6,13 +6,19 @@
 
 ## [Unreleased]
 
-### Added
-
-- 系统提示词的 `<mcp>` 段改为逐行列出本轮连上的 MCP 服务器（含 magpie Library 写入的服务器）：服务器 id、工具数，以及服务器握手 `instructions` 的首句，再说明工具都走 `search_tool` / `use_tool`：之前只写「还有其他 MCP 工具」，模型无从知道哪台服务器在、该搜什么。
-
 ### Changed
 
 - MCP 工具不再按服务器大小分两类：之前「工具不超过 4 个、且每个 schema 不超过 2048 字节」的服务器直接注册成普通工具，服务器多一个工具或改一次 schema 就换一类，模型工具表随之变动；现在一律不注册，只留 `search_tool` 与 `use_tool` 两个 schema，工具清单与服务器声明的工具无关。
+- 系统提示词的 `<mcp>` 段改为逐行列出本轮连上的 MCP 服务器：服务器 id、工具数，以及服务器握手 `instructions` 的首句（压成一行，最多 160 字符），后面说明工具都走 `search_tool` / `use_tool`；之前那段只列服务器名和直接注册的工具。
+
+## [0.12.24] - 2026-10-22
+
+### Added
+
+- 系统提示词的 `<mcp>` 段现在列出本轮已连接的 MCP 服务器名（含 magpie Library 写入的服务器），再列直接注册的工具并说明其余工具走 `search_tool` / `use_tool`：之前只写「还有其他 MCP 工具」，模型无从知道哪台服务器在、该搜什么。
+
+### Changed
+
 - 回合进行中按 `Enter` 改为引导（steer）：草稿在本轮下一步之前交给模型，不打断回合；`Ctrl-Enter` 仍是停止本轮并紧接着发送，`Ctrl-G` 与 `Enter` 等价保留。输入框旁的第二个圆钮由「排队」改为「引导」，回合中也不再显示排队面板。
 - 打断时立即丢弃正在跑的工具调用，不再等它跑完：`shell` 的进程树随 future 丢弃一起结束，`edit` 等阻塞工具的写入也被放弃，它们以「已取消」的记账收尾。之前停止后还会等着那条命令执行完。
 - magpie Library 的 `~/.mycode/mcp.json` 只读服务器现在参与设置页的 MCP 计数、`/` 菜单的服务器列表和「来自 magpie」卡片（同一份状态，同 id 的自有服务器优先）；`mcp.json` 读不了时卡片显示原因，而不是当作没有服务器。
@@ -401,7 +407,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.23...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.24...HEAD
+[0.12.24]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.24
 [0.12.23]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.23
 [0.12.22]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.22
 [0.12.21]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.21
