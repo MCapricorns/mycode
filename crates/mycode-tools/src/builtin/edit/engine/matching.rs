@@ -401,7 +401,11 @@ pub(super) fn ac_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, 
     Ok(found)
 }
 
-pub(super) fn select_matches(matches: Vec<Found>, pick: Pick, label: &str) -> Result<Vec<Found>, ToolError> {
+pub(super) fn select_matches(
+    matches: Vec<Found>,
+    pick: Pick,
+    label: &str,
+) -> Result<Vec<Found>, ToolError> {
     match pick {
         Pick::Unique => match matches.len() {
             0 => Err(ToolError::Execution(format!(

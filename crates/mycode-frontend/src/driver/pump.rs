@@ -19,7 +19,6 @@ impl Wake for Parker {
     }
 }
 
-
 /// Resolves one future to completion on the calling thread.
 pub(super) fn block_on<F: Future>(future: F) -> F::Output {
     let waker = Waker::from(Arc::new(Parker(std::thread::current())));

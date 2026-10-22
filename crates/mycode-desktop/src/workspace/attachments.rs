@@ -123,12 +123,7 @@ impl Workspace {
     ) -> bool {
         match clipboard::pasted(item) {
             Ok(Some(picture)) => {
-                self.push_picture(
-                    picture.file_name(),
-                    picture.mime,
-                    picture.base64(),
-                    cx,
-                );
+                self.push_picture(picture.file_name(), picture.mime, picture.base64(), cx);
                 true
             }
             Ok(None) => false,

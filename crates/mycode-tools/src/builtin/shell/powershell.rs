@@ -423,4 +423,3 @@ pub(super) fn powershell_unix_command_advice(word: &str) -> Option<&'static str>
         _ => None,
     }
 }
-

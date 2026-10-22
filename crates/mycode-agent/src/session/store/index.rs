@@ -13,8 +13,6 @@ use super::super::ids::{BranchId, SessionCallId, SessionEventId, SessionId};
 use super::jsonl::{self, charge};
 use super::{MAX_SESSION_TOTAL_BYTES, SessionPaths, database_path};
 
-
-
 /// `LIKE` pattern of session ids from before the `sess-<timestamp>` format.
 const LEGACY_SESSION_ID_PATTERN: &str = "ses1-%";
 
@@ -995,5 +993,5 @@ pub(crate) fn delete_indexed_session(
 /// already WAL once the actor opened it, and re-issuing the pragma from a
 /// second connection requires an exclusive lock.
 mod connection;
-use self::connection::*;
 pub(crate) use self::connection::decode_head;
+use self::connection::*;

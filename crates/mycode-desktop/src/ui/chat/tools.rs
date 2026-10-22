@@ -557,8 +557,8 @@ pub(super) fn tool_status(
 /// agent or scout starts list items the same way, and counting those lines
 /// painted a finished scout as `+0 -21`.
 mod preview;
-use self::preview::*;
 pub(crate) use self::preview::parse_diff_hunk_header;
+use self::preview::*;
 mod shell_read;
 #[cfg(test)]
 mod tests;

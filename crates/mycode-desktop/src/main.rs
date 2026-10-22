@@ -109,7 +109,10 @@ fn main() {
     if let Some(action) = mycode_frontend::launch::early_action(&args) {
         let text = match action {
             mycode_frontend::launch::EarlyAction::Version => {
-                format!("{}\n", mycode_frontend::launch::version_line("mycode-desktop"))
+                format!(
+                    "{}\n",
+                    mycode_frontend::launch::version_line("mycode-desktop")
+                )
             }
             mycode_frontend::launch::EarlyAction::Help => {
                 mycode_frontend::launch::help_text("mycode-desktop")
@@ -147,7 +150,8 @@ fn main() {
             std::process::exit(0);
         }
     };
-    let mycode_frontend::launch::Launch { home, update } = mycode_frontend::launch::settle(home, true);
+    let mycode_frontend::launch::Launch { home, update } =
+        mycode_frontend::launch::settle(home, true);
     // A pending payload a previous session staged but never swapped — a
     // crash or a lost helper — re-arms here and this launch exits into it:
     // the process that comes back up is the new version. A payload that

@@ -125,4 +125,3 @@ pub(super) fn strip_dwm_border(window: &gpui_kit::Window) {
 
 #[cfg(not(windows))]
 pub(super) fn strip_dwm_border(_: &gpui_kit::Window) {}
-

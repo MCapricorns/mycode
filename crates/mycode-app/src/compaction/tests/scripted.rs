@@ -72,7 +72,8 @@ async fn summary_request_disables_glm_thinking_and_retries_a_truncated_summary()
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =
-        super::super::compact_history(&scope, large_history(), super::super::CompactMode::Manual).await;
+        super::super::compact_history(&scope, large_history(), super::super::CompactMode::Manual)
+            .await;
     assert_eq!(compacted.status, CompactStatus::Wrote);
     assert_eq!(compacted.summary.as_deref(), Some(FULL_HANDOFF));
     let bodies = transport.bodies.lock().expect("bodies");
@@ -112,7 +113,8 @@ async fn a_still_truncated_summary_is_not_stored() {
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =
-        super::super::compact_history(&scope, large_history(), super::super::CompactMode::Manual).await;
+        super::super::compact_history(&scope, large_history(), super::super::CompactMode::Manual)
+            .await;
     match compacted.status {
         CompactStatus::Failed(message) => assert!(message.contains("truncated"), "{message}"),
         other => panic!("truncated summary was accepted: {other:?}"),
@@ -152,7 +154,8 @@ async fn an_empty_summary_is_an_error() {
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =
-        super::super::compact_history(&scope, large_history(), super::super::CompactMode::Manual).await;
+        super::super::compact_history(&scope, large_history(), super::super::CompactMode::Manual)
+            .await;
     match compacted.status {
         CompactStatus::Failed(message) => assert!(message.contains("empty"), "{message}"),
         other => panic!("empty summary was accepted: {other:?}"),
@@ -319,7 +322,8 @@ async fn a_twelve_token_one_line_summary_is_rejected_and_history_is_kept() {
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
     let compacted =
-        super::super::compact_history(&scope, history.clone(), super::super::CompactMode::Manual).await;
+        super::super::compact_history(&scope, history.clone(), super::super::CompactMode::Manual)
+            .await;
     match compacted.status {
         CompactStatus::Failed(message) => {
             assert!(message.contains("too short"), "{message}");
@@ -437,7 +441,8 @@ async fn a_history_without_a_checkpoint_slot_compacts_in_memory_only() {
         on_summarize: None,
         cancel: &tokio_util::sync::CancellationToken::new(),
     };
-    let compacted = super::super::compact_history(&scope, history, super::super::CompactMode::Auto).await;
+    let compacted =
+        super::super::compact_history(&scope, history, super::super::CompactMode::Auto).await;
     assert_eq!(compacted.status, CompactStatus::Replaced);
     assert_eq!(compacted.summary.as_deref(), Some(PLAUSIBLE_SUMMARY));
     assert!(super::super::is_summary_message(&compacted.messages[0]));

@@ -848,4 +848,3 @@ pub(super) const TYPE_DEFINERS: &[&str] = &[
     "typealias",
     "union",
 ];
-

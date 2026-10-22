@@ -77,7 +77,11 @@ impl Shortcut {
 #[must_use]
 pub fn shortcuts() -> Vec<Shortcut> {
     // The desktop binds its chords to Command on macOS and Control elsewhere.
-    let chord = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+    let chord = if cfg!(target_os = "macos") {
+        "⌘"
+    } else {
+        "Ctrl+"
+    };
     let entry = |keys: String, action, detail, group| Shortcut {
         keys,
         action,
@@ -150,7 +154,10 @@ mod tests {
 
     #[test]
     fn send_interrupt_and_steer_come_first() {
-        let keys: Vec<String> = shortcuts().into_iter().map(|shortcut| shortcut.keys).collect();
+        let keys: Vec<String> = shortcuts()
+            .into_iter()
+            .map(|shortcut| shortcut.keys)
+            .collect();
         assert_eq!(keys[0], "Enter");
         assert!(keys[1].ends_with("Enter") && keys[1] != "Enter");
         assert!(keys[2].ends_with('G'));

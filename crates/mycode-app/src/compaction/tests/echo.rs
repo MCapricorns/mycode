@@ -1,8 +1,6 @@
 use mycode_core::{ContentBlock, TextBlock, ToolCall};
 
-use super::scripted::{
-    assistant_message, large_history, scripted_wire, tool_result_message,
-};
+use super::scripted::{assistant_message, large_history, scripted_wire, tool_result_message};
 use super::{
     CompactStatus, PLAUSIBLE_SUMMARY, TokenScale, padded, scratch_home, summary_wire, user,
     user_text,

@@ -28,7 +28,6 @@ pub(super) fn mcp_snippet(server_id: &str, description: Option<&str>) -> String 
     }
 }
 
-
 /// Bytes of an MCP tool result kept inline for the model.
 pub(super) const MAX_MCP_TOOL_RESULT_BYTES: usize = 20 * 1024;
 
@@ -96,4 +95,3 @@ pub(crate) fn mcp_server_is_direct(tools: &[crate::mcp_client::McpTool]) -> bool
                 .is_ok()
         })
 }
-
