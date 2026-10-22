@@ -136,7 +136,7 @@ pub(crate) fn message_title(kind: EventKind, payload: &[u8]) -> Option<String> {
     if kind != EventKind::Message {
         return None;
     }
-    if serde_json::from_slice::<mycode_core::AssistantMessage>(payload).is_ok() {
+    if serde_json::from_slice::<mycode_tools::AssistantMessage>(payload).is_ok() {
         return None;
     }
     let text = String::from_utf8_lossy(payload);

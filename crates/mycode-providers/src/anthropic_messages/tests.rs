@@ -1,4 +1,4 @@
-use mycode_core::{AssistantMessage, ContentBlock, Message, Request, StopReason, ThinkingBlock};
+use mycode_config::{AssistantMessage, ContentBlock, Message, Request, StopReason, ThinkingBlock};
 
 use super::MessagesReducer;
 use crate::anthropic_messages::build_body;
@@ -24,7 +24,7 @@ fn eof_before_message_stop_keeps_thinking() {
     reducer.feed(
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"still here"}}"#,
         );
-    let mycode_core::StreamEvent::Done { message } = reducer.finish() else {
+    let mycode_config::StreamEvent::Done { message } = reducer.finish() else {
         panic!("done");
     };
     assert_eq!(thinking_of(&message), "still here");
@@ -32,9 +32,9 @@ fn eof_before_message_stop_keeps_thinking() {
     assert_eq!(message.stop_reason, StopReason::Error);
 }
 
-fn done(events: Vec<mycode_core::StreamEvent>) -> AssistantMessage {
+fn done(events: Vec<mycode_config::StreamEvent>) -> AssistantMessage {
     match events.into_iter().last() {
-        Some(mycode_core::StreamEvent::Done { message }) => message,
+        Some(mycode_config::StreamEvent::Done { message }) => message,
         other => panic!("expected done, got {other:?}"),
     }
 }
@@ -168,7 +168,7 @@ fn error_event_keeps_prior_thinking() {
         r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"partial"}}"#,
     );
     let events = reducer.feed(r#"{"type":"error","error":{"message":"overloaded"}}"#);
-    let mycode_core::StreamEvent::Done { message } = events.into_iter().next().unwrap() else {
+    let mycode_config::StreamEvent::Done { message } = events.into_iter().next().unwrap() else {
         panic!("done");
     };
     assert_eq!(thinking_of(&message), "partial");
@@ -181,7 +181,7 @@ fn an_output_free_error_frame_is_a_request_failure() {
     reducer.feed(r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#);
     let events = reducer
         .feed(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#);
-    let [mycode_core::StreamEvent::Error(error)] = events.as_slice() else {
+    let [mycode_config::StreamEvent::Error(error)] = events.as_slice() else {
         panic!("expected one error terminal, got {events:?}");
     };
     assert_eq!(error.status(), Some(529));
@@ -190,11 +190,11 @@ fn an_output_free_error_frame_is_a_request_failure() {
 
 #[test]
 fn parallel_tool_results_and_a_steer_share_one_user_turn() {
-    use mycode_core::{ToolCall, ToolResultMessage, UserMessage};
+    use mycode_config::{ToolCall, ToolResultMessage, UserMessage};
     let result = |id: &str| {
         std::sync::Arc::new(Message::ToolResult(ToolResultMessage {
             tool_call_id: id.to_owned(),
-            content: vec![ContentBlock::Text(mycode_core::TextBlock::new("ok"))],
+            content: vec![ContentBlock::Text(mycode_config::TextBlock::new("ok"))],
             is_error: false,
             details: None,
         }))
@@ -235,17 +235,17 @@ fn parallel_tool_results_and_a_steer_share_one_user_turn() {
 
 #[test]
 fn a_tool_returned_image_rides_inside_the_tool_result() {
-    use mycode_core::{BinaryData, ToolResultMessage};
+    use mycode_config::{BinaryData, ToolResultMessage};
     let text_only = std::sync::Arc::new(Message::ToolResult(ToolResultMessage {
         tool_call_id: "plain".to_owned(),
-        content: vec![ContentBlock::Text(mycode_core::TextBlock::new("ok"))],
+        content: vec![ContentBlock::Text(mycode_config::TextBlock::new("ok"))],
         is_error: false,
         details: None,
     }));
     let with_image = std::sync::Arc::new(Message::ToolResult(ToolResultMessage {
         tool_call_id: "shot".to_owned(),
         content: vec![
-            ContentBlock::Text(mycode_core::TextBlock::new("Image: shot.png")),
+            ContentBlock::Text(mycode_config::TextBlock::new("Image: shot.png")),
             ContentBlock::Image(BinaryData {
                 data: "aGVsbG8=".to_owned(),
                 mime_type: "image/png".to_owned(),
@@ -279,7 +279,7 @@ fn a_tool_returned_image_rides_inside_the_tool_result() {
 
 #[test]
 fn a_tool_result_never_joins_a_text_turn() {
-    use mycode_core::{ToolResultMessage, UserMessage};
+    use mycode_config::{ToolResultMessage, UserMessage};
     let request = Request {
         messages: vec![
             std::sync::Arc::new(Message::User(UserMessage::text("summary"))),
@@ -302,7 +302,7 @@ fn a_tool_result_never_joins_a_text_turn() {
 
 #[test]
 fn a_rejected_signature_retries_without_any_thinking() {
-    use mycode_core::{ProviderError, ProviderErrorKind};
+    use mycode_config::{ProviderError, ProviderErrorKind};
     let body = serde_json::json!({
         "model": "claude-opus-5-5",
         "messages": [
@@ -389,14 +389,14 @@ fn glm_replays_unsigned_thinking() {
 }
 
 /// Event names in order, so a test can pin where `ToolCallStarted` lands.
-fn started_then_deltas(events: &[mycode_core::StreamEvent]) -> Vec<String> {
+fn started_then_deltas(events: &[mycode_config::StreamEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            mycode_core::StreamEvent::ToolCallStarted { id, name } => {
+            mycode_config::StreamEvent::ToolCallStarted { id, name } => {
                 Some(format!("started {id} {name}"))
             }
-            mycode_core::StreamEvent::ToolCallDelta { id, .. } => Some(format!("delta {id}")),
+            mycode_config::StreamEvent::ToolCallDelta { id, .. } => Some(format!("delta {id}")),
             _ => None,
         })
         .collect()

@@ -327,14 +327,14 @@ enum AssistantPart {
 }
 
 /// Splits assistant text at the interruption lines
-/// ([`mycode_app::INTERRUPTED_RESPONSE_PREFIX`]) the agent commits when a
+/// ([`mycode_frontend::INTERRUPTED_RESPONSE_PREFIX`]) the agent commits when a
 /// provider stream fails. Consecutive error lines merge into one alert, and
 /// prose keeps its blank lines.
 fn assistant_parts(text: &str) -> Vec<AssistantPart> {
     let mut parts = Vec::new();
     let mut prose = String::new();
     for line in text.lines() {
-        if line.starts_with(mycode_app::INTERRUPTED_RESPONSE_PREFIX) {
+        if line.starts_with(mycode_frontend::INTERRUPTED_RESPONSE_PREFIX) {
             if !prose.trim().is_empty() {
                 parts.push(AssistantPart::Prose(prose.trim_end().to_owned()));
             }
@@ -368,7 +368,7 @@ fn assistant_text(
     theme: &Theme,
     window: &Window,
 ) -> gpui_kit::AnyElement {
-    if !text.contains(mycode_app::INTERRUPTED_RESPONSE_PREFIX) {
+    if !text.contains(mycode_frontend::INTERRUPTED_RESPONSE_PREFIX) {
         return agent_text(
             id.into(),
             SharedString::from(text.clone()),
@@ -621,7 +621,7 @@ pub(super) fn render_summary_entry(
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let body = mycode_app::summary_body(&entry.text);
+    let body = mycode_frontend::summary_body(&entry.text);
     let id = entry.event_id.clone();
     div()
         .id(format!("summary-{}", entry.event_id))

@@ -7,8 +7,8 @@
 
 use std::time::Duration;
 
-use mycode_config::{MAGPIE_PROVIDER_ID, MagpieSettings, ProviderSettings};
-use mycode_providers::catalog::{CatalogDocument, CatalogProvider};
+use mycode_agent::catalog::{CatalogDocument, CatalogProvider};
+use mycode_agent::{MAGPIE_PROVIDER_ID, MagpieSettings, ProviderSettings};
 
 /// Request timeout for the gateway's model list. It answers locally.
 const MODELS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -73,8 +73,7 @@ impl Gateway {
         if bytes.len() > MAX_MODELS_BYTES {
             return Err("magpie /v1/models is larger than 4 MiB".to_owned());
         }
-        let provider =
-            mycode_providers::catalog::magpie::provider_from_models(&bytes, &self.base_url)?;
+        let provider = mycode_agent::catalog::magpie::provider_from_models(&bytes, &self.base_url)?;
         Ok(FetchedModels {
             provider,
             fetched_at: mycode_app_time(),
@@ -84,11 +83,11 @@ impl Gateway {
 
 /// Reads `settings.json` off the core thread.
 pub(crate) async fn load_settings(
-    home: &mycode_config::HomeLayout,
-) -> Result<mycode_config::AppSettings, String> {
+    home: &mycode_agent::HomeLayout,
+) -> Result<mycode_agent::AppSettings, String> {
     let read_home = home.clone();
     tokio::task::spawn_blocking(move || {
-        mycode_config::read_app_settings(&read_home)
+        mycode_agent::read_app_settings(&read_home)
             .map_err(|error| crate::settings_io::render_config_error(&error))
     })
     .await

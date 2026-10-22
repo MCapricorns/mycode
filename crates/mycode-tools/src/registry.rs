@@ -9,7 +9,7 @@ use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use mycode_core::tool::ToolSpec;
+use mycode_providers::tool::ToolSpec;
 
 use crate::tool::ToolDyn;
 

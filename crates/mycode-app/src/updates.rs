@@ -132,7 +132,7 @@ struct AssetJson {
 /// Returns the transport, parse, or HTTP failure message. An unparsable
 /// tag is `Ok(None)`, not an error.
 pub async fn latest_release(user_agent: &str) -> Result<Option<UpdateOffer>, String> {
-    let response = mycode_providers::send_pinned(mycode_providers::PinnedRequest {
+    let response = mycode_agent::send_pinned(mycode_agent::PinnedRequest {
         method: reqwest::Method::GET,
         url: LATEST_RELEASE_API.to_owned(),
         headers: vec![(
@@ -140,7 +140,7 @@ pub async fn latest_release(user_agent: &str) -> Result<Option<UpdateOffer>, Str
             "application/vnd.github+json".to_owned(),
         )],
         body: None,
-        mode: mycode_providers::PinMode::PublicHttps,
+        mode: mycode_agent::PinMode::PublicHttps,
         timeout: Some(std::time::Duration::from_secs(30)),
         read_timeout: None,
         user_agent: Some(user_agent.to_owned()),
@@ -344,12 +344,12 @@ async fn fetch_to_file(
     destination: &Path,
     maximum: u64,
 ) -> Result<(), String> {
-    let mut response = mycode_providers::send_pinned(mycode_providers::PinnedRequest {
+    let mut response = mycode_agent::send_pinned(mycode_agent::PinnedRequest {
         method: reqwest::Method::GET,
         url: url.to_owned(),
         headers: Vec::new(),
         body: None,
-        mode: mycode_providers::PinMode::PublicHttps,
+        mode: mycode_agent::PinMode::PublicHttps,
         timeout: None,
         read_timeout: Some(DOWNLOAD_IDLE),
         user_agent: Some(user_agent.to_owned()),
@@ -578,7 +578,7 @@ fn target_matches(target: &Path, expected: &str) -> bool {
 /// Durable directory for a staged update that must survive this process:
 /// `<home>/update/`. A payload here outlives crashes and reboots, so a
 /// later launch can finish a swap no exit path ever ran.
-pub fn pending_dir(home: &mycode_config::HomeLayout) -> PathBuf {
+pub fn pending_dir(home: &mycode_agent::HomeLayout) -> PathBuf {
     home.root().join("update")
 }
 
@@ -608,7 +608,7 @@ const MAX_PENDING_ATTEMPTS: u32 = 3;
 ///
 /// Returns a failure message; the running installation is untouched.
 pub fn persist_pending_update(
-    home: &mycode_config::HomeLayout,
+    home: &mycode_agent::HomeLayout,
     prepared: &PreparedUpdate,
 ) -> Result<PreparedUpdate, String> {
     let dir = pending_dir(home);
@@ -660,7 +660,7 @@ pub enum PendingUpdate {
 /// payload that failed too many startups is dropped so the app always
 /// opens. The swap helper leaves the payload in place, so an applied one
 /// is how the first launch of the new version learns the update landed.
-pub fn reconcile_pending_update(home: &mycode_config::HomeLayout, relaunch: bool) -> PendingUpdate {
+pub fn reconcile_pending_update(home: &mycode_agent::HomeLayout, relaunch: bool) -> PendingUpdate {
     if crate::install::install_skipped() {
         return PendingUpdate::None;
     }

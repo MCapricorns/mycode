@@ -22,12 +22,12 @@ async fn a_call_the_ledger_never_answered_is_paired_on_the_next_turn() {
         .write(EventKind::Message, PROMPT_A.as_bytes())
         .await
         .expect("prompt A");
-    let step = mycode_core::AssistantMessage {
-        blocks: vec![mycode_core::ContentBlock::ToolCall(
-            mycode_core::ToolCall::new("call_lost", "read", serde_json::json!({"path": "a.txt"})),
+    let step = mycode_agent::AssistantMessage {
+        blocks: vec![mycode_agent::ContentBlock::ToolCall(
+            mycode_agent::ToolCall::new("call_lost", "read", serde_json::json!({"path": "a.txt"})),
         )],
         usage: None,
-        stop_reason: mycode_core::StopReason::ToolUse,
+        stop_reason: mycode_agent::StopReason::ToolUse,
     };
     writer
         .write(
@@ -198,7 +198,7 @@ impl SseTransport for CallTransport {
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    Output = Result<mycode_agent::transport::ByteStream, ProviderError>,
                 > + Send
                 + 'a,
         >,

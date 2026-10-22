@@ -7,8 +7,8 @@
 
 use serde_json::{Value, json};
 
-use mycode_core::{AssistantMessage, ContentBlock, Message, StopReason, ToolSpec, Usage};
-use mycode_core::{Request, StreamEvent};
+use mycode_config::{AssistantMessage, ContentBlock, Message, StopReason, ToolSpec, Usage};
+use mycode_config::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
@@ -503,7 +503,7 @@ impl FrameReducer for ResponsesReducer {
 
 #[cfg(test)]
 mod tests {
-    use mycode_core::{ContentBlock, StopReason};
+    use mycode_config::{ContentBlock, StopReason};
 
     use super::ResponsesReducer;
     use crate::driver::FrameReducer;
@@ -513,7 +513,7 @@ mod tests {
         let body = super::build_body(
             "gpt-5.6-sol",
             "https://chatgpt.com/backend-api/codex/responses",
-            &mycode_core::Request::new(),
+            &mycode_config::Request::new(),
         );
         assert_eq!(body["store"], serde_json::json!(false));
     }
@@ -530,10 +530,10 @@ mod tests {
         let names: Vec<String> = events
             .iter()
             .filter_map(|event| match event {
-                mycode_core::StreamEvent::ToolCallStarted { id, name } => {
+                mycode_config::StreamEvent::ToolCallStarted { id, name } => {
                     Some(format!("started {id} {name}"))
                 }
-                mycode_core::StreamEvent::ToolCallDelta { id, .. } => Some(format!("delta {id}")),
+                mycode_config::StreamEvent::ToolCallDelta { id, .. } => Some(format!("delta {id}")),
                 _ => None,
             })
             .collect();
@@ -560,7 +560,8 @@ mod tests {
             r#"{"type":"response.function_call_arguments.done","arguments":"{\"pattern\":\"other\"}"}"#,
         );
         let events = reducer.feed(r#"{"type":"response.completed","response":{"usage":{}}}"#);
-        let mycode_core::StreamEvent::Done { message } = events.into_iter().next().unwrap() else {
+        let mycode_config::StreamEvent::Done { message } = events.into_iter().next().unwrap()
+        else {
             panic!("done");
         };
         let calls: Vec<_> = message
@@ -596,7 +597,8 @@ mod tests {
             r#"{"type":"response.function_call_arguments.done","item_id":"fc_2","output_index":1,"arguments":"{\"pattern\":\"x\"}"}"#,
         );
         let events = reducer.feed(r#"{"type":"response.completed","response":{"usage":{}}}"#);
-        let mycode_core::StreamEvent::Done { message } = events.into_iter().next().unwrap() else {
+        let mycode_config::StreamEvent::Done { message } = events.into_iter().next().unwrap()
+        else {
             panic!("done");
         };
         let calls: Vec<_> = message
@@ -622,7 +624,8 @@ mod tests {
         reducer.feed(r#"{"type":"response.reasoning_summary_text.delta","delta":"consider"}"#);
         let events = reducer
             .feed(r#"{"type":"response.failed","response":{"error":{"message":"server busy"}}}"#);
-        let mycode_core::StreamEvent::Done { message } = events.into_iter().next().unwrap() else {
+        let mycode_config::StreamEvent::Done { message } = events.into_iter().next().unwrap()
+        else {
             panic!("done");
         };
         let thinking = message
@@ -652,9 +655,9 @@ mod tests {
         );
         assert!(matches!(
             events.as_slice(),
-            [mycode_core::StreamEvent::ThinkingDelta(delta)] if delta == "\n\nSecond."
+            [mycode_config::StreamEvent::ThinkingDelta(delta)] if delta == "\n\nSecond."
         ));
-        let mycode_core::StreamEvent::Done { message } = reducer.finish() else {
+        let mycode_config::StreamEvent::Done { message } = reducer.finish() else {
             panic!("done");
         };
         let thinking = message
@@ -672,7 +675,7 @@ mod tests {
     fn eof_before_completed_keeps_text() {
         let mut reducer = ResponsesReducer::new();
         reducer.feed(r#"{"type":"response.output_text.delta","delta":"partial answer"}"#);
-        let mycode_core::StreamEvent::Done { message } = reducer.finish() else {
+        let mycode_config::StreamEvent::Done { message } = reducer.finish() else {
             panic!("done");
         };
         assert!(message.text().contains("partial answer"));
@@ -682,22 +685,22 @@ mod tests {
 
     #[test]
     fn images_ride_the_user_message_and_the_function_call_output() {
-        use mycode_core::{BinaryData, TextBlock, ToolResultMessage, UserMessage};
+        use mycode_config::{BinaryData, TextBlock, ToolResultMessage, UserMessage};
         use std::sync::Arc;
 
         let image = BinaryData {
             data: "aGVsbG8=".to_owned(),
             mime_type: "image/png".to_owned(),
         };
-        let request = mycode_core::Request {
+        let request = mycode_config::Request {
             messages: vec![
-                Arc::new(mycode_core::Message::User(UserMessage {
+                Arc::new(mycode_config::Message::User(UserMessage {
                     content: vec![
                         ContentBlock::Text(TextBlock::new("look")),
                         ContentBlock::Image(image.clone()),
                     ],
                 })),
-                Arc::new(mycode_core::Message::ToolResult(ToolResultMessage {
+                Arc::new(mycode_config::Message::ToolResult(ToolResultMessage {
                     tool_call_id: "call-1".to_owned(),
                     content: vec![
                         ContentBlock::Text(TextBlock::new("Image: shot.png")),
@@ -707,7 +710,7 @@ mod tests {
                     details: None,
                 })),
             ],
-            ..mycode_core::Request::default()
+            ..mycode_config::Request::default()
         };
         let body = super::build_body(
             "gpt-5.6-sol",

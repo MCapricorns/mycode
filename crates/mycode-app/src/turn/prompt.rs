@@ -1,8 +1,8 @@
 //! The session system prompt and the workspace facts it lists: extra
 //! roots, the scratch directory, the environment block, and skills.
 
-use mycode_config::HomeLayout;
-use mycode_tools::ToolRegistry;
+use mycode_agent::HomeLayout;
+use mycode_agent::ToolRegistry;
 use std::fmt::Write as _;
 
 /// Workspace folders other than the session cwd, plus the OS temp directory
@@ -11,27 +11,27 @@ use std::fmt::Write as _;
 /// The flat folder list contributes the extras; the session cwd drops out
 /// of it so the prompt never names the directory twice.
 pub(crate) fn workspace_extra_roots(
-    home: &mycode_config::HomeLayout,
+    home: &mycode_agent::HomeLayout,
     cwd: &std::path::Path,
 ) -> Vec<std::path::PathBuf> {
-    let mut roots = match mycode_config::read_ui_state(home) {
+    let mut roots = match mycode_agent::read_ui_state(home) {
         Ok(state) => {
             let cwd_text = cwd.display().to_string();
             let mut roots: Vec<std::path::PathBuf> = state
                 .workspace_roots
                 .into_iter()
-                .filter(|root| !mycode_config::same_project_path(root, &cwd_text))
+                .filter(|root| !mycode_agent::same_project_path(root, &cwd_text))
                 .map(std::path::PathBuf::from)
                 .collect();
             roots.sort();
-            roots.truncate(mycode_config::MAX_WORKSPACE_ROOTS);
+            roots.truncate(mycode_agent::MAX_WORKSPACE_ROOTS);
             roots
         }
         Err(_) => Vec::new(),
     };
     // File tools can stage throwaway artifacts (test pages, recordings,
     // fixtures) outside the project tree.
-    let scratch = mycode_tools::os_scratch_root();
+    let scratch = mycode_agent::os_scratch_root();
     if !roots.contains(&scratch) {
         roots.push(scratch);
     }
@@ -44,7 +44,7 @@ pub(crate) fn workspace_extra_roots(
 pub(crate) fn split_scratch_root(
     roots: &[std::path::PathBuf],
 ) -> (Vec<&std::path::Path>, Option<&std::path::Path>) {
-    let scratch = mycode_tools::os_scratch_root();
+    let scratch = mycode_agent::os_scratch_root();
     let mut workspace = Vec::new();
     let mut found = None;
     for root in roots {
@@ -71,18 +71,18 @@ project code: do not search it.",
     }
 }
 
-pub(crate) use mycode_config::os_user_home;
+pub(crate) use mycode_agent::os_user_home;
 
 /// Compact environment facts for the system prompt: OS, arch, the session
 /// cwd, and the one shell tool `script` mode resolves to right now. Shared
 /// by the main session and subagent prompts so the model never guesses the
 /// platform from error messages.
 pub(crate) fn environment_block(cwd: &std::path::Path) -> String {
-    mycode_tools::render_environment_block(
+    mycode_agent::render_environment_block(
         std::env::consts::OS,
         std::env::consts::ARCH,
         cwd,
-        &mycode_tools::resolved_shell(),
+        &mycode_agent::resolved_shell(),
     )
 }
 
@@ -137,16 +137,16 @@ pub(crate) fn session_system_prompt(
     extra_roots: &[std::path::PathBuf],
     directive: &str,
     user_home: Option<&std::path::Path>,
-    skill_settings: &mycode_config::SkillsSettings,
+    skill_settings: &mycode_agent::SkillsSettings,
 ) -> String {
-    let resources = mycode_config::discover_resources(home, cwd);
+    let resources = mycode_agent::discover_resources(home, cwd);
     let mut system_prompt = String::from(SESSION_IDENTITY);
     system_prompt.push_str("\n\n");
     system_prompt.push_str(&mycode_agent::build_system_prompt(registry));
     system_prompt.push_str(directive);
     system_prompt.push_str("\n\n");
     system_prompt.push_str(&environment_block(cwd));
-    for part in mycode_config::render_resource_prompt(&resources) {
+    for part in mycode_agent::render_resource_prompt(&resources) {
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&part);
     }
@@ -174,7 +174,7 @@ calls, `agent` included, instead of waiting for them.\n</mcp>",
         for root in &roots {
             let _ = writeln!(system_prompt, "- {}", root.display());
         }
-        let shell_tool = mycode_tools::resolved_shell().kind.tool_name();
+        let shell_tool = mycode_agent::resolved_shell().kind.tool_name();
         let _ = write!(
             system_prompt,
             "Relative paths stay in the session cwd. For the other folders, pass an \
@@ -197,14 +197,14 @@ pub(crate) fn push_workspace_skills(
     extras: &[std::path::PathBuf],
     user_home: Option<&std::path::Path>,
     mycode_home: Option<&std::path::Path>,
-    settings: &mycode_config::SkillsSettings,
+    settings: &mycode_agent::SkillsSettings,
 ) {
-    let mut skills = mycode_config::discover_skills(cwd, user_home, mycode_home);
+    let mut skills = mycode_agent::discover_skills(cwd, user_home, mycode_home);
     // Any local process can write under the OS temp root; skills come only
     // from folders the user added.
     let (workspace_roots, _) = split_scratch_root(extras);
     for extra in workspace_roots {
-        for skill in mycode_config::discover_skills(extra, None, None) {
+        for skill in mycode_agent::discover_skills(extra, None, None) {
             if skills.iter().any(|existing| existing.slug == skill.slug) {
                 continue;
             }
@@ -221,17 +221,17 @@ pub(crate) fn push_workspace_skills(
 }
 
 /// Appends the catalog of enabled skills, keeping at most
-/// [`mycode_config::MAX_SKILLS`]. Skills switched off in settings are dropped
+/// [`mycode_agent::MAX_SKILLS`]. Skills switched off in settings are dropped
 /// before the cap so they do not take a slot.
 pub(crate) fn push_skill_catalog(
     prompt: &mut String,
-    mut skills: Vec<mycode_config::SkillFile>,
-    settings: &mycode_config::SkillsSettings,
+    mut skills: Vec<mycode_agent::SkillFile>,
+    settings: &mycode_agent::SkillsSettings,
 ) {
     skills.retain(|skill| settings.is_enabled(&skill.slug));
-    let hidden = skills.len().saturating_sub(mycode_config::MAX_SKILLS);
-    skills.truncate(mycode_config::MAX_SKILLS);
-    let Some(mut catalog) = mycode_config::render_skill_catalog(&skills) else {
+    let hidden = skills.len().saturating_sub(mycode_agent::MAX_SKILLS);
+    skills.truncate(mycode_agent::MAX_SKILLS);
+    let Some(mut catalog) = mycode_agent::render_skill_catalog(&skills) else {
         return;
     };
     if hidden > 0
@@ -251,21 +251,21 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use mycode_config::HomeLayout;
-    use mycode_tools::ToolRegistry;
+    use mycode_agent::HomeLayout;
+    use mycode_agent::ToolRegistry;
 
     use super::session_system_prompt;
 
     #[test]
     fn skill_catalog_drops_skills_switched_off_in_settings() {
-        let skill = |slug: &str| mycode_config::SkillFile {
+        let skill = |slug: &str| mycode_agent::SkillFile {
             slug: slug.to_owned(),
             title: format!("{slug} title"),
             description: String::new(),
             path: PathBuf::from(format!("/skills/{slug}/SKILL.md")),
             global: false,
         };
-        let mut settings = mycode_config::SkillsSettings::default();
+        let mut settings = mycode_agent::SkillsSettings::default();
         settings.set_enabled("review", false);
         let mut prompt = String::new();
         super::push_skill_catalog(
@@ -299,7 +299,7 @@ mod tests {
         let root = std::env::temp_dir().join("mycode-env-block");
         let home = HomeLayout::from_root(&root).unwrap();
         let registry = ToolRegistry::new();
-        mycode_tools::register_builtins(&registry);
+        mycode_agent::register_builtins(&registry);
         let prompt = session_system_prompt(
             &home,
             &root,
@@ -325,7 +325,7 @@ mod tests {
             "AGENTS.md must not fall under the data-not-instructions rule:\n{prompt}"
         );
         assert!(prompt.contains("Fix the code, not the check"), "{prompt}");
-        let shell = mycode_tools::resolved_shell();
+        let shell = mycode_agent::resolved_shell();
         assert!(
             prompt.contains(&format!("shell_tool: {}", shell.kind.tool_name())),
             "environment block must name the active shell tool, got:\n{prompt}"
@@ -357,7 +357,7 @@ mod tests {
         }
         let home = HomeLayout::from_root(&root).unwrap();
         let registry = ToolRegistry::new();
-        mycode_tools::register_builtins(&registry);
+        mycode_agent::register_builtins(&registry);
         let forward = vec![root.join("b"), root.join("a")];
         let reverse = vec![root.join("a"), root.join("b")];
         let first = session_system_prompt(

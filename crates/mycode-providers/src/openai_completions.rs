@@ -6,8 +6,8 @@
 
 use serde_json::{Value, json};
 
-use mycode_core::{ContentBlock, Message, StopReason, ToolSpec, Usage};
-use mycode_core::{Request, StreamEvent};
+use mycode_config::{ContentBlock, Message, StopReason, ToolSpec, Usage};
+use mycode_config::{Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
@@ -425,7 +425,7 @@ fn merge_distinct_details(
             // A retained detail item is stream state and counts toward the
             // accumulation ceiling like any other fragment, so distinct-id
             // frames cannot grow the array without bound.
-            let item_len = mycode_core::encoded_json_len(&item).unwrap_or(usize::MAX);
+            let item_len = mycode_config::encoded_json_len(&item).unwrap_or(usize::MAX);
             if !charge_stream(accumulated, item_len) {
                 return Err("stream exceeded the output limit");
             }
@@ -578,7 +578,7 @@ impl CompletionsReducer {
         let stop_reason =
             assembled_stop_reason(self.interrupt.is_some(), has_calls, self.stop_reason);
         StreamEvent::Done {
-            message: mycode_core::AssistantMessage {
+            message: mycode_config::AssistantMessage {
                 blocks,
                 usage: self.usage,
                 stop_reason,
@@ -696,7 +696,7 @@ impl CompletionsReducer {
         } else {
             // First frame: take it as-is without the prefix comparisons.
             for item in incoming {
-                let item_len = mycode_core::encoded_json_len(&item).unwrap_or(usize::MAX);
+                let item_len = mycode_config::encoded_json_len(&item).unwrap_or(usize::MAX);
                 if !charge_stream(&mut self.accumulated, item_len) {
                     return Err("stream exceeded the output limit");
                 }

@@ -193,11 +193,11 @@ pub(super) fn read_raw_file(
 
 /// Maximum bytes of one media file that may be ingested whole.
 ///
-/// The model cap is [`mycode_core::MAX_IMAGE_BASE64_BYTES`] on the encoded
+/// The model cap is [`mycode_providers::MAX_IMAGE_BASE64_BYTES`] on the encoded
 /// payload, and base64 makes 3 bytes 4. No resizer runs in this path, so a
 /// bigger picture is refused with an instruction to crop or resize instead
 /// of being read and then rejected after encoding.
-pub const MAX_MEDIA_INGEST_BYTES: usize = mycode_core::MAX_IMAGE_BASE64_BYTES / 4 * 3;
+pub const MAX_MEDIA_INGEST_BYTES: usize = mycode_providers::MAX_IMAGE_BASE64_BYTES / 4 * 3;
 
 /// One `read` answer: an image the model can see, or a text window.
 pub enum ReadOutcome {
@@ -390,7 +390,7 @@ mod tests {
     fn the_ingest_cap_encodes_to_the_provider_ceiling() {
         assert_eq!(
             MAX_MEDIA_INGEST_BYTES / 3 * 4,
-            mycode_core::MAX_IMAGE_BASE64_BYTES
+            mycode_providers::MAX_IMAGE_BASE64_BYTES
         );
     }
 

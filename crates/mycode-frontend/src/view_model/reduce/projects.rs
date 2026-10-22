@@ -13,7 +13,7 @@ pub(super) fn bind_session_project(
     state.session_projects.insert(0, (session_id, project));
     state
         .session_projects
-        .truncate(mycode_config::MAX_SESSION_PROJECTS);
+        .truncate(mycode_app::MAX_SESSION_PROJECTS);
 }
 
 /// The `WorkspaceRootAdded` transition: a folder joined the list.
@@ -29,7 +29,7 @@ pub(super) fn workspace_root_added(state: &mut WorkspaceState, project: String) 
     let cap = state
         .workspace_roots
         .len()
-        .max(mycode_config::MAX_WORKSPACE_ROOTS);
+        .max(mycode_app::MAX_WORKSPACE_ROOTS);
     state.workspace_roots.insert(0, project.clone());
     state.workspace_roots.truncate(cap);
     // Same spelling-fold comparison as the roots list above, so a dropped
@@ -38,7 +38,7 @@ pub(super) fn workspace_root_added(state: &mut WorkspaceState, project: String) 
         .recents
         .retain(|existing| !same_project_path(existing, &project));
     state.recents.insert(0, project.clone());
-    state.recents.truncate(mycode_config::MAX_RECENT_PROJECTS);
+    state.recents.truncate(mycode_app::MAX_RECENT_PROJECTS);
     if state.project_dir.is_none() {
         state.project_dir = Some(project);
     }
@@ -105,12 +105,9 @@ mod tests {
         assert_eq!(state.workspace_roots[1..], legacy[..legacy.len() - 1]);
 
         let mut fresh = WorkspaceState::default();
-        for index in 0..mycode_config::MAX_WORKSPACE_ROOTS + 2 {
+        for index in 0..mycode_app::MAX_WORKSPACE_ROOTS + 2 {
             super::workspace_root_added(&mut fresh, format!("/f/{index}"));
         }
-        assert_eq!(
-            fresh.workspace_roots.len(),
-            mycode_config::MAX_WORKSPACE_ROOTS
-        );
+        assert_eq!(fresh.workspace_roots.len(), mycode_app::MAX_WORKSPACE_ROOTS);
     }
 }

@@ -7,13 +7,8 @@ license.workspace = true
 
 [dependencies]
 parking_lot.workspace = true
-mycode-core = { path = "../mycode-core" }
-mycode-config = { path = "../mycode-config" }
-mycode-providers = { path = "../mycode-providers" }
-mycode-tools = { path = "../mycode-tools" }
 mycode-agent = { path = "../mycode-agent" }
-# `json` is required directly by updates.rs `.json()`; do not rely on
-# feature unification through mycode-providers.
+# `json` is required directly by updates.rs `.json()`.
 reqwest = { workspace = true, features = ["json"] }
 semver.workspace = true
 bytes.workspace = true

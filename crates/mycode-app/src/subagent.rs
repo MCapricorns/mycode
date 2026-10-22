@@ -7,15 +7,15 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
+use mycode_agent::Message;
+use mycode_agent::ToolRegistry;
+use mycode_agent::catalog::CatalogDocument;
 use mycode_agent::{Agent, AgentConfig, HookRunner};
-use mycode_config::{
+use mycode_agent::{
     AppSettings, HomeLayout, RoleCatalog, RoleIsolation, RoleThinking, SubagentRole,
     SubagentSettings, discover_roles,
 };
-use mycode_core::Message;
-use mycode_providers::catalog::CatalogDocument;
-use mycode_providers::{ReqwestTransport, ResolvedProvider, WireProvider};
-use mycode_tools::ToolRegistry;
+use mycode_agent::{ReqwestTransport, ResolvedProvider, WireProvider};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
@@ -57,7 +57,7 @@ pub(crate) struct BridgeAgentHost {
 /// What a child needs to size its context window.
 struct ChildContext {
     catalog: Arc<std::sync::RwLock<Arc<CatalogDocument>>>,
-    provider: mycode_config::ProviderSettings,
+    provider: mycode_agent::ProviderSettings,
     model: String,
 }
 
@@ -73,7 +73,7 @@ impl BridgeAgentHost {
         cancels: Arc<parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
         mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
     ) -> Self {
-        let slots = mycode_config::SUBAGENT_CONCURRENCY as usize;
+        let slots = mycode_agent::SUBAGENT_CONCURRENCY as usize;
         Self {
             resolved,
             home,
@@ -92,7 +92,7 @@ impl BridgeAgentHost {
     pub(crate) fn with_context(
         mut self,
         catalog: Arc<std::sync::RwLock<Arc<CatalogDocument>>>,
-        provider: mycode_config::ProviderSettings,
+        provider: mycode_agent::ProviderSettings,
         model: String,
     ) -> Self {
         self.context = Some(ChildContext {
@@ -116,7 +116,7 @@ impl BridgeAgentHost {
             else {
                 return None;
             };
-            if provider_id != mycode_config::MAGPIE_PROVIDER_ID {
+            if provider_id != mycode_agent::MAGPIE_PROVIDER_ID {
                 return None;
             }
             let catalog = context.catalog.read().ok()?;
@@ -191,7 +191,7 @@ impl Drop for AbortOnDrop {
 fn agent_progress(role: &str, phase: &str, detail: &str) -> String {
     format!(
         "{}|{role}|{phase}|{detail}",
-        mycode_tools::builtin::AGENT_PROGRESS_PREFIX
+        mycode_agent::builtin::AGENT_PROGRESS_PREFIX
     )
 }
 
@@ -216,7 +216,7 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         .map(|role| role.catalog_line())
         .collect::<Vec<_>>()
         .join("\n");
-    let cap = mycode_config::SUBAGENT_CONCURRENCY;
+    let cap = mycode_agent::SUBAGENT_CONCURRENCY;
     // Built-in role guidance is named only while that role is enabled, so a
     // role switched off in settings is never advertised to the model.
     let has = |name: &str| enabled.iter().any(|role| role.name == name);
@@ -280,16 +280,16 @@ pub(crate) fn resolve_isolation(role: &SubagentRole, requested: Option<&str>) ->
     }
 }
 
-impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
+impl mycode_agent::builtin::AgentHost for BridgeAgentHost {
     fn run_subagent<'a>(
         &'a self,
-        request: mycode_tools::builtin::SubagentRequest,
-        progress: &'a mycode_tools::ToolStream,
+        request: mycode_agent::builtin::SubagentRequest,
+        progress: &'a mycode_agent::ToolStream,
         cancel: &'a CancellationToken,
         call_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, mycode_tools::ToolError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, mycode_agent::ToolError>> + Send + 'a>> {
         Box::pin(async move {
-            let fail = |message: String| mycode_tools::ToolError::Execution(message);
+            let fail = |message: String| mycode_agent::ToolError::Execution(message);
             let role = {
                 let home = self.home.clone();
                 let cwd = self.cwd.clone();
@@ -336,7 +336,7 @@ impl mycode_tools::builtin::AgentHost for BridgeAgentHost {
                 }
                 Err(tokio::sync::TryAcquireError::NoPermits) => {
                     if let Some(detail) =
-                        artisan_cap_detail(&role.name, 0, mycode_config::SUBAGENT_CONCURRENCY)
+                        artisan_cap_detail(&role.name, 0, mycode_agent::SUBAGENT_CONCURRENCY)
                     {
                         let _ = progress.progress(agent_progress(&role.name, "capped", &detail));
                     }
@@ -395,14 +395,14 @@ impl BridgeAgentHost {
     /// `child_cancel`, which cancels the child token and aborts the task.
     async fn drive_subagent(
         &self,
-        request: &mycode_tools::builtin::SubagentRequest,
+        request: &mycode_agent::builtin::SubagentRequest,
         role: &SubagentRole,
-        progress: &mycode_tools::ToolStream,
+        progress: &mycode_agent::ToolStream,
         cancel: &CancellationToken,
         child_cancel: &CancellationToken,
         worktree: Option<&Path>,
-    ) -> Result<String, mycode_tools::ToolError> {
-        let fail = |message: String| mycode_tools::ToolError::Execution(message);
+    ) -> Result<String, mycode_agent::ToolError> {
+        let fail = |message: String| mycode_agent::ToolError::Execution(message);
         let cancelled = || fail(format!("subagent {} cancelled", role.name));
         let run_dir = worktree.map_or_else(|| self.cwd.clone(), Path::to_path_buf);
         let resolved = self.resolve_route(&role.name).await.map_err(fail)?;
@@ -433,9 +433,9 @@ impl BridgeAgentHost {
                 .filter(|tool| tool.read_only())
                 .collect()
         };
-        let shell = mycode_tools::resolved_shell();
+        let shell = mycode_agent::resolved_shell();
         let registry =
-            child_registry_with(&allowed, mycode_tools::ShellTool::forcing(shell.clone()));
+            child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
         let mcp_note = crate::mcp_tools::register_mcp_tools(&registry, mcp_tools, mcp_warning)
             .map(|catalog| child_mcp_note(&catalog.prompt_note(), role.is_write_capable()));
         let registry = Arc::new(registry);
@@ -458,7 +458,7 @@ impl BridgeAgentHost {
                 let compactor = compactor.clone();
                 let progress = progress.clone();
                 let role_name = role_name.clone();
-                move |mut request: mycode_core::Request| {
+                move |mut request: mycode_agent::Request| {
                     let compactor = compactor.clone();
                     let progress = progress.clone();
                     let role_name = role_name.clone();
@@ -468,7 +468,7 @@ impl BridgeAgentHost {
                             let _ = progress.progress(agent_progress(
                                 &role_name,
                                 "step",
-                                mycode_tools::builtin::AGENT_COMPACTED_STEP,
+                                mycode_agent::builtin::AGENT_COMPACTED_STEP,
                             ));
                         }
                         (request, summarized)
@@ -506,11 +506,11 @@ impl BridgeAgentHost {
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 };
                 match event {
-                    mycode_core::events::AgentEvent::ToolStarted { name, target, .. } => {
-                        let label = mycode_core::tool_label(&name, &target);
+                    mycode_agent::events::AgentEvent::ToolStarted { name, target, .. } => {
+                        let label = mycode_agent::tool_label(&name, &target);
                         let _ = progress_sink.progress(agent_progress(&role_name, "tool", &label));
                     }
-                    mycode_core::events::AgentEvent::ToolProgress { message, .. } => {
+                    mycode_agent::events::AgentEvent::ToolProgress { message, .. } => {
                         let _ =
                             progress_sink.progress(agent_progress(&role_name, "step", &message));
                     }
@@ -546,8 +546,8 @@ impl BridgeAgentHost {
                 // The session workspace's instruction files, as the parent
                 // reads them: a worktree lacks the user's uncommitted edits.
                 let workspace = ChildWorkspace {
-                    resources: mycode_config::render_resource_prompt(
-                        &mycode_config::discover_resources(&home, &cwd),
+                    resources: mycode_agent::render_resource_prompt(
+                        &mycode_agent::discover_resources(&home, &cwd),
                     ),
                     mcp_note,
                     skills,
@@ -568,7 +568,7 @@ impl BridgeAgentHost {
             .await
             .map_err(|error| fail(format!("subagent prompt task: {error}")))?
         };
-        let read_roots = mycode_config::skill_read_roots(
+        let read_roots = mycode_agent::skill_read_roots(
             crate::turn::os_user_home().as_deref(),
             Some(self.home.root()),
         );
@@ -576,14 +576,14 @@ impl BridgeAgentHost {
             .with_system_prompt(system)
             .with_prompt_cache_key(Some(self.session_id.clone()));
         if let Some(token) = thinking_for(role, &self.settings.subagents).effort() {
-            if let Some(level) = mycode_core::ReasoningLevel::parse(token) {
+            if let Some(level) = mycode_agent::ReasoningLevel::parse(token) {
                 config = config.with_reasoning(level);
             } else {
                 config = config.with_reasoning_token(Some(token.to_owned()));
             }
         }
         let mut agent = Agent::new(config);
-        let prompt = Message::User(mycode_core::UserMessage::text(request.prompt.clone()));
+        let prompt = Message::User(mycode_agent::UserMessage::text(request.prompt.clone()));
         let role_label = role.name.clone();
         let mut run = tokio::spawn(async move {
             let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
@@ -622,7 +622,7 @@ impl BridgeAgentHost {
         else {
             return Ok(self.resolved.clone());
         };
-        if provider_id != mycode_config::MAGPIE_PROVIDER_ID {
+        if provider_id != mycode_agent::MAGPIE_PROVIDER_ID {
             return Err(format!(
                 "role '{role}' provider '{provider_id}' is not the magpie gateway"
             ));
@@ -651,17 +651,17 @@ impl BridgeAgentHost {
 /// last assistant text. An interrupted or aborted run is a tool error —
 /// its partial must never pass for a successful result.
 fn subagent_answer(
-    outcome: Result<mycode_core::TurnOutcome, mycode_core::MycodeError>,
+    outcome: Result<mycode_agent::TurnOutcome, mycode_agent::MycodeError>,
     messages: &[Arc<Message>],
     role: &str,
-) -> Result<String, mycode_tools::ToolError> {
-    let fail = |message: String| mycode_tools::ToolError::Execution(message);
+) -> Result<String, mycode_agent::ToolError> {
+    let fail = |message: String| mycode_agent::ToolError::Execution(message);
     match outcome {
         Err(error) => return Err(fail(format!("subagent failed: {error}"))),
-        Ok(mycode_core::TurnOutcome::Aborted) => {
+        Ok(mycode_agent::TurnOutcome::Aborted) => {
             return Err(fail(format!("subagent {role} cancelled")));
         }
-        Ok(mycode_core::TurnOutcome::Completed) => {}
+        Ok(mycode_agent::TurnOutcome::Completed) => {}
     }
     let answer = messages
         .iter()
@@ -674,7 +674,7 @@ fn subagent_answer(
             _ => None,
         });
     match answer {
-        Some((text, mycode_core::StopReason::Error)) => Err(fail(text)),
+        Some((text, mycode_agent::StopReason::Error)) => Err(fail(text)),
         Some((text, _)) => Ok(text),
         None => Err(fail("subagent returned no answer".to_owned())),
     }
@@ -698,7 +698,7 @@ enum SubagentFinish {
     /// The parent turn, `CancelSubagent`, or a session delete fired.
     Cancelled,
     /// The task returned an answer or a tool error.
-    Finished(Result<String, mycode_tools::ToolError>),
+    Finished(Result<String, mycode_agent::ToolError>),
 }
 
 /// Waits for the nested task or a cancel token.
@@ -707,7 +707,7 @@ enum SubagentFinish {
 /// parent's cancel also cancels the child token, so the run cannot keep
 /// editing after the tool result has returned.
 async fn finish_subagent_task(
-    run: &mut tokio::task::JoinHandle<Result<String, mycode_tools::ToolError>>,
+    run: &mut tokio::task::JoinHandle<Result<String, mycode_agent::ToolError>>,
     cancel: &CancellationToken,
     child_cancel: &CancellationToken,
 ) -> SubagentFinish {
@@ -719,7 +719,7 @@ async fn finish_subagent_task(
         }
         _ = child_cancel.cancelled() => SubagentFinish::Cancelled,
         joined = run => SubagentFinish::Finished(joined.unwrap_or_else(|error| {
-            Err(mycode_tools::ToolError::Execution(format!(
+            Err(mycode_agent::ToolError::Execution(format!(
                 "subagent task failed: {error}"
             )))
         })),
@@ -761,7 +761,7 @@ fn subagent_system_prompt(
     extra_roots: &[PathBuf],
     os: &str,
     arch: &str,
-    shell: &mycode_tools::DetectedShell,
+    shell: &mycode_agent::DetectedShell,
     workspace: &ChildWorkspace,
 ) -> String {
     let mut system = String::from(SUBAGENT_SYSTEM_PROMPT);
@@ -795,7 +795,7 @@ path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in 
         system.push_str(
             "The environment block names this OS and the one shell tool; write that shell's syntax.\n\n",
         );
-        system.push_str(&mycode_tools::render_environment_block(
+        system.push_str(&mycode_agent::render_environment_block(
             os, arch, run_dir, shell,
         ));
     } else {
@@ -832,7 +832,7 @@ struct ChildWorkspace {
     /// The connected MCP catalog's note, from [`child_mcp_note`].
     mcp_note: Option<String>,
     /// Which discovered skills are switched on.
-    skills: mycode_config::SkillsSettings,
+    skills: mycode_agent::SkillsSettings,
     /// magpie's Library folder, so its skills are catalogued too.
     mycode_home: Option<PathBuf>,
 }
@@ -857,21 +857,21 @@ fn render_os_block(os: &str, arch: &str, cwd: &Path) -> String {
     )
 }
 
-fn child_registry_with(allowed: &[String], shell: mycode_tools::ShellTool) -> ToolRegistry {
+fn child_registry_with(allowed: &[String], shell: mycode_agent::ShellTool) -> ToolRegistry {
     let registry = ToolRegistry::new();
     let mut shell = Some(shell);
     for name in allowed {
         match name.as_str() {
-            "read" => registry.register(Arc::new(mycode_tools::builtin::ReadTool)),
-            "write" => registry.register(Arc::new(mycode_tools::builtin::WriteTool)),
-            "edit" => registry.register(Arc::new(mycode_tools::builtin::EditTool)),
-            name if name == "shell" || mycode_tools::ShellKind::is_tool_name(name) => {
+            "read" => registry.register(Arc::new(mycode_agent::builtin::ReadTool)),
+            "write" => registry.register(Arc::new(mycode_agent::builtin::WriteTool)),
+            "edit" => registry.register(Arc::new(mycode_agent::builtin::EditTool)),
+            name if name == "shell" || mycode_agent::ShellKind::is_tool_name(name) => {
                 if let Some(tool) = shell.take() {
                     registry.register(Arc::new(tool));
                 }
             }
-            "grep" => registry.register(Arc::new(mycode_tools::builtin::GrepTool)),
-            "find" => registry.register(Arc::new(mycode_tools::builtin::FindTool)),
+            "grep" => registry.register(Arc::new(mycode_agent::builtin::GrepTool)),
+            "find" => registry.register(Arc::new(mycode_agent::builtin::FindTool)),
             _ => {}
         }
     }

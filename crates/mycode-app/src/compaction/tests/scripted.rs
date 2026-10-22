@@ -7,10 +7,7 @@ pub(super) fn scripted_wire(
     base_url: &str,
     model: &str,
     script: Vec<(&'static str, &'static str)>,
-) -> (
-    mycode_providers::WireProvider,
-    std::sync::Arc<ScriptedSummary>,
-) {
+) -> (mycode_agent::WireProvider, std::sync::Arc<ScriptedSummary>) {
     let protocol = if kind == "anthropic-messages" {
         "anthropic"
     } else {
@@ -22,7 +19,7 @@ pub(super) fn scripted_wire(
         index: std::sync::atomic::AtomicUsize::new(0),
         protocol,
     });
-    let settings = mycode_config::ProviderSettings {
+    let settings = mycode_agent::ProviderSettings {
         id: "local".to_owned(),
         kind: kind.to_owned(),
         base_url: base_url.to_owned(),
@@ -33,9 +30,9 @@ pub(super) fn scripted_wire(
         hidden_models: Vec::new(),
     };
     let resolved =
-        mycode_providers::ResolvedProvider::resolve(&settings, model, "test-key", "test-agent")
+        mycode_agent::ResolvedProvider::resolve(&settings, model, "test-key", "test-agent")
             .expect("provider");
-    let wire = mycode_providers::WireProvider::new(resolved, transport.clone());
+    let wire = mycode_agent::WireProvider::new(resolved, transport.clone());
     (wire, transport)
 }
 
@@ -122,7 +119,7 @@ async fn a_still_truncated_summary_is_not_stored() {
     assert!(compacted.summary.is_none());
     assert_eq!(transport.index.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert!(
-        mycode_config::read_compaction(&home, "session-cut")
+        mycode_agent::read_compaction(&home, "session-cut")
             .expect("read")
             .is_none()
     );
@@ -165,7 +162,7 @@ async fn an_empty_summary_is_an_error() {
     assert_eq!(body["thinking"]["type"], "disabled");
     assert_eq!(body["max_tokens"], 8_192);
     assert!(
-        mycode_config::read_compaction(&home, "session-empty")
+        mycode_agent::read_compaction(&home, "session-empty")
             .expect("read")
             .is_none()
     );
@@ -189,7 +186,7 @@ pub(super) fn tool_result_message(id: &str, body: &str) -> Arc<Message> {
     }))
 }
 
-pub(super) fn request_user_text(request: &mycode_core::Request) -> String {
+pub(super) fn request_user_text(request: &mycode_agent::Request) -> String {
     user_text(
         request
             .messages
@@ -249,7 +246,7 @@ fn a_conversation_ending_in_a_tool_result_is_wrapped_and_the_instruction_is_repe
         after.contains("Output only the summary, covering the points the instructions list."),
         "{after}"
     );
-    assert_eq!(request.reasoning, Some(mycode_core::ReasoningLevel::Off));
+    assert_eq!(request.reasoning, Some(mycode_agent::ReasoningLevel::Off));
 }
 
 #[test]
@@ -365,7 +362,7 @@ async fn a_twelve_token_one_line_summary_is_rejected_and_history_is_kept() {
         );
     }
     assert!(
-        mycode_config::read_compaction(&home, "session-short")
+        mycode_agent::read_compaction(&home, "session-short")
             .expect("read")
             .is_none()
     );
@@ -392,7 +389,7 @@ fn system_prompt_and_tools_count_toward_the_auto_trigger() {
         super::super::compaction_split(&history, with_prefix, threshold, 4_000, scale).is_some(),
         "the same history plus the prompt and tools is over the trigger"
     );
-    let tools = [mycode_core::ToolSpec {
+    let tools = [mycode_agent::ToolSpec {
         name: "read".to_owned(),
         description: "Read a file".to_owned(),
         params_schema: serde_json::json!({"type": "object"}),
@@ -406,12 +403,12 @@ fn system_prompt_and_tools_count_toward_the_auto_trigger() {
 #[tokio::test]
 async fn a_history_without_a_checkpoint_slot_compacts_in_memory_only() {
     let (root, home) = scratch_home();
-    mycode_config::write_compaction(
+    mycode_agent::write_compaction(
         &home,
         "parent-session",
-        &mycode_config::CompactionCheckpoint {
-            format_version: mycode_config::COMPACTION_FORMAT_VERSION,
-            kind: mycode_config::COMPACTION_KIND.to_owned(),
+        &mycode_agent::CompactionCheckpoint {
+            format_version: mycode_agent::COMPACTION_FORMAT_VERSION,
+            kind: mycode_agent::COMPACTION_KIND.to_owned(),
             session_id: "parent-session".to_owned(),
             branch_id: "branch-p".to_owned(),
             covered_head: "head-p".to_owned(),
@@ -452,7 +449,7 @@ async fn a_history_without_a_checkpoint_slot_compacts_in_memory_only() {
         !sent.contains("PARENT-SUMMARY"),
         "the parent checkpoint leaked in"
     );
-    let parent = mycode_config::read_compaction(&home, "parent-session")
+    let parent = mycode_agent::read_compaction(&home, "parent-session")
         .expect("read")
         .expect("still there");
     assert!(

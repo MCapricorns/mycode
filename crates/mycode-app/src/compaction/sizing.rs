@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use mycode_core::{ContentBlock, Message, ToolSpec, Usage};
+use mycode_agent::{ContentBlock, Message, ToolSpec, Usage};
 
 /// Fallback trigger when the catalog/settings have no context window.
 const DEFAULT_THRESHOLD_TOKENS: usize = 48_000;
@@ -387,7 +387,7 @@ fn json_escape_extra(ch: char) -> usize {
 mod tests {
     use std::sync::Arc;
 
-    use mycode_core::{
+    use mycode_agent::{
         AssistantMessage, ContentBlock, Message, StopReason, TextBlock, Usage, UserMessage,
     };
 

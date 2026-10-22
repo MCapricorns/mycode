@@ -35,7 +35,7 @@ pub(super) fn settings_loaded(state: &mut WorkspaceState, settings: SettingsStat
 }
 
 pub(super) fn language_selected(state: &mut WorkspaceState, language: String) {
-    if !mycode_config::VALID_LANGUAGES.contains(&language.as_str()) {
+    if !mycode_app::VALID_LANGUAGES.contains(&language.as_str()) {
         return;
     }
     crate::i18n::apply_language(&language);
@@ -54,7 +54,7 @@ pub(super) fn theme_selected(state: &mut WorkspaceState, theme: &str) {
 }
 
 pub(super) fn font_size_selected(state: &mut WorkspaceState, font_size: String) {
-    if !mycode_config::VALID_FONT_SIZES.contains(&font_size.as_str()) {
+    if !mycode_app::VALID_FONT_SIZES.contains(&font_size.as_str()) {
         return;
     }
     if let Some(settings) = state.settings.as_mut() {
@@ -73,9 +73,9 @@ pub(super) fn settings_saved(state: &mut WorkspaceState, revision: u64, edit_epo
     }
 }
 
-pub(super) fn mcp_added(state: &mut WorkspaceState, server: mycode_config::McpServerSettings) {
+pub(super) fn mcp_added(state: &mut WorkspaceState, server: mycode_app::McpServerSettings) {
     edit_settings(state, |settings| {
-        if settings.mcp_servers.len() < mycode_config::MAX_MCP_SERVERS {
+        if settings.mcp_servers.len() < mycode_app::MAX_MCP_SERVERS {
             settings.mcp_servers.push(server);
             true
         } else {

@@ -10,7 +10,7 @@
 
 use serde_json::{Value, json};
 
-use mycode_core::ReasoningLevel;
+use mycode_config::ReasoningLevel;
 
 use crate::wire_common::{ReasoningReplay, ThinkingWire};
 

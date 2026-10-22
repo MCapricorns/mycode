@@ -36,7 +36,7 @@ pub enum ProviderChoice {
     /// Keep the session's own model (roles only).
     Inherit,
     /// A recently used provider+model pin.
-    Pin(mycode_config::ModelPin),
+    Pin(mycode_app::ModelPin),
     /// A configured provider; picking it opens the model step.
     Provider(String),
 }
@@ -162,9 +162,9 @@ pub const RECENT_SHOWN: usize = 3;
 /// The first [`RECENT_SHOWN`] pins `offered` accepts, newest first. A
 /// disabled provider or a hidden model is skipped, not counted.
 pub fn visible_recent(
-    recent: &[mycode_config::ModelPin],
-    offered: impl Fn(&mycode_config::ModelPin) -> bool,
-) -> Vec<&mycode_config::ModelPin> {
+    recent: &[mycode_app::ModelPin],
+    offered: impl Fn(&mycode_app::ModelPin) -> bool,
+) -> Vec<&mycode_app::ModelPin> {
     recent
         .iter()
         .filter(|pin| offered(pin))
@@ -173,7 +173,7 @@ pub fn visible_recent(
 }
 
 /// The recent models this picker suggests.
-pub fn recent_pins(vm: &WorkspaceState) -> Vec<mycode_config::ModelPin> {
+pub fn recent_pins(vm: &WorkspaceState) -> Vec<mycode_app::ModelPin> {
     visible_recent(&vm.recent_models, |pin| {
         offers_model(vm, &pin.provider, &pin.model)
     })
@@ -317,7 +317,7 @@ mod tests {
         ModelChoice, RECENT_SHOWN, filter_model_choices, merge_model_choices, preferred_index,
         selected_model_label, visible_recent,
     };
-    use mycode_config::ModelPin;
+    use mycode_app::ModelPin;
 
     #[test]
     fn the_selected_model_label_names_the_provider() {
@@ -330,20 +330,18 @@ mod tests {
         state.selected_model = Some("gpt-5".to_owned());
         // Without a catalog both halves fall back to the raw ids.
         assert_eq!(selected_model_label(&state), "magpie · gpt-5");
-        state.catalog = Some(std::sync::Arc::new(
-            mycode_providers::catalog::CatalogDocument {
-                providers: vec![mycode_providers::catalog::CatalogProvider {
-                    id: "magpie".to_owned(),
-                    name: "Magpie".to_owned(),
-                    models: vec![mycode_providers::catalog::CatalogModel {
-                        id: "gpt-5".to_owned(),
-                        name: "GPT-5".to_owned(),
-                        ..mycode_providers::catalog::CatalogModel::default()
-                    }],
-                    ..mycode_providers::catalog::CatalogProvider::default()
+        state.catalog = Some(std::sync::Arc::new(mycode_app::catalog::CatalogDocument {
+            providers: vec![mycode_app::catalog::CatalogProvider {
+                id: "magpie".to_owned(),
+                name: "Magpie".to_owned(),
+                models: vec![mycode_app::catalog::CatalogModel {
+                    id: "gpt-5".to_owned(),
+                    name: "GPT-5".to_owned(),
+                    ..mycode_app::catalog::CatalogModel::default()
                 }],
-            },
-        ));
+                ..mycode_app::catalog::CatalogProvider::default()
+            }],
+        }));
         assert_eq!(selected_model_label(&state), "Magpie · GPT-5");
         // A model picked without a provider half keeps the bare name.
         state.selected_provider = None;

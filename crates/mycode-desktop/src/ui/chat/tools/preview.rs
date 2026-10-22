@@ -126,7 +126,7 @@ pub(super) fn tool_status_node(status: &str, alert: bool, theme: &Theme) -> gpui
 
 /// The path inside a `read` target.
 ///
-/// [`mycode_core::tool_target`] appends a line window (`path L520+620` or
+/// [`mycode_frontend::tool_target`] appends a line window (`path L520+620` or
 /// `path +200`); the path itself may contain spaces, so only a trailing
 /// window is stripped.
 pub(super) fn read_path(target: &str) -> &str {

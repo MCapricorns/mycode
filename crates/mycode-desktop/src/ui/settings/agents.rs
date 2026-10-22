@@ -76,7 +76,7 @@ pub(super) fn render_agents_section(
 fn role_card(
     workspace: &mut Workspace,
     window: &mut Window,
-    role: &mycode_config::SubagentRole,
+    role: &mycode_frontend::SubagentRole,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let (enabled, thinking, provider, model) = {
@@ -136,9 +136,10 @@ fn role_card(
                         .gap_2()
                         .child(field_label(t("Enabled", "启用")))
                         .child(capability_chip(role.isolation.as_str(), theme))
-                        .when(role.origin != mycode_config::RoleOrigin::Builtin, |this| {
-                            this.child(origin_chip(role.origin, theme))
-                        }),
+                        .when(
+                            role.origin != mycode_frontend::RoleOrigin::Builtin,
+                            |this| this.child(origin_chip(role.origin, theme)),
+                        ),
                 )
                 .child(
                     Switch::new(format!("agent-enabled-{name}"))
@@ -246,13 +247,13 @@ fn thinking_options(
 }
 
 fn origin_chip(
-    origin: mycode_config::RoleOrigin,
+    origin: mycode_frontend::RoleOrigin,
     theme: &gpui_kit::component::theme::Theme,
 ) -> AnyElement {
     let label = match origin {
-        mycode_config::RoleOrigin::User => t("User", "用户"),
-        mycode_config::RoleOrigin::Project => t("Project", "项目"),
-        mycode_config::RoleOrigin::Builtin => t("Built-in", "内置"),
+        mycode_frontend::RoleOrigin::User => t("User", "用户"),
+        mycode_frontend::RoleOrigin::Project => t("Project", "项目"),
+        mycode_frontend::RoleOrigin::Builtin => t("Built-in", "内置"),
     };
     div()
         .h(px(20.))
@@ -291,10 +292,10 @@ fn capability_chip(isolation: &str, theme: &gpui_kit::component::theme::Theme) -
 /// Scout and Artisan stay the two leading cards, in that order. Every other
 /// discovered role is listed after them. Retired names are not inserted.
 fn group_settings_roles(
-    catalog: &mycode_config::RoleCatalog,
+    catalog: &mycode_frontend::RoleCatalog,
 ) -> (
-    Vec<&mycode_config::SubagentRole>,
-    Vec<&mycode_config::SubagentRole>,
+    Vec<&mycode_frontend::SubagentRole>,
+    Vec<&mycode_frontend::SubagentRole>,
 ) {
     const PRIMARY: [&str; 2] = ["scout", "artisan"];
     let primary = PRIMARY
@@ -322,7 +323,7 @@ mod tests {
 
     #[test]
     fn settings_roles_are_scout_and_artisan() {
-        let roles = mycode_config::builtin_roles();
+        let roles = mycode_frontend::builtin_roles();
         let names: Vec<_> = roles.roles.iter().map(|role| role.name.as_str()).collect();
         assert_eq!(names, ["scout", "artisan"]);
         let (primary, additional) = super::group_settings_roles(&roles);
@@ -338,13 +339,13 @@ mod tests {
 
     #[test]
     fn discovered_roles_follow_the_builtin_cards() {
-        let mut catalog = mycode_config::builtin_roles();
+        let mut catalog = mycode_frontend::builtin_roles();
         catalog
             .roles
-            .push(sample_role("reviewer", mycode_config::RoleOrigin::User));
+            .push(sample_role("reviewer", mycode_frontend::RoleOrigin::User));
         catalog
             .roles
-            .push(sample_role("steward", mycode_config::RoleOrigin::Project));
+            .push(sample_role("steward", mycode_frontend::RoleOrigin::Project));
         catalog
             .roles
             .sort_by(|left, right| left.name.cmp(&right.name));
@@ -364,19 +365,22 @@ mod tests {
             ["reviewer", "steward"]
         );
         assert!(
-            !mycode_config::builtin_roles()
+            !mycode_frontend::builtin_roles()
                 .names()
                 .iter()
                 .any(|name| name == "steward" || name == "sentinel")
         );
     }
 
-    fn sample_role(name: &str, origin: mycode_config::RoleOrigin) -> mycode_config::SubagentRole {
-        mycode_config::SubagentRole {
+    fn sample_role(
+        name: &str,
+        origin: mycode_frontend::RoleOrigin,
+    ) -> mycode_frontend::SubagentRole {
+        mycode_frontend::SubagentRole {
             name: name.to_owned(),
             description: "role".into(),
-            isolation: mycode_config::RoleIsolation::Shared,
-            thinking: mycode_config::RoleThinking::Default,
+            isolation: mycode_frontend::RoleIsolation::Shared,
+            thinking: mycode_frontend::RoleThinking::Default,
             tools: None,
             prompt: "work".into(),
             origin,

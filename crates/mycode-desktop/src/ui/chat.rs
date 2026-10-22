@@ -166,7 +166,7 @@ pub(super) fn render_chat(
             match item {
                 TranscriptBlock::User { entry, index } => {
                     turn_has_assistant_header = false;
-                    let child = if mycode_app::is_compaction_summary(&entry.text) {
+                    let child = if mycode_frontend::is_compaction_summary(&entry.text) {
                         let open = workspace.summary_open(&entry.event_id);
                         transcript::render_summary_entry(entry, open, cx).into_any_element()
                     } else {

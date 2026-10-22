@@ -7,32 +7,16 @@ license.workspace = true
 
 [dependencies]
 parking_lot.workspace = true
-# Sync primitives only: the git watcher and status threads hand results to
-# the gpui executor through tokio channels, which are runtime-independent.
+# Sync primitives only; channels are runtime-independent.
 tokio = { workspace = true, features = ["sync"] }
-# Fenced code is colored by mycode-frontend's lightweight lexer, not
-# tree-sitter: the `tree-sitter-languages` grammars were dropped to halve
-# the binary. This crate does not depend on tree-sitter itself. gpui-kit is
-# the GUI framework
-# and stays in this binary only: gpui-base 0.8 links the smol runtime as a
-# non-optional native dependency (no feature drops it), so the desktop
-# binary carries smol beside tokio. Every other workspace crate is tokio-only.
+# gpui-kit stays in this binary only; it links the smol runtime beside
+# tokio. Fenced code is colored by mycode-frontend's lexer, not tree-sitter.
 gpui-kit = "0.8.0"
 chrono.workspace = true
 base64.workspace = true
-# The clipboard hands a Windows screenshot over as a bitmap; providers take
-# PNG, so the picture is decoded and re-encoded before it is attached.
+# Clipboard bitmaps are re-encoded to PNG for providers.
 image.workspace = true
-mycode-app = { path = "../mycode-app" }
-mycode-config = { path = "../mycode-config" }
-mycode-core = { path = "../mycode-core" }
 mycode-frontend = { path = "../mycode-frontend" }
-mycode-providers = { path = "../mycode-providers" }
-mycode-tools = { path = "../mycode-tools" }
-# The global allocator (mimalloc) and VC-LTL link live in the leaf crates
-# mycode-core / mycode-config so every target in the workspace shares them;
-# nothing is declared here on purpose.
-
 [features]
 # Headless GPUI layout tests. Off for the normal desktop build.
 test-support = ["gpui-kit/test-support"]

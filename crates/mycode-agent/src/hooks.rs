@@ -6,7 +6,7 @@
 //! refused as too large is compacted and sent once more.
 //! There is no before-tool observer: turns do not snapshot files.
 
-use mycode_core::Request;
+use mycode_tools::Request;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;

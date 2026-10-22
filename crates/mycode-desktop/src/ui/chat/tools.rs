@@ -420,7 +420,7 @@ pub(super) fn tool_call_parts(
 }
 
 fn is_shell_tool(tool: &str) -> bool {
-    tool == "shell" || mycode_tools::ShellKind::is_tool_name(tool)
+    tool == "shell" || mycode_frontend::ShellKind::is_tool_name(tool)
 }
 
 fn tool_icon(tool: &str) -> IconName {

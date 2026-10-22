@@ -1,4 +1,4 @@
-use mycode_core::{ReasoningLevel, Request};
+use mycode_config::{ReasoningLevel, Request};
 
 use super::apply_reasoning_effort;
 use crate::family::minimax_target;

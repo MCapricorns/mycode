@@ -7,19 +7,19 @@ mod prefix;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use mycode_agent::ProviderError;
 use mycode_agent::session::{EventKind, HeadStamp};
-use mycode_config::{
+use mycode_agent::{
     AppSettings, AuthorityRevision, HomeLayout, ProviderSettings, replace_app_settings,
 };
-use mycode_core::ProviderError;
-use mycode_providers::{ResolvedProvider, SseTransport, TransportCall};
+use mycode_agent::{ResolvedProvider, SseTransport, TransportCall};
 
 use super::{TurnControl, chat_turn, end_turn, run_chat_turn_on};
 use crate::state::CoreState;
 
 /// The gateway list a fixture publishes: one `magpie` row.
-pub(super) fn test_catalog(models: &[(&str, u64)]) -> mycode_providers::catalog::CatalogDocument {
-    use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+pub(super) fn test_catalog(models: &[(&str, u64)]) -> mycode_agent::catalog::CatalogDocument {
+    use mycode_agent::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
     CatalogDocument {
         providers: vec![CatalogProvider {
             id: "magpie".to_owned(),
@@ -96,7 +96,7 @@ impl SseTransport for HistoryTransport {
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    Output = Result<mycode_agent::transport::ByteStream, ProviderError>,
                 > + Send
                 + 'a,
         >,
@@ -122,7 +122,7 @@ impl SseTransport for HistoryTransport {
                     cancel.cancelled().await;
                     let _ = sender
                         .send(Err(ProviderError::new(
-                            mycode_core::ProviderErrorKind::Cancelled,
+                            mycode_agent::ProviderErrorKind::Cancelled,
                         )))
                         .await;
                 });
@@ -154,7 +154,7 @@ struct TurnFixture {
 async fn turn_fixture() -> TurnFixture {
     let (root, home) = scratch();
     let settings = AppSettings {
-        magpie: mycode_config::MagpieSettings {
+        magpie: mycode_agent::MagpieSettings {
             enabled: true,
             base_url: "http://127.0.0.1:3425/v1".to_owned(),
             api_key: "test-key".to_owned(),
@@ -164,7 +164,7 @@ async fn turn_fixture() -> TurnFixture {
         ..AppSettings::default()
     };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+    let cwd = home.root().join(mycode_agent::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
     let state = Arc::new(CoreState::new(home, Vec::new()));
     *state.catalog.write().expect("catalog") = Arc::new(test_catalog(&[("test-model", 200_000)]));
@@ -423,9 +423,9 @@ async fn interrupt_then_send_keeps_partial_and_cache_key() {
     let rendered = history
         .iter()
         .map(|message| match message.as_ref() {
-            mycode_core::Message::Assistant(assistant) => assistant.text(),
-            mycode_core::Message::User(user) => super::pump::plain_user_text(user),
-            mycode_core::Message::ToolResult(_) => String::new(),
+            mycode_agent::Message::Assistant(assistant) => assistant.text(),
+            mycode_agent::Message::User(user) => super::pump::plain_user_text(user),
+            mycode_agent::Message::ToolResult(_) => String::new(),
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -638,7 +638,7 @@ impl SseTransport for HangingSummaryTransport {
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<mycode_providers::transport::ByteStream, ProviderError>,
+                    Output = Result<mycode_agent::transport::ByteStream, ProviderError>,
                 > + Send
                 + 'a,
         >,
@@ -653,7 +653,7 @@ impl SseTransport for HangingSummaryTransport {
                     cancel.cancelled().await;
                     let _ = sender
                         .send(Err(ProviderError::new(
-                            mycode_core::ProviderErrorKind::Cancelled,
+                            mycode_agent::ProviderErrorKind::Cancelled,
                         )))
                         .await;
                 });
@@ -673,7 +673,7 @@ impl SseTransport for HangingSummaryTransport {
 async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
     let (root, home) = scratch();
     let settings = AppSettings {
-        magpie: mycode_config::MagpieSettings {
+        magpie: mycode_agent::MagpieSettings {
             enabled: true,
             base_url: "http://127.0.0.1:3425/v1".to_owned(),
             api_key: "test-key".to_owned(),
@@ -683,7 +683,7 @@ async fn a_cancel_inside_the_first_request_hook_still_ends_the_turn() {
         ..AppSettings::default()
     };
     replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).expect("settings");
-    let cwd = home.root().join(mycode_config::SCRATCH_DIR);
+    let cwd = home.root().join(mycode_agent::SCRATCH_DIR);
     std::fs::create_dir_all(&cwd).expect("cwd");
     let state = Arc::new(CoreState::new(home, Vec::new()));
     *state.catalog.write().expect("catalog") = Arc::new(test_catalog(&[("test-model", 26_000)]));

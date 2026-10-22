@@ -46,7 +46,7 @@ async fn grep_finds_lf_text_without_an_external_rg() {
         .content
         .iter()
         .filter_map(|block| match block {
-            mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+            mycode_providers::ContentBlock::Text(text) => Some(text.text.as_str()),
             _ => None,
         })
         .collect();
@@ -107,7 +107,7 @@ async fn a_regex_looking_literal_pattern_gets_a_hint() {
             .content
             .iter()
             .filter_map(|block| match block {
-                mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                mycode_providers::ContentBlock::Text(text) => Some(text.text.as_str()),
                 _ => None,
             })
             .collect::<String>()
@@ -170,7 +170,7 @@ async fn grep_text(root: &std::path::Path, args: GrepArgs) -> String {
         .content
         .iter()
         .filter_map(|block| match block {
-            mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+            mycode_providers::ContentBlock::Text(text) => Some(text.text.as_str()),
             _ => None,
         })
         .collect()

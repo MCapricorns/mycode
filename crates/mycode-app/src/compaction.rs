@@ -18,8 +18,8 @@ mod sizing;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use mycode_core::{Message, Provider as _, Request, StreamEvent};
-use mycode_providers::WireProvider;
+use mycode_agent::WireProvider;
+use mycode_agent::{Message, Provider as _, Request, StreamEvent};
 use tokio_util::sync::CancellationToken;
 
 use self::echo::{split_echo, user_echo, with_echo};
@@ -123,7 +123,7 @@ pub(crate) struct CompactScope<'a> {
 /// history was read at.
 #[derive(Clone, Copy)]
 pub(crate) struct CheckpointSlot<'a> {
-    pub home: &'a mycode_config::HomeLayout,
+    pub home: &'a mycode_agent::HomeLayout,
     pub session_id: &'a str,
     pub branch_id: &'a str,
     pub head: &'a str,
@@ -133,7 +133,7 @@ pub(crate) struct CheckpointSlot<'a> {
 /// turn's borrows.
 #[derive(Clone)]
 pub(crate) struct CheckpointKey {
-    pub home: mycode_config::HomeLayout,
+    pub home: mycode_agent::HomeLayout,
     pub session_id: String,
     pub branch_id: String,
     pub head: String,
@@ -438,9 +438,9 @@ pub(crate) async fn compact_history(
     if scope.cancel.is_cancelled() {
         return failed(history, "compaction cancelled".to_owned());
     }
-    let checkpoint = mycode_config::CompactionCheckpoint {
-        format_version: mycode_config::COMPACTION_FORMAT_VERSION,
-        kind: mycode_config::COMPACTION_KIND.to_owned(),
+    let checkpoint = mycode_agent::CompactionCheckpoint {
+        format_version: mycode_agent::COMPACTION_FORMAT_VERSION,
+        kind: mycode_agent::COMPACTION_KIND.to_owned(),
         session_id: slot.session_id.to_owned(),
         branch_id: slot.branch_id.to_owned(),
         covered_head: slot.head.to_owned(),
@@ -452,7 +452,7 @@ pub(crate) async fn compact_history(
     let write_home = slot.home.clone();
     let write_session = slot.session_id.to_owned();
     let written = tokio::task::spawn_blocking(move || {
-        mycode_config::write_compaction(&write_home, &write_session, &checkpoint)
+        mycode_agent::write_compaction(&write_home, &write_session, &checkpoint)
     })
     .await
     .map_err(|error| format!("checkpoint write task failed: {error}"));
@@ -480,7 +480,7 @@ fn request_tokens(history: &[Arc<Message>], overhead: usize, scale: TokenScale) 
 
 fn with_summary(summary: &str, tail: &[Arc<Message>]) -> Vec<Arc<Message>> {
     let mut compacted = Vec::with_capacity(tail.len() + 1);
-    compacted.push(Arc::new(Message::User(mycode_core::UserMessage::text(
+    compacted.push(Arc::new(Message::User(mycode_agent::UserMessage::text(
         request_summary_text(summary),
     ))));
     compacted.extend(tail.iter().cloned());
@@ -513,7 +513,7 @@ fn request_summary_text(summary: &str) -> String {
 /// then the ledger length minus that tail. Any mismatch keeps the older
 /// checkpoint, which stays correct, just less recent.
 pub(crate) fn persist_turn_summary(
-    home: &mycode_config::HomeLayout,
+    home: &mycode_agent::HomeLayout,
     target: &TurnCheckpoint<'_>,
     ledger: &[Arc<Message>],
     memory: &[Arc<Message>],
@@ -550,9 +550,9 @@ pub(crate) fn persist_turn_summary(
     {
         return false;
     }
-    let checkpoint = mycode_config::CompactionCheckpoint {
-        format_version: mycode_config::COMPACTION_FORMAT_VERSION,
-        kind: mycode_config::COMPACTION_KIND.to_owned(),
+    let checkpoint = mycode_agent::CompactionCheckpoint {
+        format_version: mycode_agent::COMPACTION_FORMAT_VERSION,
+        kind: mycode_agent::COMPACTION_KIND.to_owned(),
         session_id: target.session_id.to_owned(),
         branch_id: target.branch_id.to_owned(),
         covered_head: target.head.to_owned(),
@@ -561,7 +561,7 @@ pub(crate) fn persist_turn_summary(
         model: target.model.to_owned(),
         created_at_unix: crate::unix_now().as_secs(),
     };
-    mycode_config::write_compaction(home, target.session_id, &checkpoint).is_ok()
+    mycode_agent::write_compaction(home, target.session_id, &checkpoint).is_ok()
 }
 
 /// Where [`persist_turn_summary`] files its checkpoint: the session branch
@@ -578,7 +578,7 @@ pub(crate) struct TurnCheckpoint<'a> {
 /// compacted session opens with the stored summary, so this is the cheap
 /// check before [`persist_turn_summary`] replays the ledger.
 pub(crate) fn opens_with_unstored_summary(
-    home: &mycode_config::HomeLayout,
+    home: &mycode_agent::HomeLayout,
     session_id: &str,
     branch_id: &str,
     first: Option<&Message>,
@@ -592,11 +592,11 @@ pub(crate) fn opens_with_unstored_summary(
 
 /// The checkpoint stored for `session_id`, when it belongs to `branch_id`.
 fn stored_checkpoint(
-    home: &mycode_config::HomeLayout,
+    home: &mycode_agent::HomeLayout,
     session_id: &str,
     branch_id: &str,
-) -> Option<mycode_config::CompactionCheckpoint> {
-    mycode_config::read_compaction(home, session_id)
+) -> Option<mycode_agent::CompactionCheckpoint> {
+    mycode_agent::read_compaction(home, session_id)
         .ok()
         .flatten()
         .filter(|checkpoint| checkpoint.branch_id == branch_id)
@@ -640,7 +640,7 @@ fn message_text(message: &Message) -> String {
 /// blocks) and are omitted. A leading inline `<think>...</think>` in the
 /// assistant text is omitted too. A later mention of the tag stays, and
 /// user or tool text is left unchanged.
-fn assistant_transcript_text(blocks: &[mycode_core::ContentBlock]) -> String {
+fn assistant_transcript_text(blocks: &[mycode_agent::ContentBlock]) -> String {
     let raw = blocks_text(blocks);
     let stripped = strip_leading_think(&raw);
     if stripped.len() == raw.len() {
@@ -670,20 +670,20 @@ fn strip_leading_think(text: &str) -> &str {
     }
 }
 
-fn blocks_text(blocks: &[mycode_core::ContentBlock]) -> String {
+fn blocks_text(blocks: &[mycode_agent::ContentBlock]) -> String {
     let mut out = String::new();
     let mut first = true;
     for block in blocks {
         let separator = if first { "" } else { "\n" };
         match block {
-            mycode_core::ContentBlock::Text(text) => {
+            mycode_agent::ContentBlock::Text(text) => {
                 out.push_str(separator);
                 out.push_str(&text.text);
             }
-            mycode_core::ContentBlock::ToolCall(call) => {
+            mycode_agent::ContentBlock::ToolCall(call) => {
                 let _ = write!(out, "{separator}tool_call {} {}", call.name, call.arguments);
             }
-            mycode_core::ContentBlock::Thinking(_) | mycode_core::ContentBlock::Image(_) => {
+            mycode_agent::ContentBlock::Thinking(_) | mycode_agent::ContentBlock::Image(_) => {
                 continue;
             }
         }
@@ -704,7 +704,7 @@ fn is_tool_result(message: &Message) -> bool {
 /// longer fits is summarized again instead of reused.
 fn checkpoint_matches(
     history: &[Arc<Message>],
-    checkpoint: &mycode_config::CompactionCheckpoint,
+    checkpoint: &mycode_agent::CompactionCheckpoint,
     head: &str,
     auto_threshold: usize,
     overhead: usize,
@@ -740,7 +740,7 @@ pub(crate) fn is_summary_message(message: &Message) -> bool {
     user.content
         .iter()
         .find_map(|block| match block {
-            mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+            mycode_agent::ContentBlock::Text(text) => Some(text.text.as_str()),
             _ => None,
         })
         .is_some_and(is_display_only_summary)

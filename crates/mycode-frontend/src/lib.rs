@@ -1,17 +1,9 @@
-//! `mycode-frontend` — the UI-agnostic product layer shared by MYCode
-//! frontends.
+//! `mycode-frontend` — the UI-agnostic product layer shared by MYCode frontends.
 //!
-//! Everything that is not pixels lives here: the view-model state machine
-//! ([`view_model::WorkspaceState`] plus the [`view_model::FrontendAction`]
-//! reducer), interface localization, read-only git status for the changes
-//! panel, the keyboard-shortcut list the settings page shows, and the
-//! pre-window argument and launch steps. A frontend renders the
-//! state and feeds actions back; when product behavior changes, this crate
-//! is where the change lands so every frontend picks it up at once.
-//!
-//! The bridge to the application core is [`mycode_app::CoreBridge`]: commands
-//! in, replies and streaming events out. Frontends never talk to sessions,
-//! providers, tools, or credentials directly.
+//! Everything that is not pixels: the view-model state machine
+//! ([`view_model`]), i18n, read-only git status, shortcuts, and the pre-window
+//! launch steps. A frontend renders the state and feeds actions back; product
+//! behavior changes land here so every frontend picks them up at once.
 
 pub mod driver;
 pub mod forms;
@@ -25,8 +17,7 @@ pub mod stream;
 mod theme;
 pub mod view_model;
 
-pub use theme::{normalize_font_size, normalize_theme};
+// Chain re-export: successors see every lower layer through this crate only.
+pub use mycode_app::*;
 
-/// Returns the wall-clock duration since the Unix epoch, saturating at zero
-/// when the system clock predates the epoch.
-pub use mycode_app::unix_now;
+pub use theme::{normalize_font_size, normalize_theme};

@@ -24,11 +24,11 @@ pub struct SettingsState {
     /// `system`), or a proxy URL.
     pub proxy: String,
     /// The magpie gateway binding (address, key, model, hidden models).
-    pub magpie: mycode_config::MagpieSettings,
+    pub magpie: mycode_app::MagpieSettings,
     /// The one provider row the picker reads: magpie's gateway.
-    pub providers: Vec<mycode_config::ProviderSettings>,
+    pub providers: Vec<mycode_app::ProviderSettings>,
     /// MCP servers.
-    pub mcp_servers: Vec<mycode_config::McpServerSettings>,
+    pub mcp_servers: Vec<mycode_app::McpServerSettings>,
     /// Appearance theme: `dark` or `light`.
     pub theme: String,
     /// UI language: `auto`, `en`, or `zh`.
@@ -45,9 +45,9 @@ pub struct SettingsState {
     /// MCP key ids (form `mcp-<server>`) that have a stored key.
     pub mcp_with_keys: Vec<String>,
     /// Subagent role enablement, model routes, and thinking overrides.
-    pub subagents: mycode_config::SubagentSettings,
+    pub subagents: mycode_app::SubagentSettings,
     /// Skills switched off on the Skills page.
-    pub skills: mycode_config::SkillsSettings,
+    pub skills: mycode_app::SkillsSettings,
     /// A save is in flight.
     pub saving: bool,
     /// Unsaved local edits exist.
@@ -61,9 +61,9 @@ pub struct SettingsState {
 impl SettingsState {
     /// Projects one settings document plus its revision.
     #[must_use]
-    pub fn from_settings(settings: &mycode_config::AppSettings, revision: u64) -> Self {
+    pub fn from_settings(settings: &mycode_app::AppSettings, revision: u64) -> Self {
         let providers = if settings.magpie.is_active() {
-            vec![mycode_config::ProviderSettings::magpie(
+            vec![mycode_app::ProviderSettings::magpie(
                 settings.magpie.endpoint_base(),
                 vec![settings.magpie.model.clone()],
                 settings.magpie.hidden_models.clone(),
@@ -93,12 +93,12 @@ impl SettingsState {
 
     /// Builds the document the editor currently shows.
     #[must_use]
-    pub fn to_settings(&self) -> mycode_config::AppSettings {
-        mycode_config::AppSettings {
+    pub fn to_settings(&self) -> mycode_app::AppSettings {
+        mycode_app::AppSettings {
             proxy: self.proxy.clone(),
             magpie: self.magpie.clone(),
             mcp_servers: self.mcp_servers.clone(),
-            appearance: mycode_config::AppearanceSettings {
+            appearance: mycode_app::AppearanceSettings {
                 theme: self.theme.clone(),
                 language: self.language.clone(),
                 font_size: self.font_size.clone(),
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn font_size_round_trips_through_the_editor_projection() {
-        let mut document = mycode_config::AppSettings::default();
+        let mut document = mycode_app::AppSettings::default();
         document.appearance.font_size = "xl".to_owned();
         let state = super::SettingsState::from_settings(&document, 1);
         assert_eq!(state.font_size, "xl");

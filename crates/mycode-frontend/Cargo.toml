@@ -7,19 +7,10 @@ license.workspace = true
 
 [dependencies]
 mycode-app = { path = "../mycode-app" }
-mycode-config = { path = "../mycode-config" }
-mycode-core = { path = "../mycode-core" }
-mycode-providers = { path = "../mycode-providers" }
-mycode-tools = { path = "../mycode-tools" }
-# Sync primitives and the executor-agnostic reply futures: this crate never
-# owns a runtime.
+# Sync primitives and executor-agnostic reply futures only.
 tokio = { workspace = true, features = ["sync", "time"] }
 # Filesystem events that keep the open folder's git status fresh.
 notify = "8.2.0"
-# The global allocator (mimalloc) and VC-LTL link live in the leaf crates
-# mycode-core / mycode-config so every target in the workspace shares them;
-# nothing is declared here on purpose.
-
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Globalization"] }
 

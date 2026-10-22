@@ -4,7 +4,7 @@
 //! branch heads, event counts, and byte offsets.
 //! `<home>/sessions/<project key>/<id>/<branch>.jsonl` is the event source of
 //! truth: one JSON object per line. The project key is the folder the
-//! session was created in ([`mycode_config::project_dir_key`]). Payloads at or
+//! session was created in ([`mycode_tools::project_dir_key`]). Payloads at or
 //! above [`EXTERNAL_PAYLOAD_THRESHOLD`] live in `payloads/<event-id>.bin`;
 //! the line names the file and carries its digest. They are never stored as
 //! SQLite blobs.
@@ -39,7 +39,7 @@ pub(crate) const PAYLOAD_FILE_SUFFIX: &str = ".bin";
 
 use std::path::PathBuf;
 
-use mycode_config::HomeLayout;
+use mycode_tools::HomeLayout;
 
 use super::ids::{BranchId, SessionEventId, SessionId};
 
@@ -57,12 +57,12 @@ impl<'a> SessionPaths<'a> {
     }
 
     /// Binds the directory `session` already has. A session whose directory
-    /// is gone gets a fresh one under [`mycode_config::NO_PROJECT_DIR`], so
+    /// is gone gets a fresh one under [`mycode_tools::NO_PROJECT_DIR`], so
     /// an empty session can still take its first write.
     pub(crate) fn locate(home: &'a HomeLayout, session: &SessionId) -> Result<Self, StoreError> {
-        let dir = match mycode_config::locate_session_dir(home, session.as_str()) {
+        let dir = match mycode_tools::locate_session_dir(home, session.as_str()) {
             Ok(Some(dir)) => dir,
-            Ok(None) => mycode_config::new_session_dir(None, session.as_str())
+            Ok(None) => mycode_tools::new_session_dir(None, session.as_str())
                 .map_err(|_| StoreError::Unavailable)?,
             Err(_) => return Err(StoreError::Storage),
         };
@@ -102,12 +102,12 @@ impl<'a> SessionPaths<'a> {
     /// # Errors
     ///
     /// Returns the mycode-config path-escape error when a component is unsafe.
-    pub(crate) fn absolute(&self, relative: &str) -> Result<PathBuf, mycode_config::ConfigError> {
+    pub(crate) fn absolute(&self, relative: &str) -> Result<PathBuf, mycode_tools::ConfigError> {
         self.home.owned_join(relative)
     }
 }
 
 /// Absolute path of the session index database.
-pub(crate) fn database_path(home: &HomeLayout) -> Result<PathBuf, mycode_config::ConfigError> {
+pub(crate) fn database_path(home: &HomeLayout) -> Result<PathBuf, mycode_tools::ConfigError> {
     home.owned_join(SESSIONS_DB_FILE)
 }

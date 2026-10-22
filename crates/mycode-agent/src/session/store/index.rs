@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use mycode_config::HomeLayout;
+use mycode_tools::HomeLayout;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use super::super::digest::{format_digest, payload_digest};
@@ -213,7 +213,7 @@ impl SessionStore {
     }
 
     /// Inserts an empty root session whose directory is `dir`, a relative
-    /// owned path ([`mycode_config::new_session_dir`]). A duplicate id is
+    /// owned path ([`mycode_tools::new_session_dir`]). A duplicate id is
     /// [`StoreError::Unavailable`].
     pub(crate) fn create_session(
         &mut self,

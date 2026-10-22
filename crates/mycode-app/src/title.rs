@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use mycode_agent::session::SessionId;
-use mycode_core::{Message, Provider as _, Request, StreamEvent, UserMessage};
-use mycode_providers::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
+use mycode_agent::{Message, Provider as _, Request, StreamEvent, UserMessage};
+use mycode_agent::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
 use tokio_util::sync::CancellationToken;
 
 use crate::BridgeEvent;
@@ -81,8 +81,8 @@ async fn request_title(
     let mut request =
         Request::new().with_message(Message::User(UserMessage::text(title_prompt(seed))));
     // Titles are housekeeping, not reasoning work.
-    request.reasoning = Some(mycode_core::ReasoningLevel::Off);
-    request.max_output_tokens = Some(if mycode_providers::keeps_thinking_when_off(model) {
+    request.reasoning = Some(mycode_agent::ReasoningLevel::Off);
+    request.max_output_tokens = Some(if mycode_agent::keeps_thinking_when_off(model) {
         TITLE_OUTPUT_WITH_THINKING
     } else {
         TITLE_OUTPUT_TOKENS
@@ -184,7 +184,7 @@ fn sanitize_title(raw: &str) -> Option<String> {
 
 /// The index write is a small SQLite update on a short-lived connection;
 /// the actor's in-memory ledgers never cache titles, so it cannot desync.
-async fn persist_title(home: &mycode_config::HomeLayout, session_id: &str, title: &str) -> bool {
+async fn persist_title(home: &mycode_agent::HomeLayout, session_id: &str, title: &str) -> bool {
     let home = home.clone();
     let session_id = session_id.to_owned();
     let title = title.to_owned();

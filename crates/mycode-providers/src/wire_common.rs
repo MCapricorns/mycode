@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 
-use mycode_core::{
+use mycode_config::{
     ContentBlock, ReasoningLevel, StopReason, TextBlock, ThinkingBlock, ToolCall, Usage,
     interrupted_response_text,
 };
@@ -176,9 +176,9 @@ pub(crate) fn apply_anthropic_thinking(
 /// validator still reports infinite recursion on schemars `$ref` + `$defs`
 /// at `operations.items`, so the refs are inlined and the def buckets are
 /// dropped before the body is sent.
-pub(crate) fn tool_parameters(tool: &mycode_core::ToolSpec) -> Value {
+pub(crate) fn tool_parameters(tool: &mycode_config::ToolSpec) -> Value {
     let mut schema = tool.params_schema.clone();
-    mycode_core::inline_schema_refs(&mut schema);
+    mycode_config::inline_schema_refs(&mut schema);
     schema
 }
 

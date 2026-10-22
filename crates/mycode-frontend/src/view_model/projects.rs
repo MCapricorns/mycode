@@ -2,7 +2,7 @@
 //! sidebar's flat view of sessions and folders.
 
 use mycode_app::SessionSummary;
-pub use mycode_config::same_project_path;
+pub use mycode_app::same_project_path;
 
 use super::state::WorkspaceState;
 

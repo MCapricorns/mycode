@@ -28,7 +28,7 @@ fn can_rewind(conversation: &ActiveConversation, index: usize) -> bool {
 impl FrontendDriver {
     /// Persists the durable UI state projection.
     pub fn persist_ui_state(&mut self) {
-        let state = mycode_config::UiState {
+        let state = mycode_app::UiState {
             recent_projects: self.vm.recents.clone(),
             last_project: self.vm.project_dir.clone(),
             auto_update: self.vm.auto_update,

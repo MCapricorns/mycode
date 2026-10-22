@@ -248,7 +248,7 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     let models = vm
         .catalog
         .as_ref()
-        .and_then(|catalog| catalog.provider(mycode_config::MAGPIE_PROVIDER_ID))
+        .and_then(|catalog| catalog.provider(mycode_frontend::MAGPIE_PROVIDER_ID))
         .map(|provider| provider.models.len());
     let magpie_lamp = if !magpie.is_active() || models == Some(0) {
         Some(desk.amber)
@@ -399,7 +399,7 @@ fn render_settings_nav(
                 .border_color(theme.border)
                 .text_xs()
                 .text_color(desk.faint)
-                .child(format!("v{}", mycode_app::current_version()))
+                .child(format!("v{}", mycode_frontend::current_version()))
                 .when_some(
                     nav_footer_status(saving, dirty),
                     |this, (label, is_amber)| {

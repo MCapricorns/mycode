@@ -21,7 +21,7 @@ pub(super) const WINDOW_FLOOR: gpui_kit::Size<Pixels> = size(px(960.), px(600.))
 /// user's own resize is honored down to [`WINDOW_FLOOR`].
 pub(super) fn startup_geometry(
     cx: &App,
-    saved: Option<mycode_config::WindowSize>,
+    saved: Option<mycode_frontend::WindowSize>,
 ) -> (Bounds<Pixels>, gpui_kit::Size<Pixels>) {
     let saved = saved.map(|saved| size(px(saved.width as f32), px(saved.height as f32)));
     let Some(display) = cx.primary_display() else {

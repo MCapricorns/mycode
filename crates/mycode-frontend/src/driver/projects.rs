@@ -83,14 +83,14 @@ impl FrontendDriver {
             .as_deref()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-        (workspace, mycode_config::os_user_home())
+        (workspace, mycode_app::os_user_home())
     }
 
     /// Re-scans the skill directories and folds the result into the state.
     /// Also backs the Skills page's refresh affordance.
     pub fn refresh_skills(&mut self, out: &mut Vec<Effect>) {
         let (workspace, user_home) = self.skill_roots();
-        let skills = mycode_config::discover_skills(&workspace, user_home.as_deref(), None)
+        let skills = mycode_app::discover_skills(&workspace, user_home.as_deref(), None)
             .into_iter()
             .map(|skill| crate::view_model::SkillEntry {
                 slug: skill.slug,
@@ -175,20 +175,20 @@ impl FrontendDriver {
 
     /// Prefills an explicit request to apply one skill.
     fn insert_skill_draft(&mut self, slug: &str, out: &mut Vec<Effect>) {
-        let (title, path) =
-            if let Some(cached) = self.vm.skills.iter().find(|skill| skill.slug == slug) {
-                (cached.title.clone(), cached.path.clone())
-            } else {
-                let (workspace, user_home) = self.skill_roots();
-                let Some(skill) =
-                    mycode_config::discover_skills(&workspace, user_home.as_deref(), None)
-                        .into_iter()
-                        .find(|skill| skill.slug == slug)
-                else {
-                    return;
-                };
-                (skill.title, skill.path.display().to_string())
+        let (title, path) = if let Some(cached) =
+            self.vm.skills.iter().find(|skill| skill.slug == slug)
+        {
+            (cached.title.clone(), cached.path.clone())
+        } else {
+            let (workspace, user_home) = self.skill_roots();
+            let Some(skill) = mycode_app::discover_skills(&workspace, user_home.as_deref(), None)
+                .into_iter()
+                .find(|skill| skill.slug == slug)
+            else {
+                return;
             };
+            (skill.title, skill.path.display().to_string())
+        };
         // Native tools run directly: ask for a plain read of the skill file.
         let text = if crate::i18n::is_chinese() {
             format!("/{slug}\n\n遵循「{title}」技能。用 read 工具读取 {path} 并应用，再继续。\n")

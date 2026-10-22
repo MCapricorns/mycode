@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use mycode_config::HomeLayout;
+use mycode_agent::HomeLayout;
 
 /// `MYCODE_NO_INSTALL=1` runs a binary straight from wherever it launched.
 const NO_INSTALL_ENV: &str = "MYCODE_NO_INSTALL";

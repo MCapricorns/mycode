@@ -1,5 +1,8 @@
 [workspace]
 resolver = "3"
+# Linear chain: core → config → providers → tools → agent → app → frontend → desktop.
+# Each crate depends only on its predecessor and re-exports it (`pub use prev::*`),
+# keeping every lower-layer API reachable and the allocator link covering all targets.
 members = [
     "crates/mycode-core",
     "crates/mycode-config",
@@ -20,15 +23,10 @@ edition = "2024"
 license = "Apache-2.0"
 
 # Single source of truth for shared dependency versions.
-# Crates opt in via `dep.workspace = true` and may add features locally.
 [workspace.dependencies]
-# `rc` serializes `Arc<T>`. Requests share `Arc<Message>` and `Arc<[ToolSpec]>`;
-# without it the provider size check cannot encode a request.
+# `rc` serializes the Arc<T> values requests share.
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-# preserve_order: JSON objects keep declaration order in every build; tool
-# schemas and settings documents render their fields in a stable order, and
-# gpui-pre only carried this feature into builds that linked the desktop UI
-# toolkit.
+# preserve_order: stable field order in tool schemas and settings documents.
 serde_json = { version = "1.0.154", features = ["preserve_order", "raw_value"] }
 base64 = "0.23.1"
 thiserror = "2.0.21"
@@ -36,9 +34,8 @@ tokio = { version = "1.54.0", features = ["rt", "macros", "sync", "time"] }
 schemars = "1.2.3"
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 zeroize = "1.9.1"
-# OS TLS (schannel on Windows, Security.framework on macOS). reqwest's
-# default `rustls` feature also builds aws-lc-sys, a second full crypto
-# library, on top of the OS stack these product targets already have.
+# OS TLS (schannel on Windows, Security.framework on macOS) instead of a second
+# crypto library (aws-lc-sys) on top of the OS stack.
 reqwest = { version = "0.13.5", default-features = false, features = [
     "charset",
     "native-tls",
@@ -51,16 +48,13 @@ tokio-util = "0.7.20"
 # `join_all` over borrowed futures; already in the graph through reqwest.
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 parking_lot = "0.12.5"
-# Global allocator for every binary in the workspace (declared once, in
-# mycode-core, so test targets get it too).
+# Global allocator for every binary and test target; declared once in mycode-core.
 mimalloc = "0.1.52"
-# MSVC builds link the OS-builtin ucrt/msvcrt instead of a bundled CRT. A
-# normal dep of the leaf crates: its build script's link search propagates
-# to every test target and the desktop binary.
+# MSVC builds link the OS-builtin CRT; declared once in mycode-core.
 vc-ltl = "5.3.1"
 globset = "0.4.20"
 ignore = "0.4.33"
-# ripgrep's search core, linked in-process without an external executable.
+# ripgrep's search core, linked in-process.
 grep-searcher = "0.1.17"
 grep-regex = "0.1.14"
 grep-matcher = "0.1.9"
@@ -76,8 +70,7 @@ sha2 = "0.11.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 semver = { version = "1.0.28", features = ["serde"] }
-# The clipboard hands a Windows screenshot over as a bitmap and a macOS one
-# as a TIFF; providers take PNG, so the desktop decodes and re-encodes those.
+# Clipboard bitmaps/TIFFs are re-encoded to PNG for providers.
 image = { version = "0.25.10", default-features = false, features = [
     "bmp",
     "png",
@@ -86,8 +79,7 @@ image = { version = "0.25.10", default-features = false, features = [
 # Session grouping follows the user's local calendar, including DST boundaries.
 chrono = "0.4.45"
 
-# Disk-conscious dev profile: line tables keep backtraces useful while
-# cutting debuginfo from multi-GiB full DWARF to a fraction.
+# Disk-conscious dev profile: line tables keep backtraces useful without full DWARF.
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
@@ -95,9 +87,7 @@ split-debuginfo = "unpacked"
 [profile.test]
 debug = "line-tables-only"
 
-# Maximum-performance release binaries: fat LTO across the whole workspace
-# and a single codegen unit. Link time grows accordingly; CI release builds
-# and local release builds both pay it once.
+# Maximum-performance release binaries; link time grows accordingly.
 [profile.release]
 opt-level = 3
 lto = "fat"

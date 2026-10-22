@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use mycode_config::{
+use mycode_agent::{
     AppSettings, AuthorityRevision, HomeLayout, ProviderSecrets, UiState, read_app_settings,
     read_provider_secrets, read_ui_state, replace_app_settings, replace_provider_secrets,
     replace_ui_state,
@@ -251,10 +251,10 @@ fn read_bundle(body: &[u8]) -> Result<ExportBundle, String> {
         kind: shell.kind,
         exported_at_unix: shell.exported_at_unix,
         settings: document_or_salvage(&shell.settings, "settings", |value| {
-            mycode_config::salvage_app_settings(value)
+            mycode_agent::salvage_app_settings(value)
         })?,
         ui_state: document_or_salvage(&shell.ui_state, "ui state", |value| {
-            mycode_config::salvage_ui_state(value)
+            mycode_agent::salvage_ui_state(value)
         })?,
         secrets: shell.secrets,
     })
@@ -284,7 +284,7 @@ fn stored_authority_revision(
     format_version: u32,
     label: &str,
 ) -> Result<AuthorityRevision, String> {
-    let Some(body) = mycode_config::read_owned_file(home, path, max_bytes)
+    let Some(body) = mycode_agent::read_owned_file(home, path, max_bytes)
         .map_err(|error| format!("{label}: {}", error.summary()))?
     else {
         return Ok(AuthorityRevision::ABSENT);
@@ -308,9 +308,9 @@ fn stored_authority_revision(
 fn read_current_revision(home: &HomeLayout) -> Result<AuthorityRevision, String> {
     stored_authority_revision(
         home,
-        mycode_config::SETTINGS_PATH,
-        mycode_config::MAX_AUTHORITY_DOCUMENT_BYTES,
-        mycode_config::SETTINGS_FORMAT_VERSION,
+        mycode_agent::SETTINGS_PATH,
+        mycode_agent::MAX_AUTHORITY_DOCUMENT_BYTES,
+        mycode_agent::SETTINGS_FORMAT_VERSION,
         "settings",
     )
 }
@@ -319,9 +319,9 @@ fn read_current_revision(home: &HomeLayout) -> Result<AuthorityRevision, String>
 fn read_current_secrets_revision(home: &HomeLayout) -> Result<AuthorityRevision, String> {
     stored_authority_revision(
         home,
-        mycode_config::SECRETS_PATH,
-        mycode_config::MAX_SECRETS_BYTES,
-        mycode_config::SECRETS_FORMAT_VERSION,
+        mycode_agent::SECRETS_PATH,
+        mycode_agent::MAX_SECRETS_BYTES,
+        mycode_agent::SECRETS_FORMAT_VERSION,
         "secrets",
     )
 }
@@ -329,7 +329,7 @@ fn read_current_secrets_revision(home: &HomeLayout) -> Result<AuthorityRevision,
 #[cfg(test)]
 mod tests {
     use super::{build_bundle, export_to_file, import_from_file};
-    use mycode_config::{
+    use mycode_agent::{
         AppSettings, AuthorityRevision, HomeLayout, McpServerSettings, ProviderSecrets,
         replace_app_settings, replace_provider_secrets,
     };
@@ -415,13 +415,13 @@ mod tests {
             kind: super::EXPORT_KIND.to_owned(),
             exported_at_unix: 0,
             settings: AppSettings::default(),
-            ui_state: mycode_config::UiState::default(),
+            ui_state: mycode_agent::UiState::default(),
             secrets: BTreeMap::from([("zai".to_owned(), "imported-key".to_owned())]),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let summary = import_from_file(&home, &bundle_path, false).unwrap();
         assert_eq!(summary.secrets, 1);
-        let stored = mycode_config::read_provider_secrets(&home).unwrap();
+        let stored = mycode_agent::read_provider_secrets(&home).unwrap();
         assert_eq!(stored.key("zai"), Some("imported-key"));
 
         // The vault lands as a proper secrets.json document, not a hand
@@ -457,7 +457,7 @@ mod tests {
                     "fontFamily": "system"
                 }
             },
-            "uiState": mycode_config::UiState::default(),
+            "uiState": mycode_agent::UiState::default(),
             "sessions": [
                 {
                     "sessionId": "sess",
@@ -471,7 +471,7 @@ mod tests {
         let summary = import_from_file(&home, &bundle_path, false).unwrap();
         assert_eq!(summary.secrets, 0);
 
-        let settings = mycode_config::read_app_settings(&home).unwrap();
+        let settings = mycode_agent::read_app_settings(&home).unwrap();
         // The bundle still names retired fields (`usage`, `palette`,
         // `fontFamily`, `userAgent`); salvage keeps what still decodes.
         assert_eq!(settings.appearance.theme, "dark");
@@ -479,7 +479,7 @@ mod tests {
         // No conversation data is imported, and the vault stays untouched.
         assert!(!root.join("sessions").join("sess").exists());
         assert!(
-            mycode_config::read_provider_secrets(&home)
+            mycode_agent::read_provider_secrets(&home)
                 .unwrap()
                 .provider_ids()
                 .is_empty()
@@ -505,29 +505,29 @@ mod tests {
             kind: super::EXPORT_KIND.to_owned(),
             exported_at_unix: 0,
             settings: incoming,
-            ui_state: mycode_config::UiState::default(),
+            ui_state: mycode_agent::UiState::default(),
             secrets: BTreeMap::from([("zai".to_owned(), "refused-key".to_owned())]),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
         let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
         assert_eq!(refused, super::IMPORT_NEEDS_MCP_CONFIRM);
-        let kept = mycode_config::read_app_settings(&home).unwrap();
+        let kept = mycode_agent::read_app_settings(&home).unwrap();
         assert_eq!(kept.mcp_servers[0].command.as_deref(), Some("local-tool"));
         // The refusal covers the whole import: the vault is untouched too.
         assert!(
-            mycode_config::read_provider_secrets(&home)
+            mycode_agent::read_provider_secrets(&home)
                 .unwrap()
                 .provider_ids()
                 .is_empty()
         );
         import_from_file(&home, &bundle_path, true).unwrap();
-        let replaced = mycode_config::read_app_settings(&home).unwrap();
+        let replaced = mycode_agent::read_app_settings(&home).unwrap();
         assert_eq!(
             replaced.mcp_servers[0].command.as_deref(),
             Some("replaced-tool")
         );
         assert_eq!(
-            mycode_config::read_provider_secrets(&home)
+            mycode_agent::read_provider_secrets(&home)
                 .unwrap()
                 .key("zai"),
             Some("refused-key")
@@ -542,7 +542,7 @@ mod tests {
             kind: super::EXPORT_KIND.to_owned(),
             exported_at_unix: 0,
             settings,
-            ui_state: mycode_config::UiState::default(),
+            ui_state: mycode_agent::UiState::default(),
             secrets: BTreeMap::new(),
         };
         std::fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
@@ -566,7 +566,7 @@ mod tests {
             },
         );
         import_from_file(&home, &bundle_path, false).expect("unchanged commands need no confirm");
-        let imported = mycode_config::read_app_settings(&home).unwrap();
+        let imported = mycode_agent::read_app_settings(&home).unwrap();
         assert_eq!(imported.proxy, "direct");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -586,7 +586,7 @@ mod tests {
         let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
         assert_eq!(refused, super::IMPORT_NEEDS_MCP_CONFIRM);
         assert!(
-            mycode_config::read_app_settings(&home)
+            mycode_agent::read_app_settings(&home)
                 .unwrap()
                 .mcp_servers
                 .is_empty()
@@ -603,7 +603,7 @@ mod tests {
             "kind": super::EXPORT_KIND,
             "exportedAtUnix": 0,
             "settings": AppSettings::default(),
-            "uiState": mycode_config::UiState::default(),
+            "uiState": mycode_agent::UiState::default(),
         });
         let bundle_path = root.join("bundle.json");
         std::fs::write(&bundle_path, serde_json::to_vec(&future).unwrap()).unwrap();
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn invalid_ui_state_rejects_the_whole_import_before_mutating_settings_or_secrets() {
         let (root, home) = scratch("bad-ui");
-        let mut bad_ui = mycode_config::UiState::default();
+        let mut bad_ui = mycode_agent::UiState::default();
         bad_ui
             .recent_projects
             .push("relative/not-absolute".to_owned());
@@ -635,11 +635,11 @@ mod tests {
         let refused = import_from_file(&home, &bundle_path, false).unwrap_err();
         assert!(refused.starts_with("ui state:"), "{refused}");
         assert_ne!(
-            mycode_config::read_app_settings(&home).unwrap().proxy,
+            mycode_agent::read_app_settings(&home).unwrap().proxy,
             "direct"
         );
         assert!(
-            mycode_config::read_provider_secrets(&home)
+            mycode_agent::read_provider_secrets(&home)
                 .unwrap()
                 .provider_ids()
                 .is_empty()

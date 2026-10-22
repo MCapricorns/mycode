@@ -7,7 +7,7 @@
     all(target_os = "macos", target_arch = "aarch64"),
 ))]
 
-use mycode_core::message::ContentBlock;
+use mycode_providers::message::ContentBlock;
 
 use crate::builtin::shell::{ShellArgs, ShellMode, ShellTool};
 use crate::ctx::ToolCtx;

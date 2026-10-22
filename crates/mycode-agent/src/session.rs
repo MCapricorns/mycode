@@ -79,7 +79,7 @@ pub struct SessionsListing {
 /// # Errors
 ///
 /// Returns [`SessionError::Unavailable`] when the index cannot be read.
-pub fn inspect_sessions(home: &mycode_config::HomeLayout) -> Result<SessionsListing, SessionError> {
+pub fn inspect_sessions(home: &mycode_tools::HomeLayout) -> Result<SessionsListing, SessionError> {
     let listed = store::list_sessions(home).map_err(store_error)?;
     let mut listing = SessionsListing::default();
     for row in listed {
@@ -102,7 +102,7 @@ pub fn inspect_sessions(home: &mycode_config::HomeLayout) -> Result<SessionsList
 ///
 /// Returns [`SessionError::Unavailable`] when the index cannot be updated.
 pub fn delete_session_index(
-    home: &mycode_config::HomeLayout,
+    home: &mycode_tools::HomeLayout,
     session_id: &str,
 ) -> Result<(), SessionError> {
     store::delete_indexed_session(home, session_id).map_err(store_error)
@@ -116,7 +116,7 @@ pub fn delete_session_index(
 ///
 /// Returns [`SessionError::Unavailable`] when the index cannot be updated.
 pub fn rename_session_index(
-    home: &mycode_config::HomeLayout,
+    home: &mycode_tools::HomeLayout,
     session_id: &str,
     title: &str,
 ) -> Result<(), SessionError> {

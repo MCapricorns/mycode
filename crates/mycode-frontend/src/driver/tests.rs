@@ -100,7 +100,7 @@ fn a_chat_opened_mid_turn_reloads_from_the_ledger_when_the_turn_ends() {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
     }
-    let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+    let home = mycode_app::HomeLayout::from_root(&root).expect("home");
     let mut driver = super::FrontendDriver::start(home, || {});
     let session = SessionId::generate().expect("session").as_str().to_owned();
     let branch = BranchId::generate().expect("branch").as_str().to_owned();
@@ -152,7 +152,7 @@ fn scratch_driver(label: &str) -> (super::FrontendDriver, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
     }
-    let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+    let home = mycode_app::HomeLayout::from_root(&root).expect("home");
     (super::FrontendDriver::start(home, || {}), root)
 }
 
@@ -387,9 +387,9 @@ fn a_repair_after_the_startup_toast_still_toasts_once() {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
     }
-    let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+    let home = mycode_app::HomeLayout::from_root(&root).expect("home");
     let mut driver = super::FrontendDriver::start(home, || {});
-    let repair = |path: &'static str| mycode_config::DocumentRepair {
+    let repair = |path: &'static str| mycode_app::DocumentRepair {
         path,
         backup: format!("{path}.bak"),
     };
@@ -436,7 +436,7 @@ fn ensure_catalog_loads_once_the_composer_has_a_model() {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
     }
-    let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+    let home = mycode_app::HomeLayout::from_root(&root).expect("home");
     let mut driver = super::FrontendDriver::start(home, || {});
     // Nothing selected on a fresh launch: no surface reads the catalog, so
     // the document stays a lazy load.
@@ -628,8 +628,8 @@ fn steers_returned_to_a_chat_off_screen_wait_in_its_queue() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-fn code_attachment() -> mycode_core::Attachments {
-    let mut attachments = mycode_core::Attachments::default();
+fn code_attachment() -> mycode_app::Attachments {
+    let mut attachments = mycode_app::Attachments::default();
     attachments
         .push_file("main.rs", "fn main() {}")
         .expect("text file");

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use mycode_core::{
+use mycode_agent::{
     AssistantMessage, ContentBlock, Message, StopReason, TextBlock, ThinkingBlock, ToolCall,
     ToolResultMessage, UserMessage,
 };
@@ -139,7 +139,7 @@ fn user_text(message: &Message) -> String {
             .content
             .iter()
             .filter_map(|block| match block {
-                mycode_core::ContentBlock::Text(text) => Some(text.text.as_str()),
+                mycode_agent::ContentBlock::Text(text) => Some(text.text.as_str()),
                 _ => None,
             })
             .collect(),
@@ -160,17 +160,17 @@ struct SummaryTransport {
     bodies: Option<std::sync::Arc<parking_lot::Mutex<Vec<String>>>>,
 }
 
-impl mycode_providers::SseTransport for SummaryTransport {
+impl mycode_agent::SseTransport for SummaryTransport {
     fn post<'a>(
         &'a self,
-        call: mycode_providers::TransportCall,
+        call: mycode_agent::TransportCall,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
                     Output = Result<
-                        mycode_providers::transport::ByteStream,
-                        mycode_core::ProviderError,
+                        mycode_agent::transport::ByteStream,
+                        mycode_agent::ProviderError,
                     >,
                 > + Send
                 + 'a,
@@ -205,7 +205,7 @@ impl mycode_providers::SseTransport for SummaryTransport {
     }
 }
 
-fn scratch_home() -> (std::path::PathBuf, mycode_config::HomeLayout) {
+fn scratch_home() -> (std::path::PathBuf, mycode_agent::HomeLayout) {
     // Parallel tests start within one clock tick (100ns on Windows), so the
     // timestamp alone handed two tests the same home.
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -233,24 +233,24 @@ fn scratch_home() -> (std::path::PathBuf, mycode_config::HomeLayout) {
         "session-glm",
         "session-short",
     ] {
-        let dir = mycode_config::new_session_dir(None, session).expect("session dir");
+        let dir = mycode_agent::new_session_dir(None, session).expect("session dir");
         std::fs::create_dir_all(root.join(dir)).expect("session dir");
     }
-    let home = mycode_config::HomeLayout::from_root(&root).expect("home");
+    let home = mycode_agent::HomeLayout::from_root(&root).expect("home");
     (root, home)
 }
 
 fn summary_wire(
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-) -> mycode_providers::WireProvider {
+) -> mycode_agent::WireProvider {
     summary_wire_with(calls, None)
 }
 
 fn summary_wire_with(
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     bodies: Option<std::sync::Arc<parking_lot::Mutex<Vec<String>>>>,
-) -> mycode_providers::WireProvider {
-    let settings = mycode_config::ProviderSettings {
+) -> mycode_agent::WireProvider {
+    let settings = mycode_agent::ProviderSettings {
         id: "local".to_owned(),
         kind: "openai-completions".to_owned(),
         base_url: "https://example.com/v1".to_owned(),
@@ -261,9 +261,9 @@ fn summary_wire_with(
         hidden_models: Vec::new(),
     };
     let resolved =
-        mycode_providers::ResolvedProvider::resolve(&settings, "model-a", "test-key", "test-agent")
+        mycode_agent::ResolvedProvider::resolve(&settings, "model-a", "test-key", "test-agent")
             .expect("provider");
-    mycode_providers::WireProvider::new(
+    mycode_agent::WireProvider::new(
         resolved,
         std::sync::Arc::new(SummaryTransport { calls, bodies }),
     )
@@ -279,12 +279,12 @@ async fn a_second_compact_in_one_turn_keeps_every_uncovered_message() {
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let bodies = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
     let wire = summary_wire_with(calls.clone(), Some(bodies.clone()));
-    mycode_config::write_compaction(
+    mycode_agent::write_compaction(
         &home,
         "session-c",
-        &mycode_config::CompactionCheckpoint {
-            format_version: mycode_config::COMPACTION_FORMAT_VERSION,
-            kind: mycode_config::COMPACTION_KIND.to_owned(),
+        &mycode_agent::CompactionCheckpoint {
+            format_version: mycode_agent::COMPACTION_FORMAT_VERSION,
+            kind: mycode_agent::COMPACTION_KIND.to_owned(),
             session_id: "session-c".to_owned(),
             branch_id: "branch-c".to_owned(),
             covered_head: "head-1".to_owned(),
@@ -450,7 +450,7 @@ async fn manual_compact_summarizes_a_session_that_still_fits() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(manual.messages.len(), 1);
     assert!(user_text(&manual.messages[0]).contains("COMPACTION SUMMARY"));
-    let checkpoint = mycode_config::read_compaction(&home, "session-b")
+    let checkpoint = mycode_agent::read_compaction(&home, "session-b")
         .expect("read")
         .expect("written");
     assert_eq!(checkpoint.covered_messages, 2);
@@ -499,17 +499,17 @@ struct ScriptedSummary {
     protocol: &'static str,
 }
 
-impl mycode_providers::SseTransport for ScriptedSummary {
+impl mycode_agent::SseTransport for ScriptedSummary {
     fn post<'a>(
         &'a self,
-        call: mycode_providers::TransportCall,
+        call: mycode_agent::TransportCall,
         _cancel: tokio_util::sync::CancellationToken,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
                     Output = Result<
-                        mycode_providers::transport::ByteStream,
-                        mycode_core::ProviderError,
+                        mycode_agent::transport::ByteStream,
+                        mycode_agent::ProviderError,
                     >,
                 > + Send
                 + 'a,

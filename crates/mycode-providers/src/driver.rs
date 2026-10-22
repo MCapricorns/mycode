@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mycode_core::{EventStreamSender, ProviderError, ProviderErrorKind, StreamEvent};
+use mycode_config::{EventStreamSender, ProviderError, ProviderErrorKind, StreamEvent};
 
 use crate::sse::FrameParser;
 use crate::transport::TransportCall;
@@ -27,7 +27,7 @@ pub(crate) trait FrameReducer: Send + 'static {
     /// Ends the stream after a transport or protocol failure.
     ///
     /// Keeps thinking, text, and named tool calls already reduced, and marks
-    /// the message with [`mycode_core::StopReason::Error`].
+    /// the message with [`mycode_config::StopReason::Error`].
     fn interrupt(&mut self, detail: &str) -> StreamEvent;
 }
 
@@ -273,7 +273,7 @@ async fn emit(sender: &EventStreamSender, event: StreamEvent) -> bool {
 /// Builds a terminal protocol-error event.
 pub(crate) fn protocol_error(message: &'static str) -> StreamEvent {
     StreamEvent::Error(ProviderError::with_message(
-        mycode_core::ProviderErrorKind::Protocol,
+        mycode_config::ProviderErrorKind::Protocol,
         message,
     ))
 }
@@ -285,7 +285,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use bytes::Bytes;
-    use mycode_core::{ProviderError, ProviderErrorKind, StreamEvent};
+    use mycode_config::{ProviderError, ProviderErrorKind, StreamEvent};
     use tokio_util::sync::CancellationToken;
 
     use super::drive;
@@ -349,7 +349,7 @@ mod tests {
             Ok(b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"),
         ]);
         let cancel = CancellationToken::new();
-        let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
+        let (sender, mut stream) = mycode_config::EventStream::channel(cancel.clone());
         drive(
             transport.clone(),
             call(endpoint),
@@ -391,7 +391,7 @@ mod tests {
             Ok(b"data: {\"type\":\"message_stop\"}\n\n"),
         ]);
         let cancel = CancellationToken::new();
-        let (sender, _stream) = mycode_core::EventStream::channel(cancel.clone());
+        let (sender, _stream) = mycode_config::EventStream::channel(cancel.clone());
         let body = serde_json::json!({
             "messages": [{"role": "assistant", "content": [
                 {"type": "thinking", "thinking": "", "signature": "s"},
@@ -426,7 +426,7 @@ mod tests {
             "HTTP 400: invalid request",
         ))]);
         let cancel = CancellationToken::new();
-        let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
+        let (sender, mut stream) = mycode_config::EventStream::channel(cancel.clone());
         drive(
             transport.clone(),
             call(endpoint),
@@ -446,7 +446,7 @@ mod tests {
 
     async fn driven(transport: &Arc<Scripted>) -> Vec<StreamEvent> {
         let cancel = CancellationToken::new();
-        let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
+        let (sender, mut stream) = mycode_config::EventStream::channel(cancel.clone());
         drive(
             transport.clone(),
             call("https://retryable.example.test/v1/chat/completions"),
@@ -571,7 +571,7 @@ data: {\"type\":\"message_stop\"}
 "),
         ]);
         let cancel = CancellationToken::new();
-        let (sender, mut stream) = mycode_core::EventStream::channel(cancel.clone());
+        let (sender, mut stream) = mycode_config::EventStream::channel(cancel.clone());
         drive(
             transport.clone(),
             call("https://api.anthropic.com/v1/messages"),

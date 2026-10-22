@@ -15,7 +15,7 @@ use std::sync::Arc;
 pub use mycode_agent::session::{BranchId, HeadStamp, SessionEventId, SessionId};
 // Assistant entry text can end in an interruption line that frontends paint
 // as an error; the prefix is how they find it.
-pub use mycode_core::{INTERRUPTED_RESPONSE_PREFIX, tool_label};
+pub use mycode_agent::{INTERRUPTED_RESPONSE_PREFIX, tool_label};
 
 /// One row of the session listing.
 #[derive(Clone, Debug, PartialEq, Eq)]

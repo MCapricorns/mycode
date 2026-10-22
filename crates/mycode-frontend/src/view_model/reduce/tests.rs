@@ -8,7 +8,7 @@ use crate::view_model::{
 fn a_proxy_edit_drops_the_previous_test_result() {
     let mut state = WorkspaceState {
         settings: Some(crate::view_model::SettingsState::from_settings(
-            &mycode_config::AppSettings::default(),
+            &mycode_app::AppSettings::default(),
             1,
         )),
         ..WorkspaceState::default()
@@ -345,11 +345,11 @@ fn stale_older_page_is_dropped() {
 fn reasoning_pick_stays_on_the_session_and_does_not_dirty_settings() {
     use std::sync::Arc;
 
-    use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+    use mycode_app::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
 
     let mut state = WorkspaceState::default();
     let mut settings =
-        crate::view_model::SettingsState::from_settings(&mycode_config::AppSettings::default(), 1);
+        crate::view_model::SettingsState::from_settings(&mycode_app::AppSettings::default(), 1);
     settings.saving = true;
     state.settings = Some(settings);
     state.catalog = Some(Arc::new(CatalogDocument {
@@ -388,7 +388,7 @@ fn reasoning_pick_stays_on_the_session_and_does_not_dirty_settings() {
     assert!(!settings.dirty);
     assert!(settings.saving);
     assert_eq!(
-        mycode_config::session_model(&state.session_models, "session-a")
+        mycode_app::session_model(&state.session_models, "session-a")
             .and_then(|pin| pin.reasoning.as_deref()),
         Some("high")
     );

@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
+use mycode_agent::events::{AgentEvent, MessageDelta, TurnOutcome};
 use mycode_agent::session::EventKind;
-use mycode_core::events::{AgentEvent, MessageDelta, TurnOutcome};
-use mycode_core::{AssistantMessage, ContentBlock, Message, UserMessage};
+use mycode_agent::{AssistantMessage, ContentBlock, Message, UserMessage};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -446,7 +446,7 @@ impl PreparingCalls {
             "agent": role.unwrap_or_default(),
             "description": description.unwrap_or_default(),
         });
-        let target = mycode_core::tool_target(AGENT_TOOL, &known);
+        let target = mycode_agent::tool_target(AGENT_TOOL, &known);
         if target == call.shown {
             return None;
         }
@@ -540,7 +540,7 @@ struct TurnUsage {
 }
 
 impl TurnUsage {
-    fn fold(&mut self, usage: &mycode_core::Usage) {
+    fn fold(&mut self, usage: &mycode_agent::Usage) {
         self.requests = self.requests.saturating_add(1);
         let prompt = if usage.prompt_tokens > 0 {
             usage.prompt_tokens
@@ -618,7 +618,7 @@ mod tests {
         // sum keeps only the fresh part: prompt minus the cache read.
         let mut usage = super::TurnUsage::default();
         for prompt in [40_000, 52_000, 61_000] {
-            usage.fold(&mycode_core::Usage {
+            usage.fold(&mycode_agent::Usage {
                 input_tokens: prompt,
                 output_tokens: 500,
                 cache_read_tokens: Some(prompt - 1_000),
@@ -643,7 +643,7 @@ mod tests {
         // cache lands on the same fresh figure the provider billed.
         let mut usage = super::TurnUsage::default();
         for (input, cache_read) in [(100, 11_800), (250, 12_050)] {
-            usage.fold(&mycode_core::Usage {
+            usage.fold(&mycode_agent::Usage {
                 input_tokens: input,
                 output_tokens: 10,
                 cache_read_tokens: Some(cache_read),

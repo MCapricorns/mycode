@@ -3,7 +3,7 @@
 //! picks. Input widgets stay in the frontend; every decision about what
 //! reaches `settings.json` or the key store is made here.
 use mycode_app::BridgeCommand;
-use mycode_config::{AuthorityRevision, ProxyPreference};
+use mycode_app::{AuthorityRevision, ProxyPreference};
 
 use super::{DriverMsg, Effect, FrontendDriver, SETTINGS_TEXT_SAVE_DEBOUNCE, ToastKind};
 use crate::forms;
@@ -311,7 +311,7 @@ impl FrontendDriver {
     /// so the frontend can clear the paste box.
     pub fn import_mcp_json(&mut self, raw: &str, out: &mut Vec<Effect>) -> bool {
         let mut added = 0usize;
-        let imported = match mycode_config::parse_mcp_import(raw) {
+        let imported = match mycode_app::parse_mcp_import(raw) {
             Ok(imported) => imported,
             Err(message) => {
                 self.act(FrontendAction::Failed(message), out);
@@ -372,7 +372,7 @@ impl FrontendDriver {
     /// the enable probe so a pasted key ends in a verified enable).
     pub fn add_builtin_mcp(
         &mut self,
-        mut server: mycode_config::McpServerSettings,
+        mut server: mycode_app::McpServerSettings,
         api_key: &str,
         out: &mut Vec<Effect>,
     ) {

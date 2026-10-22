@@ -8,10 +8,10 @@
 
 use serde_json::{Value, json};
 
-use mycode_core::{
+use mycode_config::{
     AssistantMessage, ContentBlock, Message, StopReason, ThinkingBlock, ToolSpec, Usage,
 };
-use mycode_core::{ProviderError, ProviderErrorKind, Request, StreamEvent};
+use mycode_config::{ProviderError, ProviderErrorKind, Request, StreamEvent};
 
 use crate::driver::FrameReducer;
 use crate::wire_common::{
@@ -104,10 +104,10 @@ fn is_thinking_block(block: &Value) -> bool {
 /// and send once more; text and tool calls stay. `None` when the error is a
 /// different 400 or the body carries no thinking.
 pub(crate) fn retry_body_without_thinking(
-    error: &mycode_core::ProviderError,
+    error: &mycode_config::ProviderError,
     body: &[u8],
 ) -> Option<Vec<u8>> {
-    if error.kind() != mycode_core::ProviderErrorKind::Rejected {
+    if error.kind() != mycode_config::ProviderErrorKind::Rejected {
         return None;
     }
     let message = error.message()?.to_ascii_lowercase();
@@ -389,7 +389,7 @@ impl MessagesReducer {
                     }
                 }
                 BlockAccumulator::Text { text } => {
-                    blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
+                    blocks.push(ContentBlock::Text(mycode_config::TextBlock::new(text)));
                 }
                 BlockAccumulator::ToolUse {
                     id,
@@ -401,7 +401,7 @@ impl MessagesReducer {
                     }
                     let arguments =
                         serde_json::from_str::<Value>(&arguments).unwrap_or_else(|_| json!({}));
-                    blocks.push(ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                    blocks.push(ContentBlock::ToolCall(mycode_config::ToolCall::new(
                         id, name, arguments,
                     )));
                 }
@@ -418,7 +418,7 @@ impl MessagesReducer {
             } else {
                 let mut text = String::new();
                 append_interruption(&mut text, detail);
-                blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
+                blocks.push(ContentBlock::Text(mycode_config::TextBlock::new(text)));
             }
         }
         // XML-filtered calls arrive with an `end_turn` stop reason; any

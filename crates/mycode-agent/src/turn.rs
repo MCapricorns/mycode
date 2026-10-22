@@ -13,12 +13,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use mycode_core::events::{AgentEvent, MessageDelta};
-use mycode_core::message::{
+use mycode_tools::events::{AgentEvent, MessageDelta};
+use mycode_tools::message::{
     AssistantMessage, ContentBlock, Message, SharedMessage, ToolCall, ToolResultMessage,
 };
-use mycode_core::{CallId, MycodeError};
-use mycode_core::{Request, StreamEvent};
+use mycode_tools::{CallId, MycodeError};
+use mycode_tools::{Request, StreamEvent};
 use mycode_tools::{ToolError, ToolResult, ToolStream, ToolStreamItem, prepare_tool_ctx};
 use tokio_util::sync::CancellationToken;
 
@@ -96,7 +96,7 @@ pub(crate) async fn stream_assistant(
     // A replayed ledger can end a turn on calls nothing answered (a crash,
     // a closed window). Repair the request copy only: the history keeps its
     // ledger shape, which compaction checkpoints index into.
-    mycode_core::pair_tool_results(&mut request.messages);
+    mycode_tools::pair_tool_results(&mut request.messages);
 
     if token.is_cancelled() {
         return Err(TurnFailure::Aborted);
@@ -264,7 +264,7 @@ async fn shrink_overflowed(
         return Ok(None);
     };
     state.messages.clone_from(&smaller.messages);
-    mycode_core::pair_tool_results(&mut smaller.messages);
+    mycode_tools::pair_tool_results(&mut smaller.messages);
     Ok(smaller.validate().is_ok().then_some(smaller))
 }
 
@@ -286,7 +286,7 @@ fn keep_cancelled_partial(
         state,
         thinking,
         text,
-        mycode_core::USER_INTERRUPT_DETAIL,
+        mycode_tools::USER_INTERRUPT_DETAIL,
     );
     TurnFailure::Aborted
 }
@@ -303,7 +303,7 @@ fn commit_interrupted(
     mut text: String,
     detail: &str,
 ) -> AssistantMessage {
-    let note = mycode_core::interrupted_response_text(detail);
+    let note = mycode_tools::interrupted_response_text(detail);
     if !text.contains(note.as_str()) {
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
@@ -312,15 +312,15 @@ fn commit_interrupted(
     }
     let mut blocks = Vec::new();
     if !thinking.is_empty() {
-        blocks.push(ContentBlock::Thinking(mycode_core::ThinkingBlock::new(
+        blocks.push(ContentBlock::Thinking(mycode_tools::ThinkingBlock::new(
             thinking,
         )));
     }
-    blocks.push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
+    blocks.push(ContentBlock::Text(mycode_tools::TextBlock::new(text)));
     let message = AssistantMessage {
         blocks,
         usage: None,
-        stop_reason: mycode_core::StopReason::Error,
+        stop_reason: mycode_tools::StopReason::Error,
     };
     let shared = Arc::new(Message::Assistant(message.clone()));
     state.messages.push(Arc::clone(&shared));
@@ -345,18 +345,18 @@ fn merge_draft(mut message: AssistantMessage, thinking: &str, text: &str) -> Ass
     if !has_thinking && !thinking.is_empty() {
         message.blocks.insert(
             0,
-            ContentBlock::Thinking(mycode_core::ThinkingBlock::new(thinking)),
+            ContentBlock::Thinking(mycode_tools::ThinkingBlock::new(thinking)),
         );
     }
     if message.text().is_empty() && !text.is_empty() {
         message
             .blocks
-            .push(ContentBlock::Text(mycode_core::TextBlock::new(text)));
+            .push(ContentBlock::Text(mycode_tools::TextBlock::new(text)));
     }
     if discarded_call {
         message
             .blocks
-            .push(ContentBlock::Text(mycode_core::TextBlock::new(
+            .push(ContentBlock::Text(mycode_tools::TextBlock::new(
                 "The provider returned an incomplete tool call; it was not executed.",
             )));
     }

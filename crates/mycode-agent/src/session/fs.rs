@@ -1,7 +1,7 @@
 //! Blocking owned-file primitives for the session ledger store.
 //!
 //! Every function operates on absolute paths that the caller validated
-//! through [`mycode_config::HomeLayout::owned_join`]. Exclusive creates and
+//! through [`mycode_tools::HomeLayout::owned_join`]. Exclusive creates and
 //! prefix copies fail when the destination exists; an append open creates an
 //! absent file. Created files are private on Unix and fsynced; on Windows
 //! they inherit the protected DACL of the hardened parent directory.

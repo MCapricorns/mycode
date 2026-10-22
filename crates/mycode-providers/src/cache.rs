@@ -25,7 +25,7 @@ use std::collections::HashSet;
 
 use serde_json::{Value, json};
 
-use mycode_core::{ProviderError, ProviderErrorKind};
+use mycode_config::{ProviderError, ProviderErrorKind};
 
 /// Anthropic allows four `cache_control` breakpoints on one request.
 pub(crate) const ANTHROPIC_BREAKPOINT_CAP: usize = 4;

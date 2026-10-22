@@ -12,12 +12,12 @@ mod tests;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use mycode_agent::Message;
+use mycode_agent::ToolRegistry;
 use mycode_agent::session::{BranchId, HeadStamp, SessionId};
 use mycode_agent::{Agent, AgentConfig, HookRunner};
-use mycode_config::{AppSettings, ProviderSettings};
-use mycode_core::Message;
-use mycode_providers::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
-use mycode_tools::ToolRegistry;
+use mycode_agent::{AppSettings, ProviderSettings};
+use mycode_agent::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
 
 use crate::BridgeEvent;
 use crate::ledger::{HeadWriter, branch_head, head_spelling, ledger_history, render_error};
@@ -144,7 +144,7 @@ pub(crate) async fn turn_credentials(
     state: &CoreState,
     provider_id: &str,
 ) -> Result<(AppSettings, ProviderSettings, String), String> {
-    if provider_id != mycode_config::MAGPIE_PROVIDER_ID {
+    if provider_id != mycode_agent::MAGPIE_PROVIDER_ID {
         return Err(format!(
             "provider '{provider_id}' is not the magpie gateway"
         ));
@@ -269,7 +269,7 @@ async fn run_chat_turn_on(
         let cwd = cwd.clone();
         tokio::task::spawn_blocking(move || {
             (
-                mycode_config::discover_roles(&home, Some(&cwd)),
+                mycode_agent::discover_roles(&home, Some(&cwd)),
                 workspace_extra_roots(&home, &cwd),
             )
         })
@@ -278,18 +278,18 @@ async fn run_chat_turn_on(
     };
     let registry = Arc::new({
         let registry = ToolRegistry::new();
-        mycode_tools::register_builtins(&registry);
+        mycode_agent::register_builtins(&registry);
         // ask_user rides the same registry; its channel forwards questions
         // to the UI over the event channel and waits on the shared router.
-        let channel: Arc<dyn mycode_tools::builtin::AskChannel> = Arc::new(BridgeAskChannel {
+        let channel: Arc<dyn mycode_agent::builtin::AskChannel> = Arc::new(BridgeAskChannel {
             session_id: session_id.to_owned(),
             events: events.clone(),
         });
-        registry.register(Arc::new(mycode_tools::builtin::AskTool::new(channel)));
+        registry.register(Arc::new(mycode_agent::builtin::AskTool::new(channel)));
         // `agent` delegates scoped work to a catalog role; slots, isolation,
         // and per-role model routes live in the host.
         if crate::subagent::any_role_enabled(&role_catalog, &settings.subagents) {
-            registry.register(Arc::new(mycode_tools::builtin::AgentTool::new(Arc::new(
+            registry.register(Arc::new(mycode_agent::builtin::AgentTool::new(Arc::new(
                 crate::subagent::BridgeAgentHost::new(
                     resolved.clone(),
                     home.clone(),
@@ -315,7 +315,7 @@ async fn run_chat_turn_on(
 
     let context_window = model_context_window(state, &provider, model);
     let user_home = os_user_home();
-    let read_roots = mycode_config::skill_read_roots(user_home.as_deref(), Some(home.root()));
+    let read_roots = mycode_agent::skill_read_roots(user_home.as_deref(), Some(home.root()));
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
     let mcp_note = mcp_catalog.as_ref().map(|catalog| catalog.prompt_note());
     let system_prompt = {
@@ -418,7 +418,7 @@ async fn run_chat_turn_on(
             on_summarize: Some({
                 let bus = agent_tx.clone();
                 Arc::new(move |active| {
-                    let _ = bus.send(mycode_core::events::AgentEvent::Compacting(active));
+                    let _ = bus.send(mycode_agent::events::AgentEvent::Compacting(active));
                 })
             }),
             cancel: control.cancel.clone(),
@@ -434,7 +434,7 @@ async fn run_chat_turn_on(
             let compactor = compactor.clone();
             let deferred = deferred.clone();
             let bus = bus.clone();
-            move |mut request: mycode_core::Request| {
+            move |mut request: mycode_agent::Request| {
                 let compactor = compactor.clone();
                 let deferred = deferred.clone();
                 let bus = bus.clone();
@@ -442,7 +442,7 @@ async fn run_chat_turn_on(
                     let summary = compactor.compact(&mut request, mode).await;
                     let summarized = summary.is_some();
                     if deferred.stash(summary).await {
-                        let _ = bus.send(mycode_core::events::AgentEvent::CacheDisrupted);
+                        let _ = bus.send(mycode_agent::events::AgentEvent::CacheDisrupted);
                     }
                     (request, summarized)
                 }
@@ -468,9 +468,9 @@ async fn run_chat_turn_on(
         .with_prompt_cache_key(Some(session_id.clone()))
         .with_max_output_tokens(model_output_limit(state, &provider, model));
     if let Some(token) = reasoning {
-        if let Some(level) = mycode_core::ReasoningLevel::parse(token) {
+        if let Some(level) = mycode_agent::ReasoningLevel::parse(token) {
             config = config.with_reasoning(level);
-        } else if mycode_config::is_valid_effort_token(token) {
+        } else if mycode_agent::is_valid_effort_token(token) {
             config = config.with_reasoning_token(Some(token.to_owned()));
         }
     }
@@ -596,7 +596,7 @@ async fn persist_hook_summary(
 /// stick: the next send would load the same tail and fail again.
 fn split_latest_user(
     history: Vec<Arc<Message>>,
-) -> Result<(Vec<Arc<Message>>, mycode_core::UserMessage), String> {
+) -> Result<(Vec<Arc<Message>>, mycode_agent::UserMessage), String> {
     let Some(index) = history.iter().rposition(
         |message| matches!(message.as_ref(), Message::User(user) if user_has_content(user)),
     ) else {
@@ -615,17 +615,17 @@ fn split_latest_user(
 /// Whether this message asks for an answer. A picture counts on its own: an
 /// attachments-only prompt has an empty text block but something to look at,
 /// and treating it as empty made the model answer the previous prompt again.
-fn user_has_content(user: &mycode_core::UserMessage) -> bool {
+fn user_has_content(user: &mycode_agent::UserMessage) -> bool {
     user.content.iter().any(|block| match block {
-        mycode_core::ContentBlock::Text(text) => !text.text.trim().is_empty(),
-        mycode_core::ContentBlock::Image(_) => true,
+        mycode_agent::ContentBlock::Text(text) => !text.text.trim().is_empty(),
+        mycode_agent::ContentBlock::Image(_) => true,
         _ => false,
     })
 }
 
 #[cfg(test)]
 mod selection_tests {
-    use mycode_core::{BinaryData, ContentBlock, TextBlock, UserMessage};
+    use mycode_agent::{BinaryData, ContentBlock, TextBlock, UserMessage};
 
     use super::user_has_content;
 

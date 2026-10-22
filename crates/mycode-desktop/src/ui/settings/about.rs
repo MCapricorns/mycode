@@ -18,7 +18,7 @@ pub(super) fn render_about_section(
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
     let vm = workspace.vm();
-    let current = mycode_app::current_version();
+    let current = mycode_frontend::current_version();
     let auto_update = vm.auto_update;
     let checking = matches!(vm.update, UpdateState::Checking);
     let downloading = matches!(vm.update, UpdateState::Downloading { .. });

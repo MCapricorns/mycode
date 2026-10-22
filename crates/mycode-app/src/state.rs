@@ -8,13 +8,13 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use mycode_agent::catalog::CatalogDocument;
 use mycode_agent::session::SessionId;
 use mycode_agent::session::SessionService;
-use mycode_config::{
+use mycode_agent::{
     DocumentRepair, HomeLayout, ProviderSettings, read_app_settings, read_ui_state,
     read_ui_state_with_repair,
 };
-use mycode_providers::catalog::CatalogDocument;
 use tokio_util::sync::CancellationToken;
 
 use crate::settings_io::render_config_error;
@@ -150,7 +150,7 @@ impl CoreState {
             .lock()
             .get(session_id)
             .cloned()
-            .unwrap_or_else(|| self.home.root().join(mycode_config::SCRATCH_DIR))
+            .unwrap_or_else(|| self.home.root().join(mycode_agent::SCRATCH_DIR))
     }
 
     /// The model list the picker and the turn planner read.
@@ -232,7 +232,7 @@ pub(crate) async fn refresh_catalog(
     };
     match gateway.fetch_models().await {
         Ok(fetched) => {
-            let document = Arc::new(mycode_providers::catalog::magpie::document_from_provider(
+            let document = Arc::new(mycode_agent::catalog::magpie::document_from_provider(
                 fetched.provider,
             ));
             let providers = document.providers.len();
@@ -380,8 +380,8 @@ mod tests {
 
     #[tokio::test]
     async fn max_output_prefers_the_setting_then_the_catalog_then_32000() {
-        use mycode_config::{HomeLayout, ProviderSettings};
-        use mycode_providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+        use mycode_agent::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+        use mycode_agent::{HomeLayout, ProviderSettings};
 
         let root = std::env::temp_dir().join(format!(
             "mycode-max-output-{}-{}",

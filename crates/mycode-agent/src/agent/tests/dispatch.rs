@@ -22,7 +22,7 @@ async fn steer_between_steps_is_in_the_next_request() {
         .expect("completed turn");
     assert!(matches!(
         outcome,
-        mycode_core::events::TurnOutcome::Completed
+        mycode_tools::events::TurnOutcome::Completed
     ));
     assert!(!env.cancel.is_cancelled());
     let seen = seen.lock().expect("seen");
@@ -55,10 +55,10 @@ impl Provider for BatchProvider {
             let step = self.steps.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let (sender, stream) = EventStream::channel(cancel);
             let call = |id: &str, name: &str| {
-                ContentBlock::ToolCall(mycode_core::ToolCall::new(id, name, serde_json::json!({})))
+                ContentBlock::ToolCall(mycode_tools::ToolCall::new(id, name, serde_json::json!({})))
             };
             let message = if step == 0 {
-                mycode_core::AssistantMessage {
+                mycode_tools::AssistantMessage {
                     blocks: vec![
                         call("r1", "probe_read"),
                         call("r2", "probe_read"),
@@ -69,8 +69,8 @@ impl Provider for BatchProvider {
                     stop_reason: StopReason::ToolUse,
                 }
             } else {
-                mycode_core::AssistantMessage {
-                    blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new("done"))],
+                mycode_tools::AssistantMessage {
+                    blocks: vec![ContentBlock::Text(mycode_tools::TextBlock::new("done"))],
                     usage: None,
                     stop_reason: StopReason::Stop,
                 }
@@ -88,8 +88,8 @@ struct ProbeTool {
 }
 
 impl mycode_tools::ToolDyn for ProbeTool {
-    fn spec(&self) -> mycode_core::ToolSpec {
-        mycode_core::ToolSpec {
+    fn spec(&self) -> mycode_tools::ToolSpec {
+        mycode_tools::ToolSpec {
             name: self.name.to_owned(),
             description: "records when it runs".to_owned(),
             params_schema: serde_json::json!({"type": "object"}),
@@ -189,15 +189,15 @@ impl Provider for LengthThenStop {
             if step == 0 {
                 sender
                     .send(StreamEvent::Done {
-                        message: mycode_core::AssistantMessage {
+                        message: mycode_tools::AssistantMessage {
                             blocks: vec![
-                                ContentBlock::Text(mycode_core::TextBlock::new("cut short")),
-                                ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                ContentBlock::Text(mycode_tools::TextBlock::new("cut short")),
+                                ContentBlock::ToolCall(mycode_tools::ToolCall::new(
                                     "",
                                     "read",
                                     serde_json::json!({}),
                                 )),
-                                ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                ContentBlock::ToolCall(mycode_tools::ToolCall::new(
                                     "call-named",
                                     "read",
                                     serde_json::json!({}),
@@ -211,8 +211,8 @@ impl Provider for LengthThenStop {
             } else {
                 sender
                     .send(StreamEvent::Done {
-                        message: mycode_core::AssistantMessage {
-                            blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new("done"))],
+                        message: mycode_tools::AssistantMessage {
+                            blocks: vec![ContentBlock::Text(mycode_tools::TextBlock::new("done"))],
                             usage: None,
                             stop_reason: StopReason::Stop,
                         },
@@ -239,9 +239,9 @@ async fn length_truncated_call_without_an_id_is_not_answered() {
         .expect("completed turn");
     assert!(matches!(
         outcome,
-        mycode_core::events::TurnOutcome::Completed
+        mycode_tools::events::TurnOutcome::Completed
     ));
-    let results: Vec<&mycode_core::ToolResultMessage> = agent
+    let results: Vec<&mycode_tools::ToolResultMessage> = agent
         .state()
         .messages()
         .iter()
@@ -275,17 +275,17 @@ async fn tool_calls_missing_id_or_name_do_not_dispatch_or_resend_unanswered_assi
                 if step == 0 {
                     sender
                         .send(StreamEvent::Done {
-                            message: mycode_core::AssistantMessage {
+                            message: mycode_tools::AssistantMessage {
                                 blocks: vec![
-                                    ContentBlock::Text(mycode_core::TextBlock::new(
+                                    ContentBlock::Text(mycode_tools::TextBlock::new(
                                         "truncated call",
                                     )),
-                                    ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                    ContentBlock::ToolCall(mycode_tools::ToolCall::new(
                                         "",
                                         "read",
                                         serde_json::json!({}),
                                     )),
-                                    ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                                    ContentBlock::ToolCall(mycode_tools::ToolCall::new(
                                         "call-unnamed",
                                         "",
                                         serde_json::json!({}),
@@ -299,8 +299,8 @@ async fn tool_calls_missing_id_or_name_do_not_dispatch_or_resend_unanswered_assi
                 } else {
                     sender
                         .send(StreamEvent::Done {
-                            message: mycode_core::AssistantMessage {
-                                blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new(
+                            message: mycode_tools::AssistantMessage {
+                                blocks: vec![ContentBlock::Text(mycode_tools::TextBlock::new(
                                     "unexpected second step",
                                 ))],
                                 usage: None,
@@ -326,7 +326,7 @@ async fn tool_calls_missing_id_or_name_do_not_dispatch_or_resend_unanswered_assi
         .expect("completed turn");
     assert!(matches!(
         outcome,
-        mycode_core::events::TurnOutcome::Completed
+        mycode_tools::events::TurnOutcome::Completed
     ));
     assert_eq!(
         steps.load(std::sync::atomic::Ordering::SeqCst),
@@ -416,8 +416,8 @@ impl Provider for WindowProvider {
                 )
             } else {
                 StreamEvent::Done {
-                    message: mycode_core::AssistantMessage {
-                        blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new("fits now"))],
+                    message: mycode_tools::AssistantMessage {
+                        blocks: vec![ContentBlock::Text(mycode_tools::TextBlock::new("fits now"))],
                         usage: None,
                         stop_reason: StopReason::Stop,
                     },

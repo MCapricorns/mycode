@@ -11,9 +11,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use mycode_config::AppSettings;
-use mycode_core::ToolSpec;
-use mycode_tools::{ToolCtx, ToolDyn, ToolError, ToolResult, ToolStream};
+use mycode_agent::AppSettings;
+use mycode_agent::ToolSpec;
+use mycode_agent::{ToolCtx, ToolDyn, ToolError, ToolResult, ToolStream};
 use serde_json::Value;
 
 /// One MCP tool exposed by a connected server, registered as a raw-JSON tool.
@@ -114,12 +114,12 @@ impl ToolDyn for DynamicMcpTool {
             // schema-driven only: camelCase keys are left alone because the
             // server may declare them that way.
             let mut args = args;
-            mycode_tools::tool::repair_args(&mut args, &self.spec.params_schema);
+            mycode_agent::tool::repair_args(&mut args, &self.spec.params_schema);
             if let Some(validator) = &self.validator {
                 let errors: Vec<String> = validator
                     .iter_errors(&args)
                     .map(|error| {
-                        mycode_tools::tool::render_schema_error(&error, &self.spec.params_schema)
+                        mycode_agent::tool::render_schema_error(&error, &self.spec.params_schema)
                     })
                     .collect();
                 if !errors.is_empty() {
@@ -143,7 +143,7 @@ impl ToolDyn for DynamicMcpTool {
                 () = ctx.cancel.cancelled() => {
                     return Err(ToolError::Execution(format!(
                         "MCP call cancelled{}",
-                        mycode_tools::tool::INTERRUPTED_NOTE
+                        mycode_agent::tool::INTERRUPTED_NOTE
                     )));
                 }
                 result = call => result,
@@ -221,7 +221,7 @@ impl McpPool {
 /// inside the spawned turn task on the single-threaded core runtime —
 /// plain `.await` only, never `block_on`.
 pub(crate) async fn connect_mcp_tools(
-    home: &mycode_config::HomeLayout,
+    home: &mycode_agent::HomeLayout,
     settings: &AppSettings,
     pool: &tokio::sync::Mutex<Option<McpPool>>,
     project: Option<&std::path::Path>,
@@ -231,7 +231,7 @@ pub(crate) async fn connect_mcp_tools(
     let read_project = project.map(std::path::Path::to_path_buf);
     let Ok((Ok(secrets), merged)) = tokio::task::spawn_blocking(move || {
         (
-            mycode_config::read_provider_secrets(&read_home),
+            mycode_agent::read_provider_secrets(&read_home),
             merged_mcp_servers(&read_home, &read_settings, read_project.as_deref()),
         )
     })
@@ -245,7 +245,7 @@ pub(crate) async fn connect_mcp_tools(
         magpie_ids,
         warning: project_warning,
     } = merged;
-    let stored_key = |server: &mycode_config::McpServerSettings| {
+    let stored_key = |server: &mycode_agent::McpServerSettings| {
         stored_mcp_key(&secrets, &project_ids, &magpie_ids, &server.id).map(str::to_owned)
     };
     let fingerprint = mcp_fingerprint(&servers, &stored_key);
@@ -345,7 +345,7 @@ pub(crate) async fn connect_mcp_tools(
 /// ids that came from each managed source.
 #[derive(Debug, Default)]
 struct MergedServers {
-    servers: Vec<mycode_config::McpServerSettings>,
+    servers: Vec<mycode_agent::McpServerSettings>,
     project_ids: std::collections::HashSet<String>,
     magpie_ids: std::collections::HashSet<String>,
     warning: Option<String>,
@@ -357,7 +357,7 @@ struct MergedServers {
 /// would otherwise inherit that server's stored key and could send it to an
 /// endpoint the row chose.
 fn merged_mcp_servers(
-    home: &mycode_config::HomeLayout,
+    home: &mycode_agent::HomeLayout,
     settings: &AppSettings,
     project: Option<&std::path::Path>,
 ) -> MergedServers {
@@ -371,7 +371,7 @@ fn merged_mcp_servers(
         ..MergedServers::default()
     };
     let mut shadowed = Vec::new();
-    let magpie = match mycode_config::global_mcp_servers(home) {
+    let magpie = match mycode_agent::global_mcp_servers(home) {
         Ok(servers) => servers,
         Err(error) => {
             merged.warning = Some(error);
@@ -391,7 +391,7 @@ fn merged_mcp_servers(
         merged.servers.push(server);
     }
     if let Some(project) = project {
-        let extra = match mycode_config::project_mcp_servers(project) {
+        let extra = match mycode_agent::project_mcp_servers(project) {
             Ok(extra) => extra,
             Err(error) => {
                 merged.warning = Some(error);
@@ -425,7 +425,7 @@ fn merged_mcp_servers(
 /// The vault key for one server. Managed rows never get one: their own file
 /// carries the headers they need.
 fn stored_mcp_key<'a>(
-    secrets: &'a mycode_config::ProviderSecrets,
+    secrets: &'a mycode_agent::ProviderSecrets,
     project_ids: &std::collections::HashSet<String>,
     magpie_ids: &std::collections::HashSet<String>,
     id: &str,
@@ -437,8 +437,8 @@ fn stored_mcp_key<'a>(
 }
 
 fn mcp_fingerprint(
-    servers: &[mycode_config::McpServerSettings],
-    stored_key: &dyn Fn(&mycode_config::McpServerSettings) -> Option<String>,
+    servers: &[mycode_agent::McpServerSettings],
+    stored_key: &dyn Fn(&mycode_agent::McpServerSettings) -> Option<String>,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for server in servers.iter().filter(|server| server.enabled) {
@@ -715,7 +715,7 @@ fn arg_name(args: &Value) -> Result<String, ToolError> {
 /// then `search_tool` and `use_tool`. Returns the catalog so the caller can
 /// render its prompt note.
 pub(crate) fn register_mcp_tools(
-    registry: &mycode_tools::ToolRegistry,
+    registry: &mycode_agent::ToolRegistry,
     tools: Vec<Arc<DynamicMcpTool>>,
     warning: Option<String>,
 ) -> Option<Arc<McpCatalog>> {
@@ -898,7 +898,7 @@ impl ToolDyn for UseTool {
 /// request for the channel's lifetime — handshake, tools/list, and each
 /// tools/call during a turn.
 async fn open_mcp_client(
-    server: &mycode_config::McpServerSettings,
+    server: &mycode_agent::McpServerSettings,
     api_key: Option<String>,
 ) -> Result<crate::mcp_client::McpClient, String> {
     let timeout = crate::mcp_client::DEFAULT_REQUEST_TIMEOUT;
@@ -957,12 +957,12 @@ async fn open_mcp_client(
 /// Runs on the caller's runtime; never builds a nested one (a nested
 /// `Runtime::block_on` panics and takes the core thread down with it).
 pub(crate) async fn mcp_list_tools(
-    home: &mycode_config::HomeLayout,
-    server: &mycode_config::McpServerSettings,
+    home: &mycode_agent::HomeLayout,
+    server: &mycode_agent::McpServerSettings,
 ) -> Result<Vec<String>, String> {
     let read_home = home.clone();
     let secrets =
-        tokio::task::spawn_blocking(move || mycode_config::read_provider_secrets(&read_home))
+        tokio::task::spawn_blocking(move || mycode_agent::read_provider_secrets(&read_home))
             .await
             .map_err(|error| format!("secrets task failed: {error}"))?
             .map_err(|error| crate::settings_io::render_config_error(&error))?;

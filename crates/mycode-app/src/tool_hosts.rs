@@ -122,15 +122,15 @@ pub(crate) struct BridgeAskChannel {
     pub(crate) events: crate::BridgeEventTx,
 }
 
-impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
+impl mycode_agent::builtin::AskChannel for BridgeAskChannel {
     fn ask<'a>(
         &'a self,
-        questions: &'a [mycode_tools::builtin::AskQuestion],
+        questions: &'a [mycode_agent::builtin::AskQuestion],
         cancel: &'a CancellationToken,
     ) -> Pin<
         Box<
             dyn Future<
-                    Output = Result<Vec<mycode_tools::builtin::AskAnswer>, mycode_tools::ToolError>,
+                    Output = Result<Vec<mycode_agent::builtin::AskAnswer>, mycode_agent::ToolError>,
                 > + Send
                 + 'a,
         >,
@@ -158,17 +158,17 @@ impl mycode_tools::builtin::AskChannel for BridgeAskChannel {
             let answers = tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
-                    return Err(mycode_tools::ToolError::Execution(format!(
+                    return Err(mycode_agent::ToolError::Execution(format!(
                         "cancelled{}",
-                        mycode_tools::tool::INTERRUPTED_NOTE
+                        mycode_agent::tool::INTERRUPTED_NOTE
                     )));
                 }
-                answers = answer => answers.map_err(|_| mycode_tools::builtin::user_dismissed())?,
+                answers = answer => answers.map_err(|_| mycode_agent::builtin::user_dismissed())?,
             };
             Ok(questions
                 .iter()
                 .enumerate()
-                .map(|(index, question)| mycode_tools::builtin::AskAnswer {
+                .map(|(index, question)| mycode_agent::builtin::AskAnswer {
                     question: question.question.clone(),
                     answer: answers.get(index).cloned().unwrap_or_default(),
                 })
@@ -204,7 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_turn_can_ask_more_than_once() {
-        use mycode_tools::builtin::{AskChannel as _, AskQuestion};
+        use mycode_agent::builtin::{AskChannel as _, AskQuestion};
 
         let (events, mut requests) = tokio::sync::mpsc::unbounded_channel();
         let channel = super::BridgeAskChannel {

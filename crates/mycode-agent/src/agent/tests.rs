@@ -1,8 +1,8 @@
-use mycode_core::{
+use mycode_tools::ToolRegistry;
+use mycode_tools::{
     ContentBlock, EventStream, Message, Provider, ProviderError, ProviderErrorKind, Request,
     StopReason, StreamEvent, UserMessage,
 };
-use mycode_tools::ToolRegistry;
 use tokio_util::sync::CancellationToken;
 
 use super::{Agent, AgentConfig};
@@ -88,7 +88,7 @@ async fn provider_error_keeps_streamed_thinking() {
         .expect("completed turn");
     assert!(matches!(
         outcome,
-        mycode_core::events::TurnOutcome::Completed
+        mycode_tools::events::TurnOutcome::Completed
     ));
     assert_eq!(assistant_thinking(&agent), "plan the edit");
     let text = assistant_text(&agent);
@@ -131,7 +131,10 @@ async fn cancel_keeps_the_partial_and_marks_it_interrupted() {
         .prompt(Message::User(UserMessage::text("开始写")), &env)
         .await
         .expect("aborted turn");
-    assert!(matches!(outcome, mycode_core::events::TurnOutcome::Aborted));
+    assert!(matches!(
+        outcome,
+        mycode_tools::events::TurnOutcome::Aborted
+    ));
     assert_eq!(assistant_thinking(&agent), "discard me");
     let text = assistant_text(&agent);
     assert!(text.contains("keep me"), "{text}");
@@ -193,7 +196,7 @@ async fn validation_failure_does_not_end_a_turn_that_never_started() {
     let env = TurnEnv::new(&provider, &tools, &hooks);
     let mut events = env.events.subscribe();
     let mut agent = Agent::new(AgentConfig::new());
-    let prompt = "x".repeat(mycode_core::MAX_REQUEST_ENCODED_BYTES);
+    let prompt = "x".repeat(mycode_tools::MAX_REQUEST_ENCODED_BYTES);
     let error = agent
         .prompt(Message::User(UserMessage::text(prompt)), &env)
         .await
@@ -205,8 +208,8 @@ async fn validation_failure_does_not_end_a_turn_that_never_started() {
     let mut saw_ended = false;
     while let Ok(event) = events.try_recv() {
         match event {
-            mycode_core::events::AgentEvent::TurnStarted => saw_started = true,
-            mycode_core::events::AgentEvent::TurnEnded(_) => saw_ended = true,
+            mycode_tools::events::AgentEvent::TurnStarted => saw_started = true,
+            mycode_tools::events::AgentEvent::TurnEnded(_) => saw_ended = true,
             _ => {}
         }
     }
@@ -220,8 +223,8 @@ struct HangAgent {
 }
 
 impl mycode_tools::ToolDyn for HangAgent {
-    fn spec(&self) -> mycode_core::ToolSpec {
-        mycode_core::ToolSpec {
+    fn spec(&self) -> mycode_tools::ToolSpec {
+        mycode_tools::ToolSpec {
             name: "hang".to_owned(),
             description: "nested test agent".to_owned(),
             params_schema: serde_json::json!({"type": "object"}),
@@ -296,8 +299,8 @@ async fn cancelled_nested_agent_result_does_not_enter_history() {
     let handle = tokio::spawn(async move {
         let provider = Scripted {
             events: vec![StreamEvent::Done {
-                message: mycode_core::AssistantMessage {
-                    blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                message: mycode_tools::AssistantMessage {
+                    blocks: vec![ContentBlock::ToolCall(mycode_tools::ToolCall::new(
                         "call-agent",
                         "hang",
                         serde_json::json!({}),
@@ -334,7 +337,7 @@ async fn cancelled_nested_agent_result_does_not_enter_history() {
         .expect("task");
     assert!(matches!(
         outcome.expect("aborted"),
-        mycode_core::events::TurnOutcome::Aborted
+        mycode_tools::events::TurnOutcome::Aborted
     ));
     assert!(
         !history.contains("NESTED_ANSWER_SHOULD_NOT_APPEND"),
@@ -352,8 +355,8 @@ async fn cancelled_nested_agent_result_does_not_enter_history() {
 struct SplitAgents;
 
 impl mycode_tools::ToolDyn for SplitAgents {
-    fn spec(&self) -> mycode_core::ToolSpec {
-        mycode_core::ToolSpec {
+    fn spec(&self) -> mycode_tools::ToolSpec {
+        mycode_tools::ToolSpec {
             name: "agent".to_owned(),
             description: "nested test agents".to_owned(),
             params_schema: serde_json::json!({"type": "object"}),
@@ -388,7 +391,7 @@ impl mycode_tools::ToolDyn for SplitAgents {
 /// closes a call per completion, and a second one fails the turn.
 #[tokio::test]
 async fn cancelling_parallel_agents_completes_each_call_once() {
-    use mycode_core::events::{AgentEvent, TurnOutcome};
+    use mycode_tools::events::{AgentEvent, TurnOutcome};
     use std::time::Duration;
 
     let (events, mut bus) = tokio::sync::broadcast::channel(256);
@@ -396,11 +399,11 @@ async fn cancelling_parallel_agents_completes_each_call_once() {
     let cancel_for_task = cancel.clone();
     let handle = tokio::spawn(async move {
         let call = |id: &str, args: serde_json::Value| {
-            ContentBlock::ToolCall(mycode_core::ToolCall::new(id, "agent", args))
+            ContentBlock::ToolCall(mycode_tools::ToolCall::new(id, "agent", args))
         };
         let provider = Scripted {
             events: vec![StreamEvent::Done {
-                message: mycode_core::AssistantMessage {
+                message: mycode_tools::AssistantMessage {
                     blocks: vec![
                         call("call-fast", serde_json::json!({})),
                         call("call-slow", serde_json::json!({"wait": true})),
@@ -497,8 +500,8 @@ impl Provider for StepProvider {
             if step == 1 {
                 sender
                     .send(StreamEvent::Done {
-                        message: mycode_core::AssistantMessage {
-                            blocks: vec![ContentBlock::ToolCall(mycode_core::ToolCall::new(
+                        message: mycode_tools::AssistantMessage {
+                            blocks: vec![ContentBlock::ToolCall(mycode_tools::ToolCall::new(
                                 "call-note",
                                 "hang",
                                 serde_json::json!({}),
@@ -511,8 +514,8 @@ impl Provider for StepProvider {
             } else {
                 sender
                     .send(StreamEvent::Done {
-                        message: mycode_core::AssistantMessage {
-                            blocks: vec![ContentBlock::Text(mycode_core::TextBlock::new(
+                        message: mycode_tools::AssistantMessage {
+                            blocks: vec![ContentBlock::Text(mycode_tools::TextBlock::new(
                                 "second step",
                             ))],
                             usage: None,
@@ -531,8 +534,8 @@ struct NoteTool {
 }
 
 impl mycode_tools::ToolDyn for NoteTool {
-    fn spec(&self) -> mycode_core::ToolSpec {
-        mycode_core::ToolSpec {
+    fn spec(&self) -> mycode_tools::ToolSpec {
+        mycode_tools::ToolSpec {
             name: "hang".to_owned(),
             description: "records a note".to_owned(),
             params_schema: serde_json::json!({"type": "object"}),

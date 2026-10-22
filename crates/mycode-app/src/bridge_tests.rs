@@ -2,7 +2,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use mycode_config::{HomeLayout, UiState, replace_ui_state};
+use mycode_agent::{HomeLayout, UiState, replace_ui_state};
 
 use crate::{BranchId, BridgeCommand, BridgeReply, CoreBridge, HeadStamp, SessionId};
 
@@ -137,7 +137,7 @@ fn shutdown_drains_persistent_commands_when_reply_waits_are_dropped() {
     let listing = mycode_agent::session::inspect_sessions(&home.0).expect("durable sessions");
     assert!(listing.corrupt.is_empty());
     assert_eq!(listing.sessions.len(), 1, "accepted creation was discarded");
-    assert_eq!(mycode_config::read_ui_state(&home.0).unwrap(), expected_ui);
+    assert_eq!(mycode_agent::read_ui_state(&home.0).unwrap(), expected_ui);
 }
 
 #[derive(Clone, Copy)]
@@ -199,7 +199,7 @@ async fn assert_failure_routes(failure: Failure) {
             branch: BranchId::parse("br1-0123456789abcdef0123456789abcdef").unwrap(),
             expected_head: HeadStamp::Empty,
             text: "unsent".to_owned(),
-            attachments: mycode_core::Attachments::default(),
+            attachments: mycode_agent::Attachments::default(),
         },
         failure,
     )
@@ -211,7 +211,7 @@ async fn assert_failure_routes(failure: Failure) {
     );
     let reply = failed_request(
         BridgeCommand::McpListTools {
-            server: Box::new(mycode_config::McpServerSettings {
+            server: Box::new(mycode_agent::McpServerSettings {
                 id: "routing-probe".to_owned(),
                 enabled: false,
                 transport: "http".to_owned(),

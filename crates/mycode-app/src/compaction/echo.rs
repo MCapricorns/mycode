@@ -5,13 +5,13 @@
 
 use std::sync::Arc;
 
-use mycode_core::Message;
+use mycode_agent::Message;
 
 use super::sizing::{TokenScale, text_tokens};
 use super::{blocks_text, elide, is_summary_message};
 
 /// Most characters of user messages kept after a summary, so summary and
-/// messages together stay inside [`mycode_config::MAX_SUMMARY_CHARS`].
+/// messages together stay inside [`mycode_agent::MAX_SUMMARY_CHARS`].
 const MAX_ECHO_CHARS: usize = 22_000;
 /// Least room worth keeping part of a user message that does not fit whole.
 const MIN_ECHO_PART_TOKENS: usize = 200;

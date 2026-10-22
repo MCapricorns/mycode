@@ -183,7 +183,7 @@ pub struct WorkspaceState {
     /// Whether the sidebar project switcher dropdown is open.
     pub project_menu_open: bool,
     /// The resolved provider catalog.
-    pub catalog: Option<Arc<mycode_providers::catalog::CatalogDocument>>,
+    pub catalog: Option<Arc<mycode_app::catalog::CatalogDocument>>,
     /// Unix seconds of the catalog's last successful cloud fetch.
     pub catalog_fetched_at: u64,
     /// The active workspace folder: the open chat's working directory when it
@@ -195,7 +195,7 @@ pub struct WorkspaceState {
     /// first. Restores each chat's tool working directory.
     pub session_projects: Vec<(String, String)>,
     /// Per-session provider, model, and reasoning. Newest first.
-    pub session_models: Vec<mycode_config::SessionModelPin>,
+    pub session_models: Vec<mycode_app::SessionModelPin>,
     /// Workspace folders, most recently added first. Sessions bind one of
     /// them as their working directory; the others stay reachable extras.
     pub workspace_roots: Vec<String>,
@@ -207,7 +207,7 @@ pub struct WorkspaceState {
     /// changes, so a stale result never vouches for a new setting.
     pub proxy_test: ProxyTestState,
     /// Last persisted windowed size; written back on resize.
-    pub window_size: Option<mycode_config::WindowSize>,
+    pub window_size: Option<mycode_app::WindowSize>,
     /// Whether the update dialog (download/install prompt) is open.
     pub update_dialog_open: bool,
     /// The staged update waiting for a restart, when any.
@@ -229,7 +229,7 @@ pub struct WorkspaceState {
     /// Filter text for the model step of the picker.
     pub picker_query: String,
     /// Models picked from the session picker, newest first.
-    pub recent_models: Vec<mycode_config::ModelPin>,
+    pub recent_models: Vec<mycode_app::ModelPin>,
     /// Filter text for the settings navigation.
     pub settings_query: String,
     /// Whether the thinking-effort submenu is open.
@@ -344,7 +344,7 @@ pub enum FrontendAction {
         typed: bool,
     },
     /// The settings editor changed subagent role routes.
-    SettingsSubagentsChanged(mycode_config::SubagentSettings),
+    SettingsSubagentsChanged(mycode_app::SubagentSettings),
     /// The Skills page switched one skill on or off.
     SettingsSkillToggled(String, bool),
     /// The Agents-page model dropdown opened or closed.
@@ -352,7 +352,7 @@ pub enum FrontendAction {
     /// The General-page language dropdown opened or closed.
     LanguageMenuToggled(bool),
     /// The settings editor added an MCP server.
-    SettingsMcpAdded(mycode_config::McpServerSettings),
+    SettingsMcpAdded(mycode_app::McpServerSettings),
     /// The settings editor removed an MCP server.
     SettingsMcpRemoved(usize),
     /// The settings editor toggled an MCP server.
@@ -536,7 +536,7 @@ pub enum FrontendAction {
     /// The provider catalog resolved (bundled or cloud).
     CatalogLoaded {
         /// The catalog document.
-        document: Arc<mycode_providers::catalog::CatalogDocument>,
+        document: Arc<mycode_app::catalog::CatalogDocument>,
         /// Unix seconds of the last cloud fetch.
         fetched_at: u64,
     },
@@ -557,11 +557,11 @@ pub enum FrontendAction {
         /// Session-to-project bindings.
         session_projects: Vec<(String, String)>,
         /// Per-session model pins.
-        session_models: Vec<mycode_config::SessionModelPin>,
+        session_models: Vec<mycode_app::SessionModelPin>,
         /// Workspace folders, most recently added first.
         workspace_roots: Vec<String>,
         /// Recent model pins, newest first.
-        recent_models: Vec<mycode_config::ModelPin>,
+        recent_models: Vec<mycode_app::ModelPin>,
         /// Thinking traces start collapsed.
         thinking_collapsed: bool,
         /// The Details panel was open.
@@ -569,7 +569,7 @@ pub enum FrontendAction {
         /// The Details panel was pinned resident.
         inspector_pinned: bool,
         /// Persisted windowed size.
-        window_size: Option<mycode_config::WindowSize>,
+        window_size: Option<mycode_app::WindowSize>,
     },
     /// A thinking header was clicked: every trace expands or collapses.
     ThinkingCollapsedToggled,

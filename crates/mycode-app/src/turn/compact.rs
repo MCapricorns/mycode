@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use mycode_agent::session::{BranchId, EventKind, HeadStamp, SessionId};
-use mycode_providers::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
+use mycode_agent::{ReqwestTransport, ResolvedProvider, SseTransport, WireProvider};
 use tokio_util::sync::CancellationToken;
 
 use crate::BridgeEvent;
@@ -116,7 +116,7 @@ impl DeferredSummaries {
     /// Stores a summary for the deferred transcript card.
     ///
     /// Returns whether a new summary was stored. The caller signals
-    /// [`mycode_core::events::AgentEvent::CacheDisrupted`] on the agent bus
+    /// [`mycode_agent::events::AgentEvent::CacheDisrupted`] on the agent bus
     /// in that case, so the pump forwards the cache watch in bus order.
     pub(super) async fn stash(&self, summary: Option<String>) -> bool {
         if let Some(summary) = summary {
