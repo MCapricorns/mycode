@@ -898,7 +898,15 @@ def _expect_single_workflow(workflow: str) -> None:
     _expect(jobs_at != -1, "ci.yml is missing jobs:")
     jobs = re.findall(r"(?m)^  ([a-z0-9-]+):\n", workflow[jobs_at:])
     _expect(
-        jobs == ["check", "release-plan", "release-build", "release-publish", "release-cleanup"],
+        jobs
+        == [
+            "check",
+            "check-macos",
+            "release-plan",
+            "release-build",
+            "release-publish",
+            "release-cleanup",
+        ],
         f"ci.yml jobs are {jobs}",
     )
 
@@ -917,6 +925,23 @@ def _expect_single_workflow(workflow: str) -> None:
     _expect("libxkbcommon-dev" not in build, "Linux GPUI packages are back in release builds")
     check = _yaml_job(workflow, "check")
     _expect("runs-on: windows-latest" in check, "workspace check is not on windows-latest")
+    macos_check = _yaml_job(workflow, "check-macos")
+    _expect(
+        "runs-on: macos-latest" in macos_check,
+        "the macOS check is not on macos-latest",
+    )
+    _expect(
+        "cargo check --workspace --all-targets" in macos_check,
+        "the macOS check does not compile every target",
+    )
+    _expect(
+        'RUSTFLAGS: "-Dwarnings"' in macos_check,
+        "the macOS check does not deny warnings, so dead code passes",
+    )
+    _expect(
+        "needs.check-macos.result == 'success'" in _yaml_job(workflow, "release-publish"),
+        "publish does not wait for the macOS check",
+    )
     _expect("apt-get" not in check, "Linux packages are back in the workspace check")
     _expect("cargo test --workspace" in check, "workspace check does not test")
     _expect("components: clippy" in check, "workspace check does not install clippy")
