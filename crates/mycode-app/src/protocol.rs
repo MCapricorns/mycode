@@ -2,9 +2,9 @@
 //!
 //! These are the values [`crate::BridgeEvent`] and [`crate::BridgeReply`] are
 //! typed in terms of: a session listing row, one transcript entry, the open
-//! conversation, and the in-flight reply. They used to live in the desktop's
-//! view model, which made the core's protocol depend on one particular UI.
-//! They are plain data with no rendering concern, so they belong here and the
+//! conversation, and the in-flight reply. They are plain data with no
+//! rendering concern, so they live here rather than in a frontend's view
+//! model: the core's protocol depends on no particular UI.
 //! frontend reads them.
 
 use std::sync::Arc;

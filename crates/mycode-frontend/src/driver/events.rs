@@ -309,8 +309,8 @@ impl FrontendDriver {
             }
             BridgeEvent::UpdateCheckFailed { message } => {
                 // Startup (and any later automatic check that reports here)
-                // used to drop the error. Toast it. About keeps the short
-                // status line and does not paint this string in red.
+                // toasts the error. About keeps the short status line and does
+                // not paint this string in red.
                 if matches!(
                     self.vm.update,
                     UpdateState::Downloading { .. } | UpdateState::Ready { .. }

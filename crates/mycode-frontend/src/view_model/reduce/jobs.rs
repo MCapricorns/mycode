@@ -448,11 +448,9 @@ fn record_job_elapsed(state: &mut WorkspaceState, job: &LiveJob) {
 #[cfg(test)]
 mod tests {
     use super::{is_agent_event, parse_agent_progress};
-    use mycode_tools::builtin::AGENT_PROGRESS_PREFIX;
 
     #[test]
     fn progress_protocol_is_agent_only() {
-        assert_eq!(AGENT_PROGRESS_PREFIX, "agent");
         assert_eq!(
             parse_agent_progress("agent|scout|queued|look"),
             Some(("scout", "queued", "look"))

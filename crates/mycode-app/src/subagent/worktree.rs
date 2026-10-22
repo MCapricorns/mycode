@@ -231,9 +231,8 @@ const LEGACY_WORKTREE_LEASE_DIR: &str = "task-worktrees";
 /// Removes leases left behind by a crashed process. Best-effort: a lease
 /// whose repo is gone is simply deleted from disk.
 ///
-/// A lease is named after the process that took it. The terminal and the
-/// desktop share the home, so a lease whose process still runs is that
-/// instance's subagent at work and is kept.
+/// A lease is named after the process that took it, so a lease whose process
+/// still runs is that instance's subagent at work and is kept.
 ///
 /// Older builds stored leases under [`LEGACY_WORKTREE_LEASE_DIR`]. Both
 /// directories are reclaimed so a rename does not orphan a checkout.

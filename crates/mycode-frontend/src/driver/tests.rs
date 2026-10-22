@@ -600,8 +600,8 @@ fn a_steer_with_no_turn_running_does_not_send_or_queue() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Steers a chat off screen did not take used to be dropped with the event.
-/// They wait in its parked queue instead.
+/// Steers a chat off screen did not take wait in its parked queue instead of
+/// being dropped with the event.
 #[test]
 fn steers_returned_to_a_chat_off_screen_wait_in_its_queue() {
     use mycode_app::{BranchId, BridgeEvent, SessionId};

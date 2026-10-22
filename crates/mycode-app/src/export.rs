@@ -195,9 +195,9 @@ pub fn import_from_file(
     let current_settings = read_app_settings(home).map_err(|error| format!("settings: {error}"))?;
     // Stdio commands run on the next turn. A bundle that introduces or
     // rewrites one must be confirmed, and so must one that drops the local
-    // ones. The old gate looked only at local commands: anyone with an MCP
-    // server could never import, while a bundle adding commands to an empty
-    // install went through unasked.
+    // ones. A gate over local commands alone would block every user with an
+    // MCP server while letting a bundle add commands to an empty install
+    // unasked.
     if !confirm_mcp_commands && mcp_launches(&current_settings) != mcp_launches(&bundle.settings) {
         return Err(IMPORT_NEEDS_MCP_CONFIRM.to_owned());
     }

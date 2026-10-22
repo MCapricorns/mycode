@@ -229,8 +229,8 @@ mod tests {
     #[test]
     fn a_user_cancel_hides_the_marker_but_keeps_the_partial() {
         let cancel = mycode_core::interrupted_response_text(mycode_core::USER_INTERRUPT_DETAIL);
-        // Thinking-only interrupts used to paint a bare "[error] …" row
-        // under the thinking box; the red cancel banner already says it.
+        // A thinking-only interrupt paints no bare "[error] …" row under the
+        // thinking box; the red cancel banner already says it.
         let thinking_only = mycode_core::AssistantMessage {
             blocks: vec![
                 mycode_core::ContentBlock::Thinking(mycode_core::ThinkingBlock::new("planning")),

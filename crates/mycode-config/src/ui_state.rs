@@ -338,7 +338,7 @@ impl UiState {
             }
         }
         // A merged legacy file can name more folders than one workspace
-        // used to hold; cap the flat list at the old aggregate bound.
+        // holds; cap the flat list at the aggregate bound.
         if self.workspace_roots.len() > MAX_WORKSPACES * MAX_WORKSPACE_ROOTS {
             return Err(invalid());
         }

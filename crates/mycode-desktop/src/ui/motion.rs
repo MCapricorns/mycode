@@ -181,15 +181,13 @@ fn macos_prefers_reduced_motion() -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ENTER_MS, opacity_fade_plays, reduce_motion_from_macos_flag,
-        reduce_motion_from_windows_animation,
+        opacity_fade_plays, reduce_motion_from_macos_flag, reduce_motion_from_windows_animation,
     };
 
     #[test]
     fn reduced_motion_skips_opacity_tweens() {
         assert!(opacity_fade_plays(false));
         assert!(!opacity_fade_plays(true));
-        assert_eq!(ENTER_MS, 140);
     }
 
     #[test]

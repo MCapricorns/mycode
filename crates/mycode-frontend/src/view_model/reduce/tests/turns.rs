@@ -435,8 +435,8 @@ fn reopened(session: &str, running: bool) -> ActiveConversation {
     }
 }
 
-/// Follow-ups queued behind a turn used to vanish when another chat took
-/// the screen. They stay with their chat and come back when it opens.
+/// Follow-ups queued behind a turn stay with their chat, even when another
+/// chat took the screen, and come back when it opens.
 #[test]
 fn queued_follow_ups_come_back_with_their_chat() {
     let mut state = open(Vec::new(), None);

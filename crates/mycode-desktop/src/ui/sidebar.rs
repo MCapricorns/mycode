@@ -42,8 +42,7 @@ const SECTION_HEAD_H: f32 = 28.;
 /// space to sessions; a long one scrolls inside this share instead of pushing
 /// sessions off screen.
 const FOLDERS_BODY_SHARE: f32 = 0.5;
-/// Never shrink the folder block below the old fixed cap, for a window too
-/// short to divide.
+/// Floor for the folder block in a window too short to divide by share.
 const FOLDERS_BODY_MIN_H: f32 = 148.;
 /// Settings and version row at the bottom of the sidebar, its top border
 /// included.
@@ -762,8 +761,8 @@ mod tests {
         SIDEBAR_ROW_BORDERS, action_strip_h, folders_body_max_h,
     };
 
-    /// The old fixed 148 px cap clipped the third folder row. The block now
-    /// follows the leftover space, half each with sessions.
+    /// The block follows the leftover space, half each with sessions, so the
+    /// third folder row is not clipped by a fixed cap.
     #[test]
     fn the_folder_block_follows_the_window_and_shares_with_sessions() {
         let available = |window: f32| {

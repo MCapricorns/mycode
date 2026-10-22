@@ -405,7 +405,7 @@ fn assistant_text(
         .into_any_element()
 }
 
-/// Red alert for an interrupted response: the row the CLI paints with `✖`.
+/// Red alert for an interrupted response, marked with `✖`.
 fn error_note(text: &str, theme: &Theme) -> impl IntoElement {
     div()
         .w_full()

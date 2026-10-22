@@ -1,5 +1,5 @@
 //! `ToolCtx` — the per-invocation execution context handed to every tool.
-//! See `docs/tools.md`.
+//! See `wiki/index.html`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

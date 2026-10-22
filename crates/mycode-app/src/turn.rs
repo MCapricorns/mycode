@@ -238,9 +238,9 @@ async fn run_chat_turn_on(
         .map_err(render_error)?;
     // The prompt is the latest user message. A trailing assistant or tool
     // result (an interrupted turn, or a write that landed after the user
-    // message) used to fail the turn and leave the session unable to send.
-    // Those suffix messages stay in the ledger and are omitted from this
-    // request so the session can continue. Checked before MCP connects.
+    // message) would fail the turn and leave the session unable to send, so
+    // those suffix messages stay in the ledger and are omitted from this
+    // request. Checked before MCP connects.
     let (history, prompt) = split_latest_user(history)?;
     let usage_model = model.to_owned();
     let head_stamp_text = head_spelling(&expected_head);
@@ -592,8 +592,8 @@ async fn persist_hook_summary(
 
 /// Splits the latest non-empty user message off as the prompt.
 ///
-/// Messages after it are dropped from this request only. Returning an error
-/// here used to stick: the next send loaded the same tail and failed again.
+/// Messages after it are dropped from this request only. An error here would
+/// stick: the next send would load the same tail and fail again.
 fn split_latest_user(
     history: Vec<Arc<Message>>,
 ) -> Result<(Vec<Arc<Message>>, mycode_core::UserMessage), String> {

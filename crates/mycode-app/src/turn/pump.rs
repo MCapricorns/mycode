@@ -246,8 +246,8 @@ impl LedgerPump {
                         },
                         // A failed stream that already committed a tool step
                         // (or any earlier step) is done. Reporting "no
-                        // assistant message" used to clear the live bubble
-                        // after the step was the whole turn.
+                        // assistant message" would clear a live bubble whose
+                        // step was the whole turn.
                         None => Ok(last_step.take()),
                     };
                     return match closing {

@@ -3,7 +3,7 @@
 //!
 //! Serde uses the default externally-tagged representation. Wire encoding
 //! belongs to `mycode-providers`; durable session encoding belongs to
-//! `mycode-agent`. See `docs/core.md`.
+//! `mycode-agent`. See `wiki/index.html`.
 
 use std::sync::Arc;
 
