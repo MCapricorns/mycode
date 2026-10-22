@@ -171,6 +171,149 @@ async fn adjacent_reads_overlap_and_a_write_runs_alone() {
     assert_eq!(results, ["r1", "r2", "w", "r3"]);
 }
 
+struct SlowProvider;
+
+impl Provider for SlowProvider {
+    fn stream<'a>(
+        &'a self,
+        _request: &'a Request,
+        cancel: CancellationToken,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<EventStream, ProviderError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let (sender, stream) = EventStream::channel(cancel);
+            sender
+                .send(StreamEvent::Done {
+                    message: mycode_tools::AssistantMessage {
+                        blocks: vec![
+                            ContentBlock::ToolCall(mycode_tools::ToolCall::new(
+                                "slow",
+                                "probe_slow",
+                                serde_json::json!({}),
+                            )),
+                            ContentBlock::ToolCall(mycode_tools::ToolCall::new(
+                                "after",
+                                "probe_slow",
+                                serde_json::json!({}),
+                            )),
+                        ],
+                        usage: None,
+                        stop_reason: StopReason::ToolUse,
+                    },
+                })
+                .await;
+            Ok(stream)
+        })
+    }
+}
+
+/// A tool that reports when it starts and then never finishes on its own.
+struct SlowTool {
+    started: std::sync::Arc<tokio::sync::Notify>,
+    log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl mycode_tools::ToolDyn for SlowTool {
+    fn spec(&self) -> mycode_tools::ToolSpec {
+        mycode_tools::ToolSpec {
+            name: "probe_slow".to_owned(),
+            description: "runs until it is dropped".to_owned(),
+            params_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    fn execute_dyn<'a>(
+        &'a self,
+        _args: serde_json::Value,
+        ctx: &'a mycode_tools::ToolCtx,
+        _out: &'a mut mycode_tools::ToolStream,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<mycode_tools::ToolResult, mycode_tools::ToolError>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let id = ctx.call_id.clone();
+            self.log.lock().expect("log").push(format!("start {id}"));
+            self.started.notify_one();
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            self.log.lock().expect("log").push(format!("end {id}"));
+            Ok(mycode_tools::ToolResult::text(id))
+        })
+    }
+}
+
+fn result_text(result: &mycode_tools::ToolResultMessage) -> String {
+    result
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A cancel drops the tool that is still running instead of waiting it out:
+/// a stopped turn must not keep a shell command — or any other tool — alive.
+#[tokio::test]
+async fn a_cancel_drops_the_running_tool_instead_of_waiting() {
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let tools = ToolRegistry::new();
+    tools.register(std::sync::Arc::new(SlowTool {
+        started: std::sync::Arc::clone(&started),
+        log: std::sync::Arc::clone(&log),
+    }));
+    let hooks = HookRunner::new();
+    let env = TurnEnv::new(&SlowProvider, &tools, &hooks);
+    let mut agent = Agent::new(AgentConfig::new());
+    let mut prompt = Box::pin(agent.prompt(Message::User(UserMessage::text("go")), &env));
+    tokio::select! {
+        () = started.notified() => {}
+        result = prompt.as_mut() => panic!("the turn ended before the tool ran: {result:?}"),
+    }
+    env.cancel.cancel();
+    let outcome = prompt.await.expect("aborted turn");
+    assert!(matches!(
+        outcome,
+        mycode_tools::events::TurnOutcome::Aborted
+    ));
+    assert_eq!(
+        *log.lock().expect("log"),
+        ["start slow"],
+        "the running tool was dropped, not waited out"
+    );
+    let results: Vec<&mycode_tools::ToolResultMessage> = agent
+        .state()
+        .messages()
+        .iter()
+        .filter_map(|message| match message.as_ref() {
+            Message::ToolResult(result) => Some(result),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 2, "every call is answered");
+    assert_eq!(results[0].tool_call_id, "slow");
+    assert!(results[0].is_error);
+    assert!(
+        result_text(results[0]).contains("discarded"),
+        "the dropped call reports as discarded: {}",
+        result_text(results[0])
+    );
+    assert_eq!(results[1].tool_call_id, "after");
+    assert!(results[1].is_error);
+    assert!(
+        result_text(results[1]).contains("not executed"),
+        "the call that never ran reports that: {}",
+        result_text(results[1])
+    );
+}
+
 struct LengthThenStop {
     steps: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
