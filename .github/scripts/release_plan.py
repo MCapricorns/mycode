@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Choose a new GitHub Release tag for one qualified push to main.
 
-A qualified push is a push to main. Pull requests never call this
+A qualified push is a push to main in which some commit subject of the
+push carries ``[release]``; the marker may sit on any commit of the
+push, merge subjects included. Pull requests never call this
 planner. The tag is ``v<workspace
 version>`` when that tag is free. When the tag already exists, the patch
 component is incremented until the tag is free, and Cargo.toml,
@@ -34,11 +36,15 @@ WORKSPACE_PACKAGES = (
 )
 # Used only when a patch bump has nowhere else to take notes from.
 # Commit history is intentionally not rendered into the release body.
-DEFAULT_NOTES = "### Changed\n\n- 三个平台构建通过的 `main` 推送自动发布。\n"
+DEFAULT_NOTES = "### Changed\n\n- 带 `[release]` 标记的 `main` 推送发布。\n"
 STABLE_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
 BUMP_SUBJECT = "chore(release): bump to {version}"
+# A push publishes only when one of its new commit subjects carries this
+# marker. The replayed bump subject above is exempt so a replayed
+# version commit can still publish.
+RELEASE_MARKER = "[release]"
 
 
 @dataclass(frozen=True)
@@ -106,11 +112,14 @@ def choose_release(
     tag_commits: dict[str, str | None],
     head_subject: str,
     head_sha: str,
+    subjects: list[str] | None = None,
 ) -> ReleaseChoice:
     """Pick a tag this push can create.
 
-    Asset file names are deliberately absent. A complete upload for the
-    current workspace version still yields a new tag.
+    ``subjects`` are the commit subjects of this push; only the head
+    subject is scanned when they are not given. Asset file names are
+    deliberately absent. A complete upload for the current workspace
+    version still yields a new tag.
     """
 
     current = parse_stable(workspace)
@@ -129,6 +138,11 @@ def choose_release(
             stable[parsed] = sha.lower() if sha else None
 
     prepared = head_subject == BUMP_SUBJECT.format(version=workspace)
+    scanned = subjects if subjects is not None else [head_subject]
+    if not prepared and not any(RELEASE_MARKER in subject for subject in scanned):
+        return ReleaseChoice(
+            False, workspace, f"v{workspace}", False, "no release marker"
+        )
     higher = any(parsed > current for parsed in stable)
     existing = stable.get(current)
     if prepared and not higher:
@@ -411,7 +425,10 @@ def plan_from_args(args: argparse.Namespace) -> tuple[ReleaseChoice, str]:
         parse_ls_remote(Path(args.remote_tags).read_text(encoding="utf-8")),
         _read_lines(Path(args.release_tags) if args.release_tags else None),
     )
-    choice = choose_release(workspace, tags, args.head_subject, args.head_sha)
+    subjects = _read_lines(Path(args.subjects_file) if args.subjects_file else None)
+    if not subjects:
+        subjects = [args.head_subject]
+    choice = choose_release(workspace, tags, args.head_subject, args.head_sha, subjects)
     print(
         f"{choice.reason}: publish={choice.publish} tag={choice.tag} bump={choice.bump}",
         flush=True,
@@ -447,29 +464,45 @@ def _expect_choice() -> None:
         "v0.7.1": "a" * 40,
         "v0.7.2": "b" * 40,
     }
-    choice = choose_release("0.7.2", tags, "ship linux", "c" * 40)
+    # A push without the marker never publishes, whatever its tags.
+    quiet = choose_release("0.7.2", tags, "ship linux", "c" * 40)
+    _expect(not quiet.publish and not quiet.bump, str(quiet))
+    _expect(quiet.tag == "v0.7.2" and quiet.reason == "no release marker", str(quiet))
+
+    choice = choose_release("0.7.2", tags, f"ship linux {RELEASE_MARKER}", "c" * 40)
     _expect(choice.publish and choice.bump and choice.version == "0.7.3", str(choice))
     _expect(choice.tag == "v0.7.3" and choice.reason == "new tag", str(choice))
 
+    # The head is often only "Merge ..."; a marker on any subject of the
+    # push still qualifies.
+    merged = choose_release(
+        "0.7.2",
+        tags,
+        "Merge branch 'release'",
+        "c" * 40,
+        ["Merge branch 'release'", f"fix(core): crash {RELEASE_MARKER}"],
+    )
+    _expect(merged.publish and merged.version == "0.7.3", str(merged))
+
     occupied = dict(tags)
     occupied["v0.7.3"] = "d" * 40
-    jumped = choose_release("0.7.2", occupied, "again", "e" * 40)
+    jumped = choose_release("0.7.2", occupied, f"again {RELEASE_MARKER}", "e" * 40)
     _expect(jumped.version == "0.7.4" and jumped.bump, str(jumped))
 
     above_hole = dict(occupied)
     above_hole["v0.7.10"] = "9" * 40
-    patched = choose_release("0.7.2", above_hole, "later", "e" * 40)
+    patched = choose_release("0.7.2", above_hole, f"later {RELEASE_MARKER}", "e" * 40)
     _expect(patched.version == "0.7.11", str(patched))
 
-    fresh = choose_release("0.8.0", tags, "minor", "f" * 40)
+    fresh = choose_release("0.8.0", tags, f"minor {RELEASE_MARKER}", "f" * 40)
     _expect(fresh.publish and not fresh.bump and fresh.version == "0.8.0", str(fresh))
 
-    first = choose_release("0.7.2", {}, "initial", "a" * 40)
+    first = choose_release("0.7.2", {}, f"initial {RELEASE_MARKER}", "a" * 40)
     _expect(first.publish and not first.bump and first.tag == "v0.7.2", str(first))
 
     # A release name with no git sha still occupies the tag.
     named = {"v0.7.2": None}
-    from_release = choose_release("0.7.2", named, "push", "a" * 40)
+    from_release = choose_release("0.7.2", named, f"push {RELEASE_MARKER}", "a" * 40)
     _expect(from_release.version == "0.7.3", str(from_release))
 
     prepared = choose_release(
@@ -496,14 +529,16 @@ def _expect_choice() -> None:
     )
     _expect(elsewhere.publish and elsewhere.version == "0.7.4", str(elsewhere))
 
-    # v0.7.3 is published. The next qualified push of that workspace version
+    # v0.7.3 is published. The next marked push of that workspace version
     # must take the following free patch, not reuse v0.7.3.
     published = {
         "v0.7.1": "a" * 40,
         "v0.7.2": "b" * 40,
         "v0.7.3": "c" * 40,
     }
-    after_073 = choose_release("0.7.3", published, "qualified main push", "d" * 40)
+    after_073 = choose_release(
+        "0.7.3", published, f"marked main push {RELEASE_MARKER}", "d" * 40
+    )
     _expect(
         after_073.publish and after_073.bump and after_073.version == "0.7.4",
         str(after_073),
@@ -584,15 +619,15 @@ def _expect_changelog() -> None:
         count=1,
     )
     empty_notes = rewrite_changelog(emptied, version, "2026-10-04")[1]
-    _expect("自动发布" in empty_notes, empty_notes)
+    _expect(RELEASE_MARKER in empty_notes, empty_notes)
     live_body = section_body_unreleased(original)
     live_notes = rewrite_changelog(original, version, "2026-10-04")[1]
     if live_body:
-        _expect(live_body in live_notes, live_notes)
-        if "自动发布" not in live_body:
-            _expect("自动发布" not in live_notes, live_notes)
+        _expect(live_body in live_notes, live_body)
+        if RELEASE_MARKER not in live_body:
+            _expect(RELEASE_MARKER not in live_notes, live_notes)
     else:
-        _expect("自动发布" in live_notes, live_notes)
+        _expect(RELEASE_MARKER in live_notes, live_notes)
     again, again_notes = rewrite_changelog(updated, version, "2026-10-05")
     _expect(again_notes == notes, "existing section was rewritten")
     _expect(again.count(f"## [{version}]") == 1, "duplicate heading")
@@ -736,8 +771,8 @@ def _expect_workflow_contract() -> None:
         "publish is not limited to a successful plan that asked to publish",
     )
     _expect(
-        publish_gate not in _yaml_job(workflow, "release-build"),
-        "platform builds must still run when this push is not a new release",
+        publish_gate in _yaml_job(workflow, "release-build"),
+        "platform builds still run when this push does not publish",
     )
     release_targets = (
         "x86_64-pc-windows-msvc",
@@ -802,6 +837,11 @@ def _expect_workflow_contract() -> None:
         "github.actor != 'github-actions[bot]'" in plan,
         "a version bump push can plan another patch release",
     )
+    _expect(
+        "--subjects-file" in plan,
+        "push subjects are not passed to the planner",
+    )
+    _expect(RELEASE_MARKER in workflow, "release marker is not documented in ci.yml")
     release_build_job = _yaml_job(workflow, "release-build")
     check = _yaml_job(workflow, "check")
     _expect(
@@ -850,6 +890,7 @@ def _expect_workflow_contract() -> None:
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     intro, _, _ = changelog.partition("## [Unreleased]")
     _expect("aarch64-pc-windows-msvc" in changelog, "ARM64 archive missing from changelog")
+    _expect(RELEASE_MARKER in intro, "changelog policy omits the release marker")
     _expect("cargo test --workspace" in intro, "changelog policy omits PR workspace tests")
     _expect(
         "cargo clippy --workspace --all-targets" in intro,
@@ -959,6 +1000,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--remote-tags")
     parser.add_argument("--release-tags")
+    parser.add_argument("--subjects-file")
     parser.add_argument("--head-subject", default="")
     parser.add_argument("--head-sha", default="")
     parser.add_argument("--date", default="")
