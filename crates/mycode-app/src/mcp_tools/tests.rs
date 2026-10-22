@@ -69,19 +69,9 @@ fn a_project_server_cannot_take_a_user_id_or_its_key() {
     );
 }
 
-use super::{McpCatalog, bound_mcp_result, mcp_server_is_direct};
+use super::{McpCatalog, bound_mcp_result};
 use crate::mcp_client::McpTool;
 use mycode_agent::ToolDyn;
-
-fn tool(name: &str, schema_bytes: usize) -> McpTool {
-    let filler = "x".repeat(schema_bytes.saturating_sub(20));
-    McpTool {
-        name: name.to_owned(),
-        description: Some(format!("desc {name}")),
-        input_schema: serde_json::json!({"type": "object", "filler": filler}),
-        read_only: false,
-    }
-}
 
 #[test]
 fn mcp_snippets_say_what_the_tool_does() {
@@ -97,14 +87,19 @@ fn mcp_snippets_say_what_the_tool_does() {
     assert!(long.ends_with("\u{2026} (MCP server 'docs')"), "{long}");
 }
 
+/// The prompt line a server contributes is one bounded sentence: server
+/// instructions are untrusted text, so they never reach the prompt as
+/// several lines.
 #[test]
-fn small_servers_are_direct_and_large_ones_are_not() {
-    let small = vec![tool("a", 32), tool("b", 32)];
-    assert!(mcp_server_is_direct(&small));
-    let many: Vec<_> = (0..5).map(|index| tool(&format!("t{index}"), 32)).collect();
-    assert!(!mcp_server_is_direct(&many));
-    let wide = vec![tool("wide", 4096)];
-    assert!(!mcp_server_is_direct(&wide));
+fn a_server_summary_is_one_bounded_line() {
+    assert_eq!(
+        super::mcp_server_summary("Look things up.\nSecond line."),
+        Some("Look things up.".to_owned())
+    );
+    assert_eq!(super::mcp_server_summary(" \n\t "), None);
+    let long = super::mcp_server_summary(&"word ".repeat(80)).expect("summary");
+    assert!(long.ends_with('\u{2026}'), "{long}");
+    assert!(long.chars().count() <= 161, "{long}");
 }
 
 #[test]
@@ -164,53 +159,38 @@ fn storing_a_result_sweeps_week_old_results_only() {
 }
 
 #[test]
-fn list_names_deferred_tools_without_schemas() {
-    let catalog = McpCatalog {
-        by_name: std::collections::HashMap::new(),
-        direct: vec!["small".to_owned()],
-        deferred: vec![("remote".to_owned(), "does a thing".to_owned())],
-        warning: None,
-    };
+fn list_names_tools_without_schemas() {
+    let catalog = McpCatalog::from_tools(
+        vec![
+            catalog_tool("anysearch", "search", "Search the web."),
+            catalog_tool("github", "create_issue", "Open a GitHub issue."),
+        ],
+        None,
+        &|_| false,
+    )
+    .expect("catalog");
     let listed = catalog.list_text();
-    assert!(listed.contains("remote"));
-    assert!(listed.contains("does a thing"));
-    assert!(listed.contains("Direct tools, called by name: small."));
+    assert!(listed.contains("search — Search the web."), "{listed}");
+    assert!(
+        listed.contains("create_issue — Open a GitHub issue."),
+        "{listed}"
+    );
     assert!(!listed.contains("inputSchema"));
     let note = catalog.prompt_note();
-    assert!(note.contains("list"));
-    assert!(!note.contains("remote"));
-}
-
-/// Every tool direct is still a connected MCP server; the answer names
-/// them instead of reading like "no MCP".
-#[test]
-fn list_names_direct_tools_when_nothing_is_deferred() {
-    let catalog = McpCatalog {
-        by_name: std::collections::HashMap::new(),
-        direct: vec![
-            "context7_query_docs".to_owned(),
-            "anysearch_search".to_owned(),
-        ],
-        deferred: Vec::new(),
-        warning: None,
-    };
-    assert_eq!(
-        catalog.list_text(),
-        "No deferred MCP tools. Direct tools are called by name: \
-         context7_query_docs, anysearch_search."
-    );
+    assert!(note.contains("\"list\""), "{note}");
+    assert!(!note.contains("create_issue"), "{note}");
 }
 
 /// The config error is the reason a server is missing, so `"list"` keeps
 /// it instead of claiming nothing is set up.
 #[test]
 fn list_keeps_the_config_error_above_the_tools() {
-    let catalog = McpCatalog {
-        by_name: std::collections::HashMap::new(),
-        direct: Vec::new(),
-        deferred: Vec::new(),
-        warning: Some("MCP config unreadable: access denied".to_owned()),
-    };
+    let catalog = McpCatalog::from_tools(
+        Vec::new(),
+        Some("MCP config unreadable: access denied".to_owned()),
+        &|_| false,
+    )
+    .expect("catalog");
     let listed = catalog.list_text();
     assert!(listed.contains("MCP config: MCP config unreadable: access denied"));
     assert!(listed.contains("No MCP tools are connected."));
@@ -235,7 +215,10 @@ impl crate::mcp_client::JsonRpcChannel for ScriptedMcp {
     > {
         Box::pin(async move {
             match method {
-                "initialize" => Ok(serde_json::json!({"protocolVersion": "2025-06-18"})),
+                "initialize" => Ok(serde_json::json!({
+                    "protocolVersion": "2025-06-18",
+                    "instructions": "Look up docs.\nSecond line."
+                })),
                 "tools/list" => Ok(serde_json::json!({
                 "tools": [
                 {
@@ -279,12 +262,13 @@ impl crate::mcp_client::JsonRpcChannel for ScriptedMcp {
 }
 
 #[tokio::test]
-async fn direct_mcp_call_runs_the_server_tool() {
+async fn mcp_call_runs_the_server_tool() {
     let scripted = std::sync::Arc::new(ScriptedMcp {
         calls: std::sync::Mutex::new(Vec::new()),
     });
     let mut client = crate::mcp_client::McpClient::new(scripted.clone());
     client.initialize().await.expect("handshake");
+    assert_eq!(client.instructions(), Some("Look up docs.\nSecond line."));
     let listed = client.list_tools().await.expect("list");
     assert!(
         listed
@@ -296,42 +280,31 @@ async fn direct_mcp_call_runs_the_server_tool() {
             .iter()
             .any(|tool| tool.name == "write-note" && !tool.read_only)
     );
+    let server = std::sync::Arc::new(super::McpServerInfo::new("docs", None));
     let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let result_dir = std::sync::Arc::new(std::env::temp_dir());
     let client = std::sync::Arc::new(tokio::sync::Mutex::new(client));
     let mut tools = Vec::new();
     for tool in listed {
         tools.push(std::sync::Arc::new(super::DynamicMcpTool::new(
-            "docs".to_owned(),
+            server.clone(),
             tool,
             client.clone(),
             broken.clone(),
-            true,
             result_dir.clone(),
         )));
     }
-    let scout: Vec<_> = tools
+    let readonly: Vec<_> = tools
         .iter()
         .filter(|tool| tool.read_only())
         .cloned()
         .collect();
-    assert_eq!(scout.len(), 1);
-    assert_eq!(scout[0].spec().name, "lookup");
+    assert_eq!(readonly.len(), 1);
+    assert_eq!(readonly[0].spec().name, "lookup");
     assert!(tools.iter().any(|tool| tool.spec().name == "write-note"));
-
-    let registry = mycode_agent::ToolRegistry::new();
-    registry.register(scout[0].clone());
-    let prompt = mycode_agent::build_system_prompt(&registry);
-    assert!(
-        prompt.contains(
-            "
-- lookup:"
-        ),
-        "the tool list must name the MCP tool:
-{prompt}"
-    );
+    let lookup = readonly[0].clone();
     let root = std::env::temp_dir().join(format!(
-        "mycode-mcp-direct-{}-{}",
+        "mycode-mcp-call-{}-{}",
         std::process::id(),
         crate::unix_now().as_nanos()
     ));
@@ -339,7 +312,7 @@ async fn direct_mcp_call_runs_the_server_tool() {
     let ctx = mycode_agent::ToolCtx::new(&root);
     let (mut stream, rx) = mycode_agent::ToolStream::channel();
     let result = mycode_agent::ToolDyn::execute_dyn(
-        scout[0].as_ref(),
+        lookup.as_ref(),
         serde_json::json!({"query": "direct"}),
         &ctx,
         &mut stream,
@@ -362,7 +335,7 @@ async fn direct_mcp_call_runs_the_server_tool() {
     // before validation instead of costing the model a turn.
     let (mut stream, rx) = mycode_agent::ToolStream::channel();
     let repaired = mycode_agent::ToolDyn::execute_dyn(
-        scout[0].as_ref(),
+        lookup.as_ref(),
         serde_json::json!({"q": "repaired"}),
         &ctx,
         &mut stream,
@@ -380,8 +353,7 @@ async fn direct_mcp_call_runs_the_server_tool() {
     drop(calls);
     let _ = std::fs::remove_dir_all(&root);
 
-    let catalog =
-        super::McpCatalog::from_tools_with_warning(tools, None, &|_| false).expect("catalog");
+    let catalog = super::McpCatalog::from_tools(tools, None, &|_| false).expect("catalog");
     for spelling in [
         "lookup",
         "LOOKUP",
@@ -398,18 +370,21 @@ async fn direct_mcp_call_runs_the_server_tool() {
     assert!(catalog.get("docs.missing").is_none());
 }
 
-fn catalog_tool(
-    server: &str,
+fn server_info(id: &str, instructions: Option<&str>) -> std::sync::Arc<super::McpServerInfo> {
+    std::sync::Arc::new(super::McpServerInfo::new(id, instructions))
+}
+
+fn tool_on(
+    server: &std::sync::Arc<super::McpServerInfo>,
     name: &str,
     description: &str,
-    direct: bool,
 ) -> std::sync::Arc<super::DynamicMcpTool> {
     let channel = std::sync::Arc::new(ScriptedMcp {
         calls: std::sync::Mutex::new(Vec::new()),
     });
     let client = crate::mcp_client::McpClient::new(channel);
     std::sync::Arc::new(super::DynamicMcpTool::new(
-        server.to_owned(),
+        std::sync::Arc::clone(server),
         McpTool {
             name: name.to_owned(),
             description: Some(description.to_owned()),
@@ -418,25 +393,32 @@ fn catalog_tool(
         },
         std::sync::Arc::new(tokio::sync::Mutex::new(client)),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        direct,
         std::sync::Arc::new(std::env::temp_dir()),
     ))
+}
+
+fn catalog_tool(
+    server: &str,
+    name: &str,
+    description: &str,
+) -> std::sync::Arc<super::DynamicMcpTool> {
+    tool_on(&server_info(server, None), name, description)
 }
 
 #[test]
 fn same_named_tools_on_two_servers_both_stay_reachable() {
     let tools = vec![
-        catalog_tool("alpha", "search", "Search alpha issues.", false),
-        catalog_tool("beta", "search", "Search beta wiki pages.", false),
+        catalog_tool("alpha", "search", "Search alpha issues."),
+        catalog_tool("beta", "search", "Search beta wiki pages."),
     ];
-    let catalog = McpCatalog::from_tools_with_warning(tools, None, &|_| false).unwrap();
+    let catalog = McpCatalog::from_tools(tools, None, &|_| false).unwrap();
     assert_eq!(catalog.get("search").map(|(key, _)| key), Some("search"));
     let (key, tool) = catalog.get("beta__search").expect("second server");
-    assert_eq!((key, tool.server_id.as_str()), ("beta__search", "beta"));
+    assert_eq!((key, tool.server.id.as_str()), ("beta__search", "beta"));
     let (_, tool) = catalog
         .get("beta.search")
         .expect("server-prefixed spelling");
-    assert_eq!(tool.server_id, "beta");
+    assert_eq!(tool.server.id, "beta");
     let listed = catalog.list_text();
     assert!(
         listed.contains("beta__search — Search beta wiki pages."),
@@ -444,47 +426,59 @@ fn same_named_tools_on_two_servers_both_stay_reachable() {
     );
 }
 
-/// The note names every connected server: a deferred tool is only findable
-/// when the model knows which servers exist and how to reach them.
+/// The note names every connected server with its tool count and its own
+/// summary, and preloads no tool: a tool is only findable when the model
+/// knows which servers are up and how to reach their tools.
 #[test]
 fn the_prompt_note_names_connected_servers() {
+    let anysearch = server_info("anysearch", None);
+    let github = server_info(
+        "github",
+        Some("Manage GitHub issues, pull requests, and code.\nSecond line."),
+    );
     let tools = vec![
-        catalog_tool("anysearch", "search", "Search the web.", false),
-        catalog_tool("github", "create_issue", "Open a GitHub issue.", false),
-        catalog_tool("github", "list_pulls", "List pull requests.", false),
+        tool_on(&anysearch, "search", "Search the web."),
+        tool_on(&github, "create_issue", "Open a GitHub issue."),
+        tool_on(&github, "list_pulls", "List pull requests."),
     ];
-    let catalog = McpCatalog::from_tools_with_warning(tools, None, &|_| false).unwrap();
+    let catalog = McpCatalog::from_tools(tools, None, &|_| false).unwrap();
     let note = catalog.prompt_note();
+    assert!(note.contains("- anysearch (1 tool)\n"), "{note}");
     assert!(
-        note.contains("Connected MCP servers: anysearch, github."),
+        note.contains("- github (2 tools) — Manage GitHub issues, pull requests, and code.\n"),
         "{note}"
     );
     assert!(note.contains("search_tool"), "{note}");
+    assert!(note.contains("use_tool"), "{note}");
+    assert!(!note.contains("create_issue"), "{note}");
 }
 
+/// A tool whose bare name is already a registry tool keeps its server
+/// prefix, so `use_tool` never reads as the other tool.
 #[test]
-fn a_direct_tool_named_like_a_builtin_is_served_by_search_tool() {
+fn a_tool_named_like_a_builtin_keeps_its_server_prefix() {
     let tools = vec![
-        catalog_tool("files", "read", "Read a remote file.", true),
-        catalog_tool("files", "stat", "Stat a remote file.", true),
+        catalog_tool("files", "read", "Read a remote file."),
+        catalog_tool("files", "stat", "Stat a remote file."),
     ];
-    let catalog = McpCatalog::from_tools_with_warning(tools, None, &|name| name == "read").unwrap();
-    let note = catalog.prompt_note();
-    assert!(note.contains("Direct MCP tools: stat."), "{note}");
-    assert!(note.contains("search_tool"), "{note}");
-    assert_eq!(catalog.direct_tools().len(), 1);
-    assert!(catalog.list_text().contains("read — Read a remote file."));
-    assert!(catalog.get("read").is_some());
+    let catalog = McpCatalog::from_tools(tools, None, &|name| name == "read").unwrap();
+    let listed = catalog.list_text();
+    assert!(
+        listed.contains("files__read — Read a remote file."),
+        "{listed}"
+    );
+    assert!(listed.contains("stat — Stat a remote file."), "{listed}");
+    assert_eq!(catalog.get("read").map(|(key, _)| key), Some("files__read"));
 }
 
 #[test]
 fn keyword_search_matches_names_servers_and_descriptions() {
     let tools = vec![
-        catalog_tool("github", "create_issue", "Open a new GitHub issue.", false),
-        catalog_tool("github", "list_pulls", "List pull requests.", false),
-        catalog_tool("linear", "create_ticket", "Open a Linear issue.", false),
+        catalog_tool("github", "create_issue", "Open a new GitHub issue."),
+        catalog_tool("github", "list_pulls", "List pull requests."),
+        catalog_tool("linear", "create_ticket", "Open a Linear issue."),
     ];
-    let catalog = McpCatalog::from_tools_with_warning(tools, None, &|_| false).unwrap();
+    let catalog = McpCatalog::from_tools(tools, None, &|_| false).unwrap();
     let keys = |query: &str| -> Vec<String> {
         catalog
             .search(query)

@@ -36,7 +36,7 @@ MYCode 是一个本地编码代理桌面应用。
 | **附件** | 拖入文件或粘贴图片即附加到下一条消息：最多 4 张图、8 个文本文件。拖入文件夹则绑定为工作目录。 |
 | **子代理** | `scout` 只读，适合宽范围代码搜索和查文档（可用 magpie 下发的只读 MCP 工具）；`artisan` 在独立的 git worktree 里改代码，结束时回传 diff，不自动合回、不提交。每个回合最多同时跑 8 个，没有超时；取消回合、单独停止或删除对话都会结束它们。也可以在 `agents/` 里加自定义角色。 |
 | **技能** | 从 `.agents`、`.agents/skills` 和 magpie Library 的 `~/.mycode/skills` 发现 `SKILL.md`，`/` 菜单可插入；设置里每个技能可以单独关闭。 |
-| **MCP** | 支持 stdio 和 Streamable HTTP，最多 64 台服务器。工具不超过 4 个、且每个 schema 不超过 2048 字节的小服务直接注册成普通工具，其余走 `search_tool` / `use_tool`。magpie Library 写入的 `~/.mycode/mcp.json` 会自动合并。 |
+| **MCP** | 支持 stdio 和 Streamable HTTP，最多 64 台服务器。MCP 工具一律不进模型工具表：先 `search_tool` 取 schema，再 `use_tool` 调用；系统提示词的 `<mcp>` 段逐行列出本轮连上的服务器、工具数和服务器自述的首句，模型据此知道去哪里找。magpie Library 写入的 `~/.mycode/mcp.json` 会自动合并。 |
 | **网页** | 没有内置搜索；联网检索由 magpie Library 下发的 MCP 服务提供（例如 anysearch）。 |
 | **界面** | 中英双语、深色/浅色、四档字号，`Ctrl-K` / `Cmd-K` 打开命令面板。 |
 | **代理** | 跟随系统代理，或手动填写 `http` / `socks5` 地址。设置页的「测试」会请求 `google.com/generate_204` 并显示线路、状态码和耗时。 |

@@ -234,7 +234,7 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
     let workspace = super::ChildWorkspace {
         resources: vec!["# AGENTS.md (workspace)\n\nRun `just check` before reporting.".to_owned()],
         mcp_note: Some(super::child_mcp_note(
-            "Other MCP tools are connected but not preloaded. Call `search_tool` with name \"list\".\n",
+            "Connected MCP servers:\n- anysearch (1 tool)\nFind one with `search_tool` by keyword (or name \"list\").\n",
             scout.is_write_capable(),
         )),
         ..Default::default()
@@ -254,7 +254,7 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
         "{prompt}"
     );
     assert!(prompt.contains("standing instructions"), "{prompt}");
-    assert!(prompt.contains("<mcp>\nOther MCP tools"), "{prompt}");
+    assert!(prompt.contains("<mcp>\nConnected MCP servers"), "{prompt}");
     assert!(prompt.contains("name \"list\""), "{prompt}");
     assert!(prompt.contains("declare readOnlyHint"), "{prompt}");
     assert!(!prompt.contains("whose server set"), "{prompt}");
@@ -263,7 +263,7 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
         "per-workspace text stays after the cached fixed prefix:\n{prompt}"
     );
 
-    let note = super::child_mcp_note("Direct MCP tools: a. Call them directly by name.\n", true);
+    let note = super::child_mcp_note("Connected MCP servers:\n- anysearch (1 tool)\n", true);
     assert!(!note.contains("readOnlyHint"), "{note}");
 }
 

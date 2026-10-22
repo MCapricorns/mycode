@@ -1,8 +1,9 @@
 //! Bridges enabled MCP servers into the agent's tool registry.
 //!
-//! Servers are connected at turn start. A small server is registered on
-//! the model tool list. Larger servers stay behind `search_tool` and
-//! `use_tool`. A failed server is skipped.
+//! Servers are connected at turn start and every tool stays behind
+//! `search_tool` and `use_tool`: the model's tool list keeps the same two
+//! schemas whatever the servers declare, and the system prompt names the
+//! servers that connected. A failed server is skipped.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -16,14 +17,15 @@ use mycode_agent::ToolSpec;
 use mycode_agent::{ToolCtx, ToolDyn, ToolError, ToolResult, ToolStream};
 use serde_json::Value;
 
-/// One MCP tool exposed by a connected server, registered as a raw-JSON tool.
+/// One MCP tool exposed by a connected server and reached through
+/// `use_tool`.
 ///
 /// Implements `ToolDyn` directly instead of `Tool` because the server's
 /// `inputSchema` must reach the model verbatim through `spec()`; the blanket
 /// `impl<T: Tool> ToolDyn` would advertise the schemars schema of
 /// `Args = serde_json::Value`, which is just `true`.
 pub(crate) struct DynamicMcpTool {
-    server_id: String,
+    server: Arc<McpServerInfo>,
     tool_name: String,
     /// Built once. `spec()` clones this instead of rebuilding the schema.
     spec: ToolSpec,
@@ -35,9 +37,6 @@ pub(crate) struct DynamicMcpTool {
     snippet: String,
     /// Set when the shared connection dies so the next turn reconnects.
     broken: Arc<AtomicBool>,
-    /// Small servers are registered as ordinary tools. Larger ones stay
-    /// reachable through `search_tool`.
-    direct: bool,
     /// Directory that stores full text when a tool result is truncated.
     /// Shared by every tool from one connect, so each tool does not copy the path.
     result_dir: Arc<std::path::PathBuf>,
@@ -45,34 +44,48 @@ pub(crate) struct DynamicMcpTool {
     read_only: bool,
 }
 
+/// One connected server as the system prompt describes it: the id the model
+/// searches by and one line from the server's own handshake instructions.
+#[derive(Debug)]
+pub(crate) struct McpServerInfo {
+    id: String,
+    summary: Option<String>,
+}
+
+impl McpServerInfo {
+    fn new(id: &str, instructions: Option<&str>) -> Self {
+        Self {
+            id: id.to_owned(),
+            summary: instructions.and_then(mcp_server_summary),
+        }
+    }
+}
+
 impl DynamicMcpTool {
     fn new(
-        server_id: String,
+        server: Arc<McpServerInfo>,
         tool: crate::mcp_client::McpTool,
         client: Arc<tokio::sync::Mutex<crate::mcp_client::McpClient>>,
         broken: Arc<AtomicBool>,
-        direct: bool,
         result_dir: Arc<std::path::PathBuf>,
     ) -> Self {
         let validator = jsonschema::validator_for(&tool.input_schema).ok();
-        let snippet = mcp_snippet(&server_id, tool.description.as_deref());
+        let snippet = mcp_snippet(&server.id, tool.description.as_deref());
         let spec = ToolSpec {
             name: tool.name.clone(),
-            description: tool
-                .description
-                .clone()
-                .unwrap_or_else(|| format!("MCP tool '{}' on server '{server_id}'.", tool.name)),
+            description: tool.description.clone().unwrap_or_else(|| {
+                format!("MCP tool '{}' on server '{}'.", tool.name, server.id)
+            }),
             params_schema: tool.input_schema,
         };
         Self {
-            server_id,
+            server,
             tool_name: tool.name,
             spec,
             validator,
             client,
             snippet,
             broken,
-            direct,
             result_dir,
             read_only: tool.read_only,
         }
@@ -85,7 +98,7 @@ impl DynamicMcpTool {
 
 mod results;
 
-use results::{MAX_MCP_TOOL_RESULT_BYTES, bound_mcp_result, mcp_server_is_direct, mcp_snippet};
+use results::{MAX_MCP_TOOL_RESULT_BYTES, bound_mcp_result, mcp_server_summary, mcp_snippet};
 impl ToolDyn for DynamicMcpTool {
     fn spec(&self) -> ToolSpec {
         self.spec.clone()
@@ -128,7 +141,7 @@ impl ToolDyn for DynamicMcpTool {
             }
             out.progress(format!(
                 "calling {} on MCP server {}",
-                self.tool_name, self.server_id
+                self.tool_name, self.server.id
             ));
             // The dispatcher does not select on the turn token while a tool
             // runs; bound the call here so Escape actually cancels an MCP call.
@@ -153,10 +166,10 @@ impl ToolDyn for DynamicMcpTool {
                     self.broken.store(true, Ordering::Relaxed);
                     format!(
                         "MCP server '{}' lost the connection: {error}",
-                        self.server_id
+                        self.server.id
                     )
                 } else {
-                    format!("MCP server '{}': {error}", self.server_id)
+                    format!("MCP server '{}': {error}", self.server.id)
                 };
                 ToolError::Execution(detail)
             })?;
@@ -307,18 +320,17 @@ pub(crate) async fn connect_mcp_tools(
         let Some((client, listed)) = opened.next().flatten() else {
             continue;
         };
-        let direct = mcp_server_is_direct(&listed);
+        let server_info = Arc::new(McpServerInfo::new(&server.id, client.instructions()));
         let client = Arc::new(tokio::sync::Mutex::new(client));
         *slot = Some(
             listed
                 .into_iter()
                 .map(|tool| {
                     Arc::new(DynamicMcpTool::new(
-                        server.id.clone(),
+                        Arc::clone(&server_info),
                         tool,
                         client.clone(),
                         Arc::clone(&broken),
-                        direct,
                         Arc::clone(&result_dir),
                     ))
                 })
@@ -459,12 +471,15 @@ fn mcp_fingerprint(
 /// `search_tool` is called.
 ///
 /// The key is the server's tool name, or `server__tool` when an earlier
-/// server already took that name, so two servers never hide each other.
+/// server or a registered tool already took that name, so two tools never
+/// hide each other.
 pub(crate) struct McpCatalog {
     by_name: HashMap<String, Arc<DynamicMcpTool>>,
-    direct: Vec<String>,
-    /// Catalog key and one-line summary of each tool `search_tool` serves.
-    deferred: Vec<(String, String)>,
+    /// Catalog key and one-line summary of each tool, sorted by key.
+    listed: Vec<(String, String)>,
+    /// Connected servers in configuration order, with how many of their
+    /// tools this catalog serves.
+    servers: Vec<(Arc<McpServerInfo>, usize)>,
     warning: Option<String>,
 }
 
@@ -473,10 +488,12 @@ const MAX_SEARCH_MATCHES: usize = 25;
 
 impl McpCatalog {
     /// Builds the catalog in server order. `taken` names the tools already
-    /// on the registry: a small server's tool with one of those names is
-    /// served through `search_tool` instead, since registering it directly
-    /// would leave the model calling the other tool.
-    pub(crate) fn from_tools_with_warning(
+    /// on the registry: a tool with one of those names is addressed as
+    /// `server__tool`, because a bare `use_tool` name would read as the
+    /// registered tool. No tool is registered directly — its schema stays
+    /// here until `search_tool` is called, so the model's tool list does not
+    /// grow with the servers.
+    pub(crate) fn from_tools(
         tools: Vec<Arc<DynamicMcpTool>>,
         warning: Option<String>,
         taken: &dyn Fn(&str) -> bool,
@@ -485,44 +502,38 @@ impl McpCatalog {
             return None;
         }
         let mut by_name = HashMap::new();
-        let mut direct = Vec::new();
-        let mut deferred = Vec::new();
+        let mut listed = Vec::new();
+        let mut servers: Vec<(Arc<McpServerInfo>, usize)> = Vec::new();
         for tool in tools {
             let mut key = tool.spec.name.clone();
-            if by_name.contains_key(&key) {
-                key = format!("{}__{}", tool.server_id, tool.spec.name);
+            if by_name.contains_key(&key) || taken(&key) {
+                key = format!("{}__{}", tool.server.id, tool.spec.name);
                 if by_name.contains_key(&key) {
                     continue;
                 }
             }
-            if tool.direct && key == tool.spec.name && !taken(&key) {
-                direct.push(key.clone());
-            } else {
-                deferred.push((key.clone(), tool.snippet.clone()));
+            match servers
+                .iter_mut()
+                .find(|(server, _)| server.id == tool.server.id)
+            {
+                Some((_, count)) => *count += 1,
+                None => servers.push((Arc::clone(&tool.server), 1)),
             }
+            listed.push((key.clone(), tool.snippet.clone()));
             by_name.insert(key, tool);
         }
-        direct.sort();
-        deferred.sort_by(|left, right| left.0.cmp(&right.0));
+        listed.sort_by(|left, right| left.0.cmp(&right.0));
         Some(Arc::new(Self {
             by_name,
-            direct,
-            deferred,
+            listed,
+            servers,
             warning,
         }))
     }
 
-    /// Tools small enough to register on the model tool list.
-    pub(crate) fn direct_tools(&self) -> Vec<Arc<DynamicMcpTool>> {
-        self.direct
-            .iter()
-            .filter_map(|name| self.by_name.get(name).cloned())
-            .collect()
-    }
-
-    /// Prompt note that does not preload every deferred tool name.
+    /// Prompt note that names the connected servers, not their tools.
     ///
-    /// Every list comes from what connected for this turn, so a server
+    /// Every line comes from what connected for this turn, so a server
     /// magpie's Library adds later reaches the prompt without a rebuild.
     pub(crate) fn prompt_note(&self) -> String {
         let mut note = String::new();
@@ -531,32 +542,27 @@ impl McpCatalog {
             note.push_str(warning);
             note.push('\n');
         }
-        // Name the servers: a deferred tool is only findable if the model
-        // knows its server is connected and how to reach it.
-        let mut servers: Vec<&str> = self
-            .by_name
-            .values()
-            .map(|tool| tool.server_id.as_str())
-            .collect();
-        servers.sort_unstable();
-        servers.dedup();
-        if !servers.is_empty() {
-            note.push_str("Connected MCP servers: ");
-            note.push_str(&servers.join(", "));
-            note.push_str(".\n");
+        if self.servers.is_empty() {
+            return note;
         }
-        if !self.direct.is_empty() {
-            note.push_str("Direct MCP tools: ");
-            note.push_str(&self.direct.join(", "));
-            note.push_str(". Call them directly by name.\n");
+        // One line per server, with its tool count and its own summary: a
+        // tool is only findable when the model knows which server holds it
+        // and how many tools it has to look through.
+        note.push_str("Connected MCP servers:\n");
+        for (server, tools) in &self.servers {
+            let plural = if *tools == 1 { "tool" } else { "tools" };
+            note.push_str(&format!("- {} ({tools} {plural})", server.id));
+            if let Some(summary) = &server.summary {
+                note.push_str(" — ");
+                note.push_str(summary);
+            }
+            note.push('\n');
         }
-        if !self.deferred.is_empty() {
-            note.push_str(
-                "Other MCP tools are connected but not preloaded. Call `search_tool` with \
-keywords (or name \"list\") to find them, one line each, then with an exact name for its \
-inputSchema, then `use_tool`. Do not guess parameters.\n",
-            );
-        }
+        note.push_str(
+            "These MCP tools are not on the tool list above. Find one with `search_tool` by \
+keyword (or name \"list\"), load the inputSchema of the exact name it returned (`names` loads \
+several), then call it with `use_tool`. Never guess parameters.\n",
+        );
         note
     }
 
@@ -567,27 +573,11 @@ inputSchema, then `use_tool`. Do not guess parameters.\n",
         if let Some(warning) = &self.warning {
             lines.push(format!("MCP config: {warning}"));
         }
-        if self.deferred.is_empty() {
-            if self.direct.is_empty() {
-                lines.push("No MCP tools are connected.".to_owned());
-            } else {
-                // Every tool is registered directly, so there is nothing to
-                // load — name them so the answer does not read as "no MCP".
-                lines.push(format!(
-                    "No deferred MCP tools. Direct tools are called by name: {}.",
-                    self.direct.join(", ")
-                ));
-            }
+        if self.listed.is_empty() {
+            lines.push("No MCP tools are connected.".to_owned());
         } else {
-            for (name, summary) in &self.deferred {
+            for (name, summary) in &self.listed {
                 lines.push(format!("{name} — {summary}"));
-            }
-            if !self.direct.is_empty() {
-                lines.push(String::new());
-                lines.push(format!(
-                    "Direct tools, called by name: {}.",
-                    self.direct.join(", ")
-                ));
             }
         }
         lines.join("\n")
@@ -613,7 +603,7 @@ inputSchema, then `use_tool`. Do not guess parameters.\n",
                     || (tool.tool_name.eq_ignore_ascii_case(bare)
                         && (!on_server
                             || server
-                                .is_some_and(|server| tool.server_id.eq_ignore_ascii_case(server))))
+                                .is_some_and(|server| tool.server.id.eq_ignore_ascii_case(server))))
             });
             match (found.next(), found.next()) {
                 (Some((key, tool)), None) => Some((key.as_str(), tool)),
@@ -641,7 +631,7 @@ inputSchema, then `use_tool`. Do not guess parameters.\n",
                 let haystack = format!(
                     "{} {} {}",
                     key.to_lowercase(),
-                    tool.server_id.to_lowercase(),
+                    tool.server.id.to_lowercase(),
                     tool.spec.description.to_lowercase()
                 );
                 terms.iter().all(|term| haystack.contains(term.as_str()))
@@ -686,7 +676,7 @@ error: no MCP tool has this name; call search_tool with keywords"
 fn schema_text(key: &str, tool: &DynamicMcpTool) -> String {
     format!(
         "name: {key}\nserver: {}\ndescription: {}\ninputSchema: {}",
-        tool.server_id, tool.spec.description, tool.spec.params_schema
+        tool.server.id, tool.spec.description, tool.spec.params_schema
     )
 }
 
@@ -727,28 +717,21 @@ fn arg_name(args: &Value) -> Result<String, ToolError> {
         .ok_or_else(|| ToolError::InvalidArgs("name is required".to_owned()))
 }
 
-/// Builds the tool catalog from one connect and registers its bridge tools
-/// on `registry`: direct tools first (never shadowing an existing name),
-/// then `search_tool` and `use_tool`. Returns the catalog so the caller can
-/// render its prompt note.
+/// Builds the tool catalog from one connect and registers `search_tool` and
+/// `use_tool` on `registry`. Returns the catalog so the caller can render
+/// its prompt note.
 pub(crate) fn register_mcp_tools(
     registry: &mycode_agent::ToolRegistry,
     tools: Vec<Arc<DynamicMcpTool>>,
     warning: Option<String>,
 ) -> Option<Arc<McpCatalog>> {
-    let catalog =
-        McpCatalog::from_tools_with_warning(tools, warning, &|name| registry.get(name).is_some())?;
-    for tool in catalog.direct_tools() {
-        if registry.get(tool.spec().name.as_str()).is_none() {
-            registry.register(tool);
-        }
-    }
+    let catalog = McpCatalog::from_tools(tools, warning, &|name| registry.get(name).is_some())?;
     registry.register(Arc::new(SearchTool::new(Arc::clone(&catalog))));
     registry.register(Arc::new(UseTool::new(Arc::clone(&catalog))));
     Some(catalog)
 }
 
-/// Schema lookup for MCP tools that are not registered directly.
+/// Schema lookup for the connected MCP tools, which are never declared.
 pub(crate) struct SearchTool {
     catalog: Arc<McpCatalog>,
 }
@@ -763,7 +746,7 @@ impl ToolDyn for SearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "search_tool".to_owned(),
-            description: "Find MCP tools that are not registered directly and load their schemas. Pass `name`: an exact tool name for its inputSchema, keywords (for example \"github issue\") for the matching tools with one line each, or \"list\" for every tool. Pass `names` instead to load several exact names' inputSchemas in one call. Never guess parameters.".to_owned(),
+            description: "Find a connected MCP tool and load its schema; none are declared on the tool list. Pass `name`: an exact tool name for its inputSchema, keywords (for example \"github issue\") for the matching tools with one line each, or \"list\" for every tool. Pass `names` instead to load several exact names' inputSchemas in one call. Never guess parameters.".to_owned(),
             params_schema: object_schema(
                 serde_json::json!({
                     "name": {"type": "string", "description": "An exact tool name, keywords, or \"list\"."},
@@ -834,7 +817,7 @@ impl ToolDyn for SearchTool {
 
 /// Calls one connected MCP tool by name.
 ///
-/// Deferred tools are expected to go through `search_tool` first. This
+/// MCP tools are expected to go through `search_tool` first. This
 /// call does not check that the schema was fetched.
 pub(crate) struct UseTool {
     catalog: Arc<McpCatalog>,
@@ -866,7 +849,7 @@ impl ToolDyn for UseTool {
     }
 
     /// A call to a tool that declares `readOnlyHint` runs beside other
-    /// reads, exactly as that tool would if it were registered directly.
+    /// reads.
     fn parallel_safe_call(&self, args: &Value) -> bool {
         arg_name(args)
             .ok()

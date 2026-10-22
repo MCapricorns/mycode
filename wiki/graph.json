@@ -230,7 +230,7 @@
       "label": "MCP",
       "group": "module",
       "lane": 3,
-      "summary": "stdio 与 Streamable HTTP 两种通道，最多 64 台服务器，magpie Library 的 mcp.json 一并合并。工具少而 schema 小的服务直接注册成普通工具，其余走 search_tool 与 use_tool；系统提示词列出本轮已连接的服务器名。",
+      "summary": "stdio 与 Streamable HTTP 两种通道，最多 64 台服务器，magpie Library 的 mcp.json 一并合并。所有工具都不进模型工具表，统一经 search_tool 取 schema、use_tool 调用；系统提示词逐行列出本轮连上的服务器、工具数与服务器自述。",
       "links": [
         "app",
         "tools",

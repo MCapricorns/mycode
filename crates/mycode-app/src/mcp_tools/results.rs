@@ -1,6 +1,6 @@
-//! MCP result handling: the one-line snippet a direct tool shows, the byte
-//! bound a result keeps inline, the full-text store beside the home, and the
-//! direct-exposure rule for small servers.
+//! MCP result handling: the one-line snippet and server summary the system
+//! prompt carries, the byte bound a result keeps inline, and the full-text
+//! store beside the home.
 
 /// Longest description summary carried into the system-prompt tool list.
 const MCP_SNIPPET_CHARS: usize = 160;
@@ -85,13 +85,26 @@ pub(crate) fn bound_mcp_result(dir: &std::path::Path, text: &str) -> String {
     )
 }
 
-/// A server is exposed directly when it is small and its schemas are small.
-pub(crate) fn mcp_server_is_direct(tools: &[crate::mcp_client::McpTool]) -> bool {
-    const MAX_DIRECT_TOOLS: usize = 4;
-    const MAX_DIRECT_SCHEMA_BYTES: usize = 2048;
-    tools.len() <= MAX_DIRECT_TOOLS
-        && tools.iter().all(|tool| {
-            mycode_agent::check_encoded_json_bound(&tool.input_schema, MAX_DIRECT_SCHEMA_BYTES)
-                .is_ok()
-        })
+/// One line for the prompt's server list: the first sentence of the
+/// instructions a server sends in the handshake.
+///
+/// `None` when the server sent no usable text. The server is untrusted, so
+/// the line is flattened, bounded, and never spans lines.
+pub(super) fn mcp_server_summary(instructions: &str) -> Option<String> {
+    let text = instructions
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    let sentence = match text.find(". ") {
+        Some(end) => &text[..=end],
+        None => text.as_str(),
+    };
+    let mut summary: String = sentence.chars().take(MCP_SNIPPET_CHARS).collect();
+    if summary.chars().count() == MCP_SNIPPET_CHARS {
+        summary.push('\u{2026}');
+    }
+    Some(summary)
 }
