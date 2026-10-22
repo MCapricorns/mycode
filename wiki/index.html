@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MYCode 知识图谱</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #16191f;
+    --line: #2a2f39;
+    --text: #e7e9ee;
+    --muted: #98a0ad;
+    --crate: #6e8bff;
+    --module: #47b9a5;
+    --flow: #b083f0;
+    --data: #e0a944;
+    --active: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  header {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: .02em; }
+  header .hint { color: var(--muted); font-size: 12px; }
+  #search {
+    margin-left: auto;
+    width: 240px;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #0f1115;
+    color: var(--text);
+    font: inherit;
+  }
+  #search:focus { outline: 1px solid var(--crate); }
+  main { display: flex; flex: 1; min-height: 0; }
+  #graph { flex: 1; min-width: 0; overflow: auto; }
+  svg { display: block; }
+  .edge { fill: none; stroke: var(--line); stroke-width: 1.2; }
+  .edge.hot { stroke: var(--crate); stroke-width: 2; }
+  .node { cursor: pointer; }
+  .node rect { fill: #1b1f27; stroke: var(--line); stroke-width: 1; rx: 8; }
+  .node text { fill: var(--text); font-size: 13px; }
+  .node.crate rect { stroke: var(--crate); }
+  .node.module rect { stroke: var(--module); }
+  .node.flow rect { stroke: var(--flow); }
+  .node.data rect { stroke: var(--data); }
+  .node.dim { opacity: .28; }
+  .node.hot rect { fill: #232936; }
+  .node.active rect { stroke: var(--active); stroke-width: 2; }
+  .lane { fill: #7c8698; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  aside {
+    width: 340px;
+    flex: none;
+    border-left: 1px solid var(--line);
+    background: var(--panel);
+    padding: 18px 20px;
+    overflow: auto;
+  }
+  aside h2 { margin: 0 0 4px; font-size: 15px; }
+  aside .group { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+  aside p { color: var(--text); }
+  aside ul { padding-left: 18px; margin: 8px 0 0; }
+  aside li { margin: 4px 0; }
+  aside a { color: var(--crate); text-decoration: none; cursor: pointer; }
+  aside a:hover { text-decoration: underline; }
+  aside .empty { color: var(--muted); }
+  footer { padding: 8px 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MYCode 知识图谱</h1>
+  <span class="hint">点击节点看说明与关联，Esc 清除</span>
+  <input id="search" type="search" placeholder="搜索 crate、模块、流程…" autocomplete="off">
+</header>
+<main>
+  <div id="graph"></div>
+  <aside id="detail"><p class="empty">选一个节点。</p></aside>
+</main>
+<footer>依赖方向自上而下：界面 → 前端 → 应用核 → 代理 / 模型 / 工具 → 核心与配置。</footer>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#2a2f39"></path>
+    </marker>
+  </defs>
+</svg>
+<script>
+// 节点即知识：一个 crate、一个模块、一条流程或一份落盘数据。
+const NODES = [
+  { id: "desktop", label: "mycode-desktop", group: "crate", lane: 0,
+    summary: "GPUI 桌面应用：窗口、标题栏、会话侧栏、聊天列、右侧详情与设置页。它只读视图模型、发动作，不碰会话或模型。",
+    links: ["frontend", "launch", "composer", "workspace", "settings", "update", "clipboard"] },
+  { id: "workspace", label: "workspace", group: "module", lane: 1,
+    summary: "窗口的根视图：把前端驱动的事件流翻成界面状态，再把点击与按键翻成动作。附件、菜单、会话切换、命令面板都在这里接线。",
+    links: ["desktop", "frontend", "composer", "clipboard"] },
+  { id: "composer", label: "composer", group: "module", lane: 1,
+    summary: "底部输入卡片：草稿、附件芯片、模型与思考档位、发送/停止/排队/引导。粘贴图片经 on_paste 进入附件而不是正文。",
+    links: ["workspace", "clipboard", "send"] },
+  { id: "clipboard", label: "clipboard", group: "module", lane: 1,
+    summary: "剪贴板图片：平台剪贴板给出 PNG/JPEG/WebP/GIF 直接用；Windows 截图给的位图先转 PNG；粘贴内容是单个图片路径时读该文件。",
+    links: ["composer", "attachments"] },
+  { id: "attachments", label: "attachments", group: "data", lane: 2,
+    summary: "一条消息的附件：最多 4 张图（单张 3.75 MB、合计 6 MB）和 8 个文本文件（合计 512 KB）。仅当所选模型支持图片时才收图片。",
+    links: ["clipboard", "composer", "core"] },
+  { id: "settings", label: "settings 页", group: "module", lane: 1,
+    summary: "常规、外观、模型、MCP、技能、子代理、快捷键、数据、关于。写入走设置文档的修订号比较交换。",
+    links: ["desktop", "config", "shortcuts"] },
+  { id: "shortcuts", label: "shortcuts", group: "data", lane: 2,
+    summary: "设置页列出的按键表：Enter 发送、Ctrl/Cmd+Enter 停止并发送、Ctrl/Cmd+G 引导、Ctrl/Cmd+V 附加剪贴板图片、Ctrl/Cmd+K 命令面板、Esc 关最上层。",
+    links: ["settings", "composer"] },
+  { id: "launch", label: "launch", group: "module", lane: 1,
+    summary: "建窗口之前的步骤：--help/--version、更新助手入口、打开家目录、清理自更新残留、结算暂存的更新。",
+    links: ["desktop", "app", "update"] },
+  { id: "frontend", label: "mycode-frontend", group: "crate", lane: 2,
+    summary: "与界面无关的产品层：视图模型状态机与动作 reducer、中英文本、git 状态、快捷键表、启动参数。界面只渲染这里的状态。",
+    links: ["desktop", "app", "driver", "view_model"] },
+  { id: "driver", label: "driver", group: "module", lane: 3,
+    summary: "把动作变成核心命令，把回复与流式事件变回动作：会话、回合、设置、模型、更新、导出导入各有一条线。",
+    links: ["frontend", "app"] },
+  { id: "view_model", label: "view_model", group: "module", lane: 3,
+    summary: "WorkspaceState 加 FrontendAction reducer：同一份状态决定侧栏、对话、菜单和设置页显示什么。",
+    links: ["frontend", "driver"] },
+  { id: "app", label: "mycode-app", group: "crate", lane: 4,
+    summary: "应用核：一条独立线程跑 CoreBridge，收命令回回复，并向界面推事件流。回合装配、压缩、子代理、MCP、设置持久化、自更新都在这里。",
+    links: ["frontend", "agent", "providers", "tools", "config", "update", "mcp"] },
+  { id: "update", label: "自更新", group: "flow", lane: 5,
+    summary: "查最新 Release → 取 mycode-desktop-v* 压缩包和 .sha256 → 校验 → 解包到暂存 → 落盘为 <home>/update 的待装包。退出或重启时由平台助手换掉正在运行的二进制。",
+    links: ["app", "launch", "desktop"] },
+  { id: "mcp", label: "MCP", group: "module", lane: 3,
+    summary: "stdio 与 Streamable HTTP 两种通道，最多 64 台服务器。工具少而 schema 小的服务直接注册成普通工具，其余走 search_tool 与 use_tool。",
+    links: ["app", "tools", "config"] },
+  { id: "agent", label: "mycode-agent", group: "crate", lane: 5,
+    summary: "回合循环：装配提示、请求模型、分发工具、把每一步写进账本。取消只停止当前回合，已收到的内容留在账本里。",
+    links: ["app", "sessions", "providers", "tools"] },
+  { id: "sessions", label: "会话账本", group: "data", lane: 6,
+    summary: "sessions.db 是提交权威，事件写在 JSONL 里。打开会话先对齐索引与日志，崩溃留下的半截写入截掉，对不上就明确报损坏。",
+    links: ["agent", "app", "home"] },
+  { id: "compaction", label: "压缩", group: "flow", lane: 5,
+    summary: "把长对话换成一个检查点摘要：摘要落进账本并显示成一张卡片，之后的请求从检查点继续。缓存前缀因此失效一次。",
+    links: ["agent", "sessions"] },
+  { id: "subagent", label: "子代理", group: "flow", lane: 5,
+    summary: "scout 只读搜索与查文档；artisan 在独立 git worktree 里改代码，结束回传 diff，不自动合回也不提交。每回合最多同时 8 个。",
+    links: ["agent", "tools", "app"] },
+  { id: "providers", label: "mycode-providers", group: "crate", lane: 6,
+    summary: "三种协议（OpenAI chat completions、OpenAI responses、Anthropic messages）到同一套流事件的翻译，含思考档位、工具调用解析、缓存统计与代理。",
+    links: ["agent", "core", "magpie"] },
+  { id: "magpie", label: "magpie 网关", group: "module", lane: 7,
+    summary: "模型请求只发往本机 magpie 网关；模型列表实时读 GET /v1/models，密钥与地址由 magpie 的 agent 插件写进设置。",
+    links: ["providers", "config"] },
+  { id: "tools", label: "mycode-tools", group: "crate", lane: 6,
+    summary: "内置工具：读写与编辑文件、glob、grep、shell、进程、ask。工具以当前用户权限运行，环境变量白名单只是过滤。",
+    links: ["agent", "core", "mcp"] },
+  { id: "core", label: "mycode-core", group: "crate", lane: 7,
+    summary: "共享类型：消息、事件、工具规格、图片与附件的上限、Provider 端口、全局分配器。它不认识界面也不认识网络。",
+    links: ["providers", "tools", "config", "attachments"] },
+  { id: "config", label: "mycode-config", group: "crate", lane: 7,
+    summary: "家目录与设置：严格 JSON 的设置、密钥、界面状态；写坏的文档备份成 *.broken-*，能救的字段留下。",
+    links: ["core", "home", "settings"] },
+  { id: "home", label: "~/.mycode", group: "data", lane: 8,
+    summary: "settings.json（网关、MCP、外观、代理）、AGENTS.md、mcp.json、skills/、secrets.json、ui.json、sessions.db、sessions/、agents/、agent-worktrees/、scratch/、bin/、update/。",
+    links: ["config", "sessions"] },
+  { id: "send", label: "一条消息", group: "flow", lane: 4,
+    summary: "先写进账本 → 装配回合 → 工具结果随到随提交 → 回复结束发 ChatDone。取消只停止当前回合，已收到的思考、正文和完成的工具调用都保留。",
+    links: ["composer", "driver", "agent", "sessions"] }
+];
+
+const LANES = ["界面", "界面模块", "产品层", "驱动", "应用与流程", "代理与流程", "模型与工具", "底座", "落盘"];
+
+const NS = "http://www.w3.org/2000/svg";
+const graph = document.getElementById("graph");
+const detail = document.getElementById("detail");
+const search = document.getElementById("search");
+
+const COLUMN_WIDTH = 200;
+const NODE_HEIGHT = 34;
+const NODE_GAP = 14;
+const LANE_HEADER = 26;
+const MARGIN = 24;
+
+const byId = new Map(NODES.map((node) => [node.id, node]));
+const laneCounts = LANES.map((_, lane) => NODES.filter((n) => n.lane === lane).length);
+const laneHeights = laneCounts.map((count) => count * (NODE_HEIGHT + NODE_GAP) + LANE_HEADER);
+const height = Math.max(...laneHeights) + MARGIN * 2;
+const width = LANES.length * COLUMN_WIDTH + MARGIN * 2;
+
+const positions = new Map();
+NODES.forEach((node) => {
+  const index = NODES.filter((n) => n.lane === node.lane).indexOf(node);
+  const x = MARGIN + node.lane * COLUMN_WIDTH + COLUMN_WIDTH / 2;
+  const y = MARGIN + LANE_HEADER + index * (NODE_HEIGHT + NODE_GAP);
+  positions.set(node.id, { x, y });
+});
+
+const svg = document.createElementNS(NS, "svg");
+svg.setAttribute("width", width);
+svg.setAttribute("height", height);
+svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+
+LANES.forEach((label, lane) => {
+  const text = document.createElementNS(NS, "text");
+  text.setAttribute("class", "lane");
+  text.setAttribute("x", MARGIN + lane * COLUMN_WIDTH + COLUMN_WIDTH / 2);
+  text.setAttribute("y", MARGIN + 8);
+  text.setAttribute("text-anchor", "middle");
+  text.textContent = label;
+  svg.appendChild(text);
+});
+
+const edgeLayer = document.createElementNS(NS, "g");
+const nodeLayer = document.createElementNS(NS, "g");
+svg.appendChild(edgeLayer);
+svg.appendChild(nodeLayer);
+
+const edges = [];
+NODES.forEach((node) => {
+  (node.links || []).forEach((target) => {
+    if (!byId.has(target)) return;
+    const from = positions.get(node.id);
+    const to = positions.get(target);
+    const startX = from.x + 70;
+    const endX = to.x - 70;
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("class", "edge");
+    path.setAttribute("marker-end", "url(#arrow)");
+    path.setAttribute(
+      "d",
+      "M" + startX + "," + (from.y + NODE_HEIGHT / 2) +
+        " C" + (startX + 40) + "," + (from.y + NODE_HEIGHT / 2) +
+        " " + (endX - 40) + "," + (to.y + NODE_HEIGHT / 2) +
+        " " + endX + "," + (to.y + NODE_HEIGHT / 2)
+    );
+    edgeLayer.appendChild(path);
+    edges.push({ from: node.id, to: target, path });
+  });
+});
+
+const nodeElements = new Map();
+NODES.forEach((node) => {
+  const { x, y } = positions.get(node.id);
+  const group = document.createElementNS(NS, "g");
+  group.setAttribute("class", "node " + node.group);
+  group.setAttribute("transform", "translate(" + (x - 70) + "," + y + ")");
+  group.dataset.id = node.id;
+
+  const box = document.createElementNS(NS, "rect");
+  box.setAttribute("width", 140);
+  box.setAttribute("height", NODE_HEIGHT);
+  box.setAttribute("rx", 8);
+  group.appendChild(box);
+
+  const label = document.createElementNS(NS, "text");
+  label.setAttribute("x", 70);
+  label.setAttribute("y", NODE_HEIGHT / 2 + 5);
+  label.setAttribute("text-anchor", "middle");
+  label.textContent = node.label;
+  group.appendChild(label);
+
+  group.addEventListener("click", () => select(node.id));
+  nodeLayer.appendChild(group);
+  nodeElements.set(node.id, group);
+});
+
+function select(id) {
+  const node = byId.get(id);
+  if (!node) return;
+  nodeElements.forEach((element) => element.classList.remove("active", "hot", "dim"));
+  const neighbors = new Set([id, ...(node.links || [])]);
+  NODES.forEach((other) => {
+    if ((other.links || []).includes(id)) neighbors.add(other.id);
+  });
+  edges.forEach((edge) => {
+    const hot = edge.from === id || edge.to === id;
+    edge.path.classList.toggle("hot", hot);
+    if (!hot) edge.path.classList.remove("hot");
+  });
+  nodeElements.forEach((element, otherId) => {
+    element.classList.toggle("active", otherId === id);
+    element.classList.toggle("hot", neighbors.has(otherId) && otherId !== id);
+    element.classList.toggle("dim", !neighbors.has(otherId));
+  });
+
+  const groupLabels = { crate: "crate", module: "模块", flow: "流程", data: "数据" };
+  const links = (node.links || [])
+    .filter((target) => byId.has(target))
+    .map((target) => '<li><a data-jump="' + target + '">' + byId.get(target).label + "</a></li>")
+    .join("");
+  detail.innerHTML =
+    '<div class="group">' + (groupLabels[node.group] || node.group) + "</div>" +
+    "<h2>" + node.label + "</h2>" +
+    "<p>" + node.summary + "</p>" +
+    (links ? "<ul>" + links + "</ul>" : "");
+  detail.querySelectorAll("[data-jump]").forEach((anchor) => {
+    anchor.addEventListener("click", () => select(anchor.dataset.jump));
+  });
+}
+
+function clearSelection() {
+  nodeElements.forEach((element) => element.classList.remove("active", "hot", "dim"));
+  edges.forEach((edge) => edge.path.classList.remove("hot"));
+  detail.innerHTML = '<p class="empty">选一个节点。</p>';
+  search.value = "";
+}
+
+function filter(term) {
+  const needle = term.trim().toLowerCase();
+  if (!needle) {
+    clearSelection();
+    return;
+  }
+  nodeElements.forEach((element, id) => {
+    const node = byId.get(id);
+    const hit = (node.label + " " + node.summary).toLowerCase().includes(needle);
+    element.classList.toggle("dim", !hit);
+    element.classList.remove("hot", "active");
+  });
+}
+
+search.addEventListener("input", (event) => filter(event.target.value));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") clearSelection();
+});
+
+graph.appendChild(svg);
+select("app");
+</script>
+</body>
+</html>
