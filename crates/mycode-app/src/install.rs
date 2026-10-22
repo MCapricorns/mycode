@@ -63,6 +63,7 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 
 /// Copies `exe` onto `target` via a sibling temp name, so a target held by
 /// another running copy fails only the rename, never the read.
+#[cfg(windows)]
 fn install_file(exe: &Path, target: &Path) -> io::Result<bool> {
     if let Some(dir) = target.parent() {
         fs::create_dir_all(dir)?;
@@ -80,11 +81,6 @@ fn install_file(exe: &Path, target: &Path) -> io::Result<bool> {
             }
             return Ok(false);
         }
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(target, fs::Permissions::from_mode(0o755))?;
     }
     Ok(true)
 }
@@ -272,6 +268,7 @@ fn is_download_artifact(name: &str) -> bool {
 
 /// Ensures `dir` appears in the user's PATH, appending it when absent.
 /// Returns whether the PATH was changed this call.
+#[cfg(windows)]
 fn ensure_path_entry(dir: &Path) -> io::Result<bool> {
     if path_has_dir(dir)? {
         return Ok(false);
@@ -367,86 +364,6 @@ fn broadcast_environment_change() {
     }
 }
 
-#[cfg(not(windows))]
-fn path_has_dir(dir: &Path) -> io::Result<bool> {
-    // Already exported into this process's PATH by a profile — no write.
-    let needle = dir.to_string_lossy();
-    if env::var_os("PATH")
-        .is_some_and(|path| env::split_paths(&path).any(|entry| entry.to_string_lossy() == needle))
-    {
-        return Ok(true);
-    }
-    for file in profile_files() {
-        if fs::read_to_string(&file).is_ok_and(|text| profile_mentions(&text, dir)) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-#[cfg(not(windows))]
-fn profile_mentions(text: &str, dir: &Path) -> bool {
-    let dir = dir.to_string_lossy();
-    text.lines().any(|line| line.contains(dir.as_ref()))
-}
-
-/// The shell profile files we add the PATH export to. Writing
-/// `.bash_profile` unconditionally would shadow a user's `.profile`, so the
-/// set is: every existing startup file among the usual suspects, plus
-/// `.zprofile` and `.profile` when nothing exists yet (macOS's default login
-/// shell).
-#[cfg(not(windows))]
-fn profile_files() -> Vec<PathBuf> {
-    let Some(home) = user_home() else {
-        return Vec::new();
-    };
-    let names = [
-        ".zprofile",
-        ".zshrc",
-        ".bash_profile",
-        ".bashrc",
-        ".profile",
-    ];
-    let mut existing: Vec<PathBuf> = names
-        .iter()
-        .map(|name| home.join(name))
-        .filter(|file| file.exists())
-        .collect();
-    if existing.is_empty() {
-        existing.push(home.join(".zprofile"));
-        existing.push(home.join(".profile"));
-    }
-    existing
-}
-
-#[cfg(not(windows))]
-fn add_path_dir(dir: &Path) -> io::Result<()> {
-    let line = format!(
-        "export PATH={}:\"$PATH\"",
-        shell_quote(&dir.to_string_lossy())
-    );
-    for file in profile_files() {
-        let existing = fs::read_to_string(&file).unwrap_or_default();
-        if profile_mentions(&existing, dir) {
-            continue;
-        }
-        let mut content = existing;
-        if !content.is_empty() && !content.ends_with('\n') {
-            content.push('\n');
-        }
-        content.push_str("\n# Added by MYCode — the installed binaries live here.\n");
-        content.push_str(&line);
-        content.push('\n');
-        fs::write(&file, content)?;
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 /// `<home>/mycode-desktop.shortcut` records that the desktop shortcut was
 /// written once. Missing means this install predates the shortcut or its
 /// creation failed, so a later launch still writes one; present means a
@@ -536,12 +453,5 @@ mod tests {
         assert!(is_installed_exe(&exe, &target));
         assert!(!is_installed_exe(&exe, &dir.join("other")));
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn shell_quoting_round_trips_special_chars() {
-        assert_eq!(shell_quote("/tmp/a b"), "'/tmp/a b'");
-        assert_eq!(shell_quote("/tmp/o'my"), "'/tmp/o'\\''my'");
     }
 }
