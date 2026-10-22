@@ -36,6 +36,8 @@
   }
   header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: .02em; }
   header .hint { color: var(--muted); font-size: 12px; }
+  header a.readme { color: var(--crate); font-size: 12px; text-decoration: none; }
+  header a.readme:hover { text-decoration: underline; }
   #search {
     margin-left: auto;
     width: 240px;
@@ -86,6 +88,7 @@
 <header>
   <h1>MYCode 知识图谱</h1>
   <span class="hint">点击节点看说明与关联，Esc 清除</span>
+  <a class="readme" href="https://github.com/MCapricorns/mycode#readme" target="_blank" rel="noopener">README</a>
   <input id="search" type="search" placeholder="搜索 crate、模块、流程…" autocomplete="off">
 </header>
 <main>
