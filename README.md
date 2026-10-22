@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="wiki/images/banner.svg" alt="MYCode：本地编码代理" width="100%">
+
 <p>
   <a href="https://github.com/MCapricorns/mycode/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/MCapricorns/mycode?style=flat-square&label=%E7%89%88%E6%9C%AC&color=7c8cff"></a>
   <a href="https://github.com/MCapricorns/mycode/releases"><img alt="下载量" src="https://img.shields.io/github/downloads/MCapricorns/mycode/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD"></a>
@@ -117,7 +119,11 @@ cargo build --release -p mycode-desktop
 
 一条消息先写进账本，再装配回合；回合中工具结果随到随提交；回复结束发 `ChatDone`。取消只停止当前回合，已经收到的思考、正文和完成的工具调用会保留在账本里。
 
-crate、模块、流程和数据落在哪里，见 [知识图谱](https://mcapricorns.github.io/mycode/wiki/index.html)（仓库内是 [wiki/index.html](wiki/index.html)，本地双击即可打开）：点节点看说明，搜索框可过滤。
+<img src="wiki/images/architecture.svg" alt="八个 crate 的分层架构：依赖只向下" width="100%">
+
+<img src="wiki/images/message-flow.svg" alt="一条消息从输入到 ChatDone 的流程" width="100%">
+
+crate、模块、流程和数据落在哪里，见 [知识图谱](https://mcapricorns.github.io/mycode/wiki/index.html)（仓库内是 [wiki/index.html](wiki/index.html)，本地双击即可打开）：点节点看说明与源码，搜索框可过滤。
 
 ## 社区
 

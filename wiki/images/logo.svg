@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="MYCode">
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="#ffffff"/>
+  <path d="M76 182V82l52 56 52-56v100" fill="none" stroke="#000000" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

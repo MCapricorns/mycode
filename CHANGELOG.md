@@ -13,12 +13,22 @@
 ### Changed
 
 - 移除终端版 `mycode-cli`：桌面版是唯一的前端，工作区、发布构建、自更新资产、自安装与下载清理、快捷键表都只保留 `mycode-desktop`。启动参数、`--help` / `--version`、以及自更新助手仍由 `mycode-frontend` 的 `launch` 模块提供。
-- `docs/` 换成 `wiki/index.html`：一份可搜索的知识图谱，节点覆盖 crate、模块、流程与落盘数据，点节点看说明和关联。
+- `docs/` 换成 `wiki/index.html`：一份可搜索的知识图谱，节点覆盖 crate、模块、流程与落盘数据。点节点看说明、该层的关联节点，以及它背后的源文件；点文件名直接在页面里读源码（行号、跳到 GitHub、一键复制）。整页自包含，双击也能离线打开。
 - 把超过 1000 行的文件拆开：`highlight`、`tool`、`edit/engine`、`session/store/index`、`view_model/reduce`、`builtin/shell`、`builtin/grep`、`mcp_tools`、`compaction`、`ui/chat/tools`、`workspace` 及若干测试文件，各自按职责落到子模块。
 
 ### Removed
 
 - 源码注释里描述已不存在的实现与历史缺陷的段落（终端版、已删除的 `docs/`、旧版本行为），以及几条只断言常量字面量的测试。
+
+### Fixed
+
+- 桌面版自安装的 PATH 代码只在 Windows 编译，macOS 发布构建不再因 dead code 失败。
+- `install.rs` 里 unix 侧的 PATH 注册实现（改 shell profile 的那套）：桌面版只在 Windows 自安装，macOS 走 dmg 拖进 `/Applications`，这些函数从来没被调用。
+
+### Fixed
+
+- macOS 发布构建重新通过：`install_file`、`ensure_path_entry` 及其 PATH 读写辅助函数只在 Windows 编译，不再在 macOS 上被判为 dead code（发布构建按 `-Dwarnings` 把 dead code 当错误，上一轮的三平台发布因此没有发出去）。
+- README 顶部恢复 banner，架构一节恢复分层架构图与消息流程图；图从 `docs/images/` 移到 `wiki/images/`，架构图按现在的八个 crate 重画（去掉已删除的终端版）。
 
 ## [0.12.21] - 2026-10-21
 

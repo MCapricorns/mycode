@@ -1,0 +1,425 @@
+{
+  "lanes": [
+    "界面",
+    "界面模块",
+    "产品层",
+    "驱动",
+    "应用与流程",
+    "代理与流程",
+    "模型与工具",
+    "底座",
+    "落盘"
+  ],
+  "nodes": [
+    {
+      "id": "desktop",
+      "label": "mycode-desktop",
+      "group": "crate",
+      "lane": 0,
+      "summary": "GPUI 桌面应用：窗口、标题栏、会话侧栏、聊天列、右侧详情与设置页。它只读视图模型、发动作，不碰会话或模型。",
+      "links": [
+        "frontend",
+        "launch",
+        "composer",
+        "workspace",
+        "settings",
+        "update",
+        "clipboard"
+      ],
+      "files": [
+        "crates/mycode-desktop/src/main.rs",
+        "crates/mycode-desktop/src/lib.rs",
+        "crates/mycode-desktop/src/instance.rs"
+      ]
+    },
+    {
+      "id": "workspace",
+      "label": "workspace",
+      "group": "module",
+      "lane": 1,
+      "summary": "窗口的根视图：把前端驱动的事件流翻成界面状态，再把点击与按键翻成动作。附件、菜单、会话切换、命令面板都在这里接线。",
+      "links": [
+        "desktop",
+        "frontend",
+        "composer",
+        "clipboard"
+      ],
+      "files": [
+        "crates/mycode-desktop/src/workspace.rs",
+        "crates/mycode-desktop/src/workspace/window.rs"
+      ]
+    },
+    {
+      "id": "composer",
+      "label": "composer",
+      "group": "module",
+      "lane": 1,
+      "summary": "底部输入卡片：草稿、附件芯片、模型与思考档位、发送/停止/排队/引导。粘贴图片经 on_paste 进入附件而不是正文。",
+      "links": [
+        "workspace",
+        "clipboard",
+        "send"
+      ],
+      "files": [
+        "crates/mycode-desktop/src/ui/chat/composer.rs",
+        "crates/mycode-desktop/src/workspace/composer_send.rs"
+      ]
+    },
+    {
+      "id": "clipboard",
+      "label": "clipboard",
+      "group": "module",
+      "lane": 1,
+      "summary": "剪贴板图片：平台剪贴板给出 PNG/JPEG/WebP/GIF 直接用；Windows 截图给的位图先转 PNG；粘贴内容是单个图片路径时读该文件。",
+      "links": [
+        "composer",
+        "attachments"
+      ],
+      "files": [
+        "crates/mycode-desktop/src/workspace/clipboard.rs"
+      ]
+    },
+    {
+      "id": "attachments",
+      "label": "attachments",
+      "group": "data",
+      "lane": 2,
+      "summary": "一条消息的附件：最多 4 张图（单张 3.75 MB、合计 6 MB）和 8 个文本文件（合计 512 KB）。仅当所选模型支持图片时才收图片。",
+      "links": [
+        "clipboard",
+        "composer",
+        "core"
+      ],
+      "files": [
+        "crates/mycode-core/src/attachments.rs",
+        "crates/mycode-desktop/src/workspace/attachments.rs"
+      ]
+    },
+    {
+      "id": "settings",
+      "label": "settings 页",
+      "group": "module",
+      "lane": 1,
+      "summary": "常规、外观、模型、MCP、技能、子代理、快捷键、数据、关于。写入走设置文档的修订号比较交换。",
+      "links": [
+        "desktop",
+        "config",
+        "shortcuts"
+      ],
+      "files": [
+        "crates/mycode-desktop/src/ui/settings.rs",
+        "crates/mycode-desktop/src/workspace/settings_editor.rs"
+      ]
+    },
+    {
+      "id": "shortcuts",
+      "label": "shortcuts",
+      "group": "data",
+      "lane": 2,
+      "summary": "设置页列出的按键表：Enter 发送、Ctrl/Cmd+Enter 停止并发送、Ctrl/Cmd+G 引导、Ctrl/Cmd+V 附加剪贴板图片、Ctrl/Cmd+K 命令面板、Esc 关最上层。",
+      "links": [
+        "settings",
+        "composer"
+      ],
+      "files": [
+        "crates/mycode-frontend/src/shortcuts.rs",
+        "crates/mycode-desktop/src/ui/settings/shortcuts.rs"
+      ]
+    },
+    {
+      "id": "launch",
+      "label": "launch",
+      "group": "module",
+      "lane": 1,
+      "summary": "建窗口之前的步骤：--help/--version、更新助手入口、打开家目录、清理自更新残留、结算暂存的更新。",
+      "links": [
+        "desktop",
+        "app",
+        "update"
+      ],
+      "files": [
+        "crates/mycode-frontend/src/launch.rs"
+      ]
+    },
+    {
+      "id": "frontend",
+      "label": "mycode-frontend",
+      "group": "crate",
+      "lane": 2,
+      "summary": "与界面无关的产品层：视图模型状态机与动作 reducer、中英文本、git 状态、快捷键表、启动参数。界面只渲染这里的状态。",
+      "links": [
+        "desktop",
+        "app",
+        "driver",
+        "view_model"
+      ],
+      "files": [
+        "crates/mycode-frontend/src/lib.rs",
+        "crates/mycode-frontend/src/stream.rs"
+      ]
+    },
+    {
+      "id": "driver",
+      "label": "driver",
+      "group": "module",
+      "lane": 3,
+      "summary": "把动作变成核心命令，把回复与流式事件变回动作：会话、回合、设置、模型、更新、导出导入各有一条线。",
+      "links": [
+        "frontend",
+        "app"
+      ],
+      "files": [
+        "crates/mycode-frontend/src/driver.rs",
+        "crates/mycode-frontend/src/driver/pump.rs"
+      ]
+    },
+    {
+      "id": "view_model",
+      "label": "view_model",
+      "group": "module",
+      "lane": 3,
+      "summary": "WorkspaceState 加 FrontendAction reducer：同一份状态决定侧栏、对话、菜单和设置页显示什么。",
+      "links": [
+        "frontend",
+        "driver"
+      ],
+      "files": [
+        "crates/mycode-frontend/src/view_model.rs",
+        "crates/mycode-frontend/src/view_model/state.rs",
+        "crates/mycode-frontend/src/view_model/reduce.rs"
+      ]
+    },
+    {
+      "id": "app",
+      "label": "mycode-app",
+      "group": "crate",
+      "lane": 4,
+      "summary": "应用核：一条独立线程跑 CoreBridge，收命令回回复，并向界面推事件流。回合装配、压缩、子代理、MCP、设置持久化、自更新都在这里。",
+      "links": [
+        "frontend",
+        "agent",
+        "providers",
+        "tools",
+        "config",
+        "update",
+        "mcp"
+      ],
+      "files": [
+        "crates/mycode-app/src/lib.rs",
+        "crates/mycode-app/src/dispatch.rs"
+      ]
+    },
+    {
+      "id": "update",
+      "label": "自更新",
+      "group": "flow",
+      "lane": 5,
+      "summary": "查最新 Release → 取 mycode-desktop-v* 压缩包和 .sha256 → 校验 → 解包到暂存 → 落盘为 <home>/update 的待装包。退出或重启时由平台助手换掉正在运行的二进制。",
+      "links": [
+        "app",
+        "launch",
+        "desktop"
+      ],
+      "files": [
+        "crates/mycode-app/src/updates.rs",
+        "crates/mycode-app/src/updates/apply.rs"
+      ]
+    },
+    {
+      "id": "mcp",
+      "label": "MCP",
+      "group": "module",
+      "lane": 3,
+      "summary": "stdio 与 Streamable HTTP 两种通道，最多 64 台服务器。工具少而 schema 小的服务直接注册成普通工具，其余走 search_tool 与 use_tool。",
+      "links": [
+        "app",
+        "tools",
+        "config"
+      ],
+      "files": [
+        "crates/mycode-app/src/mcp_client.rs",
+        "crates/mycode-app/src/mcp_client/stdio_channel.rs",
+        "crates/mycode-app/src/mcp_tools.rs"
+      ]
+    },
+    {
+      "id": "agent",
+      "label": "mycode-agent",
+      "group": "crate",
+      "lane": 5,
+      "summary": "回合循环：装配提示、请求模型、分发工具、把每一步写进账本。取消只停止当前回合，已收到的内容留在账本里。",
+      "links": [
+        "app",
+        "sessions",
+        "providers",
+        "tools"
+      ],
+      "files": [
+        "crates/mycode-agent/src/lib.rs",
+        "crates/mycode-agent/src/agent.rs"
+      ]
+    },
+    {
+      "id": "sessions",
+      "label": "会话账本",
+      "group": "data",
+      "lane": 6,
+      "summary": "sessions.db 是提交权威，事件写在 JSONL 里。打开会话先对齐索引与日志，崩溃留下的半截写入截掉，对不上就明确报损坏。",
+      "links": [
+        "agent",
+        "app",
+        "home"
+      ],
+      "files": [
+        "crates/mycode-agent/src/session/ledger.rs",
+        "crates/mycode-agent/src/session/store/index.rs"
+      ]
+    },
+    {
+      "id": "compaction",
+      "label": "压缩",
+      "group": "flow",
+      "lane": 5,
+      "summary": "把长对话换成一个检查点摘要：摘要落进账本并显示成一张卡片，之后的请求从检查点继续。缓存前缀因此失效一次。",
+      "links": [
+        "agent",
+        "sessions"
+      ],
+      "files": [
+        "crates/mycode-app/src/compaction.rs",
+        "crates/mycode-app/src/turn/compact.rs"
+      ]
+    },
+    {
+      "id": "subagent",
+      "label": "子代理",
+      "group": "flow",
+      "lane": 5,
+      "summary": "scout 只读搜索与查文档；artisan 在独立 git worktree 里改代码，结束回传 diff，不自动合回也不提交。每回合最多同时 8 个。",
+      "links": [
+        "agent",
+        "tools",
+        "app"
+      ],
+      "files": [
+        "crates/mycode-app/src/subagent.rs",
+        "crates/mycode-app/src/subagent/worktree.rs"
+      ]
+    },
+    {
+      "id": "providers",
+      "label": "mycode-providers",
+      "group": "crate",
+      "lane": 6,
+      "summary": "三种协议（OpenAI chat completions、OpenAI responses、Anthropic messages）到同一套流事件的翻译，含思考档位、工具调用解析、缓存统计与代理。",
+      "links": [
+        "agent",
+        "core",
+        "magpie"
+      ],
+      "files": [
+        "crates/mycode-providers/src/lib.rs",
+        "crates/mycode-providers/src/family.rs"
+      ]
+    },
+    {
+      "id": "magpie",
+      "label": "magpie 网关",
+      "group": "module",
+      "lane": 7,
+      "summary": "模型请求只发往本机 magpie 网关；模型列表实时读 GET /v1/models，密钥与地址由 magpie 的 agent 插件写进设置。",
+      "links": [
+        "providers",
+        "config"
+      ],
+      "files": [
+        "crates/mycode-app/src/magpie.rs",
+        "crates/mycode-config/src/settings/magpie.rs",
+        "crates/mycode-providers/src/catalog/magpie.rs"
+      ]
+    },
+    {
+      "id": "tools",
+      "label": "mycode-tools",
+      "group": "crate",
+      "lane": 6,
+      "summary": "内置工具：读写与编辑文件、glob、grep、shell、进程、ask。工具以当前用户权限运行，环境变量白名单只是过滤。",
+      "links": [
+        "agent",
+        "core",
+        "mcp"
+      ],
+      "files": [
+        "crates/mycode-tools/src/lib.rs",
+        "crates/mycode-tools/src/tool.rs",
+        "crates/mycode-tools/src/registry.rs"
+      ]
+    },
+    {
+      "id": "core",
+      "label": "mycode-core",
+      "group": "crate",
+      "lane": 7,
+      "summary": "共享类型：消息、事件、工具规格、图片与附件的上限、Provider 端口、全局分配器。它不认识界面也不认识网络。",
+      "links": [
+        "providers",
+        "tools",
+        "config",
+        "attachments"
+      ],
+      "files": [
+        "crates/mycode-core/src/lib.rs",
+        "crates/mycode-core/src/message.rs"
+      ]
+    },
+    {
+      "id": "config",
+      "label": "mycode-config",
+      "group": "crate",
+      "lane": 7,
+      "summary": "家目录与设置：严格 JSON 的设置、密钥、界面状态；写坏的文档备份成 *.broken-*，能救的字段留下。",
+      "links": [
+        "core",
+        "home",
+        "settings"
+      ],
+      "files": [
+        "crates/mycode-config/src/lib.rs",
+        "crates/mycode-config/src/settings.rs",
+        "crates/mycode-config/src/home.rs"
+      ]
+    },
+    {
+      "id": "home",
+      "label": "~/.mycode",
+      "group": "data",
+      "lane": 8,
+      "summary": "settings.json（网关、MCP、外观、代理）、AGENTS.md、mcp.json、skills/、secrets.json、ui.json、sessions.db、sessions/、agents/、agent-worktrees/、scratch/、bin/、update/。",
+      "links": [
+        "config",
+        "sessions"
+      ],
+      "files": [
+        "crates/mycode-config/src/home.rs"
+      ]
+    },
+    {
+      "id": "send",
+      "label": "一条消息",
+      "group": "flow",
+      "lane": 4,
+      "summary": "先写进账本 → 装配回合 → 工具结果随到随提交 → 回复结束发 ChatDone。取消只停止当前回合，已收到的思考、正文和完成的工具调用都保留。",
+      "links": [
+        "composer",
+        "driver",
+        "agent",
+        "sessions"
+      ],
+      "files": [
+        "crates/mycode-app/src/turn.rs",
+        "crates/mycode-app/src/turn/pump.rs",
+        "crates/mycode-agent/src/turn.rs"
+      ]
+    }
+  ]
+}
