@@ -5,8 +5,8 @@
 # `cargo clippy --workspace --all-targets -- -D warnings`
 # on windows-latest, with `--locked`. The whole workspace is covered.
 # No fat LTO, no `cargo build --release`, no packaging, no tag, no
-# GitHub Release, no version bump. Release builds stay on the main push
-# so a pull request does not wait on four LTO links.
+# GitHub Release, no version bump. Release builds stay on marked main
+# pushes so a pull request does not wait on four LTO links.
 #
 # check-macos: the Windows check never compiles code behind
 # `cfg(not(windows))`. Release 0.12.22's release-build job failed there:
@@ -17,8 +17,11 @@
 # linking (no fat LTO, a few minutes) and dies on any warning, dead code
 # included. It runs for pull requests and main pushes alike.
 #
-# push to main: the same Windows check, plus plan the release and build the
-# release binary on the three native targets. The client
+# push to main: the same Windows check plus the macOS check. A push
+# publishes only when one of its new commit subjects carries `[release]`
+# (merge subjects included; the marker does not have to be on the head
+# commit). A push without the marker ends after the checks: no release
+# build, no tag, no version bump. The client
 # downloads the models.dev catalog
 # into its runtime cache, so CI does not refresh a vendored snapshot. Release
 # builds use `[profile.release]`
@@ -32,8 +35,7 @@
 # and CHANGELOG.md on a temporary commit and pushes only
 # `ci/release-<version>-<run id>`. The three product builds check out that
 # commit, so the version compiled into the binaries is the version that
-# will be tagged. A main push still builds when the plan decides not to
-# publish.
+# will be tagged.
 #
 # Targets:
 #   windows-latest  -> x86_64-pc-windows-msvc
@@ -163,7 +165,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: true
-          fetch-depth: 1
+          # Full history: the marker scan walks the commits this push
+          # brings, which starts at github.event.before.
+          fetch-depth: 0
 
       - name: Check release planner
         run: |
@@ -189,10 +193,20 @@ jobs:
           MYCODE_RELEASE_SUBJECT=$(git log -1 --format=%s)
           MYCODE_RELEASE_SHA="${GITHUB_SHA}"
           MYCODE_RELEASE_DATE=$(date -u +%Y-%m-%d)
+          # The `[release]` marker may sit on any commit this push brings,
+          # merge subjects included; the head is often only "Merge ...".
+          before="${{ github.event.before }}"
+          if [[ "${before}" =~ ^[0-9a-f]{40}$ ]] && [[ ! "${before}" =~ ^0+$ ]] \
+            && git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            git log --format=%s "${before}..${GITHUB_SHA}" > /tmp/push-subjects.txt
+          else
+            git log --format=%s -n 30 > /tmp/push-subjects.txt
+          fi
           python3 .github/scripts/release_plan.py \
             --apply \
             --remote-tags /tmp/remote-tags.txt \
             --release-tags /tmp/release-tags.txt \
+            --subjects-file /tmp/push-subjects.txt \
             --plan-env /tmp/release-plan.env \
             --notes-file /tmp/release-notes.md
           # shellcheck disable=SC1091
@@ -248,10 +262,10 @@ jobs:
             --github-output "${GITHUB_OUTPUT}"
 
   release-build:
-    # Main pushes only. A pull request does not build release binaries.
-    # The plan still runs this job when it is not publishing a release.
+    # Publishing pushes only: the plan's publish output gates this job,
+    # so an unmarked main push stops after the checks.
     needs: release-plan
-    if: github.event_name == 'push' && needs.release-plan.result == 'success'
+    if: github.event_name == 'push' && needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true'
     name: release-build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
