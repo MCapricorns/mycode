@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-label="九个 crate 的分层：依赖只向下">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="920" viewBox="0 0 1200 920" role="img" aria-label="八个 crate 的线性链：每层只依赖下一层">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0L10 5L0 10z" fill="#8b95c9"/>
@@ -8,67 +8,63 @@
       <stop offset="1" stop-color="#151a2c"/>
     </linearGradient>
   </defs>
-  <rect width="1200" height="800" rx="24" fill="#0d1120"/>
+  <rect width="1200" height="920" rx="24" fill="#0d1120"/>
 
   <g font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC','Segoe UI',system-ui,sans-serif">
-    <text x="48" y="58" fill="#ffffff" font-size="26" font-weight="700">架构：八个 crate，依赖只向下</text>
-    <text x="48" y="88" fill="#8b95c9" font-size="16">上层可以调用下层，下层不知道上层存在。core 和 config 都是叶子，互不依赖。</text>
+    <text x="48" y="58" fill="#ffffff" font-size="26" font-weight="700">架构：八个 crate 的线性链，每层只依赖下一层</text>
+    <text x="48" y="88" fill="#8b95c9" font-size="16">每层用 pub use 转发下一层的公共 API；mimalloc 全局分配器在 mycode-core 声明一次，沿链覆盖所有二进制与测试目标。</text>
 
     <g fill="none" stroke="#8b95c9" stroke-width="2" marker-end="url(#arrow)">
-      <path d="M350 192L540 222"/>
-      <path d="M600 294V324"/>
-      <path d="M540 396L370 442"/>
-      <path d="M660 396L830 442"/>
-      <path d="M350 514V550"/>
-      <path d="M350 622V676"/>
-      <path d="M850 514V676"/>
-      <g stroke-opacity="0.45" stroke-dasharray="6 6">
-        <path d="M770 514L470 676"/>
-        <path d="M430 514L740 676"/>
-      </g>
+      <path d="M600 192V216"/>
+      <path d="M600 288V312"/>
+      <path d="M600 384V408"/>
+      <path d="M600 480V504"/>
+      <path d="M600 576V600"/>
+      <path d="M600 672V696"/>
+      <path d="M600 768V792"/>
     </g>
 
     <g>
-      <rect x="130" y="120" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.7"/>
-      <text x="154" y="152" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-desktop</text>
-      <text x="154" y="178" fill="#aab3e0" font-size="15">GPUI 窗口：只画状态、收集点击</text>
+      <rect x="380" y="120" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.7"/>
+      <text x="404" y="152" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-desktop</text>
+      <text x="404" y="178" fill="#aab3e0" font-size="15">GPUI 窗口：只画状态、收集点击</text>
 
-      <rect x="380" y="222" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.6"/>
-      <text x="404" y="254" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-frontend</text>
-      <text x="404" y="280" fill="#aab3e0" font-size="15">共享驱动：视图模型、reducer、模型选择器</text>
+      <rect x="380" y="216" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.65"/>
+      <text x="404" y="248" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-frontend</text>
+      <text x="404" y="274" fill="#aab3e0" font-size="15">共享驱动：视图模型、reducer、模型选择器</text>
 
-      <rect x="380" y="324" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.5"/>
-      <text x="404" y="356" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-app</text>
-      <text x="404" y="382" fill="#aab3e0" font-size="15">应用核：会话、回合、工具宿主、MCP、压缩、更新</text>
+      <rect x="380" y="312" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.6"/>
+      <text x="404" y="344" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-app</text>
+      <text x="404" y="370" fill="#aab3e0" font-size="15">应用核：CoreBridge、回合装配、MCP、自更新</text>
 
-      <rect x="130" y="442" width="440" height="72" rx="14" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.14"/>
-      <text x="154" y="474" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-agent</text>
-      <text x="154" y="500" fill="#aab3e0" font-size="15">回合循环 + 会话账本（可恢复的提交）</text>
+      <rect x="380" y="408" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.6"/>
+      <text x="404" y="440" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-agent</text>
+      <text x="404" y="466" fill="#aab3e0" font-size="15">回合循环：装配提示、请求模型、分发工具、写账本</text>
 
-      <rect x="630" y="442" width="440" height="72" rx="14" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.14"/>
-      <text x="654" y="474" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-providers</text>
-      <text x="654" y="500" fill="#aab3e0" font-size="15">三种协议适配、models.dev 目录、代理与缓存统计</text>
+      <rect x="380" y="504" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.55"/>
+      <text x="404" y="536" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-tools</text>
+      <text x="404" y="562" fill="#aab3e0" font-size="15">内置工具：读写编辑、glob、grep、shell、进程</text>
 
-      <rect x="130" y="550" width="440" height="72" rx="14" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.14"/>
-      <text x="154" y="582" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-tools</text>
-      <text x="154" y="608" fill="#aab3e0" font-size="15">工具 trait、注册表、进程内文件 / 搜索 / shell</text>
+      <rect x="380" y="600" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.55"/>
+      <text x="404" y="632" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-providers</text>
+      <text x="404" y="658" fill="#aab3e0" font-size="15">三种协议翻译成同一套流事件，含代理与缓存统计</text>
 
-      <rect x="130" y="676" width="440" height="72" rx="14" fill="#141a2b" stroke="#3fb950" stroke-opacity="0.6"/>
-      <text x="154" y="708" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-core</text>
-      <text x="154" y="734" fill="#aab3e0" font-size="15">消息、事件、工具规格、Provider 端口（叶子）</text>
+      <rect x="380" y="696" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.5"/>
+      <text x="404" y="728" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-config</text>
+      <text x="404" y="754" fill="#aab3e0" font-size="15">家目录与严格 JSON 设置、密钥、界面状态</text>
 
-      <rect x="630" y="676" width="440" height="72" rx="14" fill="#141a2b" stroke="#3fb950" stroke-opacity="0.6"/>
-      <text x="654" y="708" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-config</text>
-      <text x="654" y="734" fill="#aab3e0" font-size="15">家目录与严格 JSON 文档，revision CAS（叶子）</text>
+      <rect x="380" y="792" width="440" height="72" rx="14" fill="url(#card)" stroke="#7c8cff" stroke-opacity="0.7"/>
+      <text x="404" y="824" fill="#ffffff" font-size="19" font-weight="700" font-family="'Cascadia Code','JetBrains Mono',Consolas,monospace">mycode-core</text>
+      <text x="404" y="850" fill="#aab3e0" font-size="15">共享类型与 Provider 端口；全局分配器在这里声明</text>
     </g>
 
-    <g font-size="14" fill="#8b95c9">
-      <line x1="900" y1="36" x2="940" y2="36" stroke="#8b95c9" stroke-width="2" marker-end="url(#arrow)"/>
-      <text x="952" y="41">直接依赖</text>
-      <line x1="900" y1="62" x2="940" y2="62" stroke="#8b95c9" stroke-width="2" stroke-opacity="0.45" stroke-dasharray="6 6"/>
-      <text x="952" y="67">跨列依赖</text>
-      <rect x="900" y="80" width="40" height="18" rx="5" fill="#141a2b" stroke="#3fb950" stroke-opacity="0.6"/>
-      <text x="952" y="94">叶子 crate</text>
+    <g stroke="#8b95c9" stroke-opacity="0.45" stroke-dasharray="6 6" fill="none">
+      <path d="M868 156C940 156 940 456 868 456"/>
+      <path d="M868 828C980 828 980 200 868 200"/>
     </g>
+    <text x="952" y="300" fill="#8b95c9" font-size="15">每层 pub use</text>
+    <text x="952" y="322" fill="#8b95c9" font-size="15">转发下层 API</text>
+    <text x="952" y="740" fill="#8b95c9" font-size="15">mimalloc + VC-LTL</text>
+    <text x="952" y="762" fill="#8b95c9" font-size="15">一次声明，全链生效</text>
   </g>
 </svg>

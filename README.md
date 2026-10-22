@@ -115,11 +115,11 @@ cargo build --release -p mycode-desktop
 
 ## 架构
 
-工作区分成八个 crate，依赖只向下：`mycode-desktop` 是界面，`mycode-frontend` 放共享的视图模型和 reducer，`mycode-app` 是应用核，下面是 `mycode-agent`、`mycode-providers`、`mycode-tools`，最底层是 `mycode-core` 和 `mycode-config`。界面只通过 `CoreBridge` 发命令、收事件；模型请求、工具执行、账本写入和设置读取都在核心里完成。
+工作区八个 crate 排成一条线性链：`mycode-desktop` → `mycode-frontend` → `mycode-app` → `mycode-agent` → `mycode-tools` → `mycode-providers` → `mycode-config` → `mycode-core`。每层只依赖下一层，并用 `pub use` 转发它的公共 API，跨层直连已全部消除。全局分配器（mimalloc）与 VC-LTL 链接在 `mycode-core` 声明一次，沿链覆盖所有二进制与测试目标。界面只通过 `CoreBridge` 发命令、收事件；模型请求、工具执行、账本写入和设置读取都在核心里完成。
 
 一条消息先写进账本，再装配回合；回合中工具结果随到随提交；回复结束发 `ChatDone`。取消只停止当前回合，已经收到的思考、正文和完成的工具调用会保留在账本里。
 
-<img src="wiki/images/architecture.svg" alt="八个 crate 的分层架构：依赖只向下" width="100%">
+<img src="wiki/images/architecture.svg" alt="八个 crate 的线性链：每层只依赖下一层" width="100%">
 
 <img src="wiki/images/message-flow.svg" alt="一条消息从输入到 ChatDone 的流程" width="100%">
 
