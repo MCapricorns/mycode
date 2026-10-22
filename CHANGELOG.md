@@ -2,9 +2,23 @@
 
 日期为发布日（UTC）。0.12.0 是第一个正式版本；之前的预览版本及其 Release 已移除，历史可在 git 记录中查看。
 
-`main` 上三个平台构建成功后都会发布新的 GitHub Release 和新标签（三个平台的 zip 与 `.sha256`：Windows x64 `x86_64-pc-windows-msvc`、Windows ARM64 `aarch64-pc-windows-msvc`、macOS Apple Silicon `aarch64-apple-darwin`，压缩包名按可执行文件名分前缀、形如 `{可执行文件名}-vX.Y.Z-{target}.zip`，例如桌面版 `mycode-desktop-vX.Y.Z-aarch64-pc-windows-msvc.zip` 与 CLI `mycode-cli-vX.Y.Z-x86_64-pc-windows-msvc.zip`；没有 Linux 包）。pull request 不发版，也不跑发布构建：PR CI 只在 Windows 上执行 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（dev/test profile，没有 fat LTO）。推到 `main` 时三个平台才做 fat LTO 发布构建；同一份检查通过且三个构建都成功后才打标签。说明先用本文件里该版本的条目，再附上自上一个标签以来合并的 pull request、这些 PR 关闭的 issue，以及比较链接。写回 main 使用 GITHUB_TOKEN，release-plan 会跳过 github-actions[bot]，避免同一次发布把补丁号再加一次。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，三个平台都从该提交构建成功后，先创建标签并上传压缩包，再把版本写回 `main`（能快进就快进，否则把版本提交重放到当前 `main` 上，不强制推送）。不会因为旧版本的压缩包已经齐就跳过。压缩包未签名。
+`main` 上三个平台构建成功后都会发布新的 GitHub Release 和新标签（三个平台的 zip 与 `.sha256`：Windows x64 `x86_64-pc-windows-msvc`、Windows ARM64 `aarch64-pc-windows-msvc`、macOS Apple Silicon `aarch64-apple-darwin`，压缩包名形如 `mycode-desktop-vX.Y.Z-{target}.zip`；没有 Linux 包）。pull request 不发版，也不跑发布构建：PR CI 只在 Windows 上执行 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（dev/test profile，没有 fat LTO）。推到 `main` 时三个平台才做 fat LTO 发布构建；同一份检查通过且三个构建都成功后才打标签。说明先用本文件里该版本的条目，再附上自上一个标签以来合并的 pull request、这些 PR 关闭的 issue，以及比较链接。写回 main 使用 GITHUB_TOKEN，release-plan 会跳过 github-actions[bot]，避免同一次发布把补丁号再加一次。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，三个平台都从该提交构建成功后，先创建标签并上传压缩包，再把版本写回 `main`（能快进就快进，否则把版本提交重放到当前 `main` 上，不强制推送）。不会因为旧版本的压缩包已经齐就跳过。压缩包未签名。
 
 ## [Unreleased]
+
+### Added
+
+- 桌面版输入框支持粘贴剪贴板图片：`Ctrl+V`（macOS `Cmd+V`）把剪贴板里的图片附加到下一条消息，粘贴内容只有一个图片路径或 `file://` URL 时也按图片附加。平台剪贴板已给出 PNG / JPEG / WebP / GIF 的按原样使用，Windows 截图给的位图先转成 PNG；图片同样受 4 张 / 3.75 MB / 合计 6 MiB 和「所选模型能否看图」的限制，纯文本粘贴仍然照常插入正文。
+
+### Changed
+
+- 移除终端版 `mycode-cli`：桌面版是唯一的前端，工作区、发布构建、自更新资产、自安装与下载清理、快捷键表都只保留 `mycode-desktop`。启动参数、`--help` / `--version`、以及自更新助手仍由 `mycode-frontend` 的 `launch` 模块提供。
+- `docs/` 换成 `wiki/index.html`：一份可搜索的知识图谱，节点覆盖 crate、模块、流程与落盘数据，点节点看说明和关联。
+- 把超过 1000 行的文件拆开：`highlight`、`tool`、`edit/engine`、`session/store/index`、`view_model/reduce`、`builtin/shell`、`builtin/grep`、`mcp_tools`、`compaction`、`ui/chat/tools`、`workspace` 及若干测试文件，各自按职责落到子模块。
+
+### Removed
+
+- 源码注释里描述已不存在的实现与历史缺陷的段落（终端版、已删除的 `docs/`、旧版本行为），以及几条只断言常量字面量的测试。
 
 ## [0.12.21] - 2026-10-21
 
