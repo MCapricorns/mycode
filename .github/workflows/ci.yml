@@ -8,6 +8,15 @@
 # GitHub Release, no version bump. Release builds stay on the main push
 # so a pull request does not wait on four LTO links.
 #
+# check-macos: the Windows check never compiles code behind
+# `cfg(not(windows))`. Release 0.12.22's release-build job failed there:
+# `install.rs` carried a unix PATH installer no non-Windows caller used,
+# and `RUSTFLAGS=-Dwarnings` turned the dead code into an error after the
+# version bump was already on a temporary ref. `cargo check
+# --workspace --all-targets` on macos-latest compiles those paths without
+# linking (no fat LTO, a few minutes) and dies on any warning, dead code
+# included. It runs for pull requests and main pushes alike.
+#
 # push to main: the same Windows check, plus plan the release and build the
 # release binary on the three native targets. The client
 # downloads the models.dev catalog
@@ -108,6 +117,27 @@ jobs:
           CARGO_NET_RETRY: "10"
           CARGO_HTTP_TIMEOUT: "60"
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  check-macos:
+    # macOS-only code (cfg(not(windows))) is invisible to the Windows
+    # check. No tests and no clippy here: this job exists to compile every
+    # target on macOS with warnings denied.
+    name: check-macos
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo check --workspace --all-targets
+        shell: bash
+        env:
+          CARGO_NET_RETRY: "10"
+          CARGO_HTTP_TIMEOUT: "60"
+          RUSTFLAGS: "-Dwarnings"
+        run: cargo check --workspace --all-targets --locked
 
   release-plan:
     # github-actions[bot] is the GITHUB_TOKEN pusher. Ignore it so the
@@ -330,8 +360,8 @@ jobs:
           if-no-files-found: error
 
   release-publish:
-    needs: [release-plan, release-build, check]
-    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success' && needs.check.result == 'success'
+    needs: [release-plan, release-build, check, check-macos]
+    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success' && needs.check.result == 'success' && needs.check-macos.result == 'success'
     name: release-publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
