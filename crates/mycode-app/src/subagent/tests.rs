@@ -580,6 +580,70 @@ fn scout_prompt_lists_workspace_skills() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A child registry's MCP nudges come from its own allowlist: a native
+/// name the role holds is redirected to the tool itself, a native name
+/// outside the allowlist keeps the generic MCP error.
+#[tokio::test]
+async fn child_mcp_nudges_follow_the_role_allowlist() {
+    let allowed = ["read", "grep", "find", "shell"]
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    let shell = mycode_agent::DetectedShell {
+        kind: mycode_agent::ShellKind::Bash,
+        program: std::path::PathBuf::from("/bin/bash"),
+    };
+    let registry = super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell));
+    assert!(registry.get("read").is_some());
+    assert!(registry.get("edit").is_none());
+    assert!(
+        crate::mcp_tools::register_mcp_tools(
+            &registry,
+            vec![crate::mcp_tools::stub_catalog_tool(
+                "files",
+                "stat",
+                "Stat a remote file."
+            )],
+            None,
+        )
+        .is_some()
+    );
+    let nudged = use_tool_invalid_args(&registry, "read").await;
+    assert!(nudged.contains("already on the tool list"), "{nudged}");
+    assert!(nudged.contains("Call read directly"), "{nudged}");
+    let outside = use_tool_invalid_args(&registry, "edit").await;
+    assert!(outside.contains("no MCP tool named edit"), "{outside}");
+}
+
+/// Runs one `use_tool` name lookup that must fail and returns its
+/// `InvalidArgs` text.
+async fn use_tool_invalid_args(registry: &mycode_agent::ToolRegistry, name: &str) -> String {
+    let tool = registry.get("use_tool").expect("use_tool registered");
+    let root = std::env::temp_dir().join(format!(
+        "mycode-child-nudge-{}-{}",
+        std::process::id(),
+        crate::unix_now().as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = mycode_agent::ToolCtx::new(&root);
+    let (mut stream, rx) = mycode_agent::ToolStream::channel();
+    let error = mycode_agent::ToolDyn::execute_dyn(
+        tool.as_ref(),
+        serde_json::json!({"name": name, "arguments": {}}),
+        &ctx,
+        &mut stream,
+    )
+    .await
+    .expect_err("the lookup must fail");
+    drop(stream);
+    drop(rx);
+    let _ = std::fs::remove_dir_all(&root);
+    match error {
+        mycode_agent::ToolError::InvalidArgs(text) => text,
+        other => panic!("expected InvalidArgs, got {other}"),
+    }
+}
+
 #[test]
 fn artisan_gets_the_same_tool_guidance_as_the_parent() {
     let home = HomeLayout::from_root(std::env::temp_dir().join("mycode-child-artisan")).unwrap();

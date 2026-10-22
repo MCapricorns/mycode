@@ -5,7 +5,7 @@
 //! schemas whatever the servers declare, and the system prompt names the
 //! servers that connected. A failed server is skipped.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
@@ -73,9 +73,10 @@ impl DynamicMcpTool {
         let snippet = mcp_snippet(&server.id, tool.description.as_deref());
         let spec = ToolSpec {
             name: tool.name.clone(),
-            description: tool.description.clone().unwrap_or_else(|| {
-                format!("MCP tool '{}' on server '{}'.", tool.name, server.id)
-            }),
+            description: tool
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("MCP tool '{}' on server '{}'.", tool.name, server.id)),
             params_schema: tool.input_schema,
         };
         Self {
@@ -481,22 +482,28 @@ pub(crate) struct McpCatalog {
     /// tools this catalog serves.
     servers: Vec<(Arc<McpServerInfo>, usize)>,
     warning: Option<String>,
+    /// Lowercased names of the tools already on the registry this catalog
+    /// was built from. A name in here is directly callable, so a lookup
+    /// miss on it gets a "call the tool directly" nudge instead of the
+    /// generic no-such-tool error.
+    native: BTreeSet<String>,
 }
 
 /// Most tools one keyword search lists before it asks for a narrower query.
 const MAX_SEARCH_MATCHES: usize = 25;
 
 impl McpCatalog {
-    /// Builds the catalog in server order. `taken` names the tools already
-    /// on the registry: a tool with one of those names is addressed as
-    /// `server__tool`, because a bare `use_tool` name would read as the
-    /// registered tool. No tool is registered directly — its schema stays
-    /// here until `search_tool` is called, so the model's tool list does not
-    /// grow with the servers.
+    /// Builds the catalog in server order. `native` holds the lowercased
+    /// names of the tools already on the registry: a tool with one of those
+    /// names is addressed as `server__tool` (matched ASCII-case-insensitively,
+    /// like [`McpCatalog::get`]'s fuzzy layer), because a bare `use_tool`
+    /// name would read as the registered tool. No tool is registered
+    /// directly — its schema stays here until `search_tool` is called, so
+    /// the model's tool list does not grow with the servers.
     pub(crate) fn from_tools(
         tools: Vec<Arc<DynamicMcpTool>>,
         warning: Option<String>,
-        taken: &dyn Fn(&str) -> bool,
+        native: &BTreeSet<String>,
     ) -> Option<Arc<Self>> {
         if tools.is_empty() && warning.is_none() {
             return None;
@@ -506,7 +513,7 @@ impl McpCatalog {
         let mut servers: Vec<(Arc<McpServerInfo>, usize)> = Vec::new();
         for tool in tools {
             let mut key = tool.spec.name.clone();
-            if by_name.contains_key(&key) || taken(&key) {
+            if by_name.contains_key(&key) || native.contains(&key.to_ascii_lowercase()) {
                 key = format!("{}__{}", tool.server.id, tool.spec.name);
                 if by_name.contains_key(&key) {
                     continue;
@@ -528,6 +535,7 @@ impl McpCatalog {
             listed,
             servers,
             warning,
+            native: native.clone(),
         }))
     }
 
@@ -641,22 +649,39 @@ several), then call it with `use_tool`. Never guess parameters.\n",
         found.sort_by_key(|(key, _)| *key);
         found
     }
+
+    /// Nudge for a name that is on the registry this catalog was built
+    /// from: the model sent a directly callable tool to `search_tool` /
+    /// `use_tool`, so the miss should teach it to call that tool directly
+    /// instead of describing the MCP catalog. Matching is ASCII-case-
+    /// insensitive, aligned with [`McpCatalog::get`]'s fuzzy layer.
+    fn native_hint(&self, name: &str) -> Option<String> {
+        self.native.contains(&name.to_ascii_lowercase()).then(|| {
+            format!(
+                "{name} is not an MCP tool; it is already on the tool list. Call {name} \
+                 directly with its own parameters."
+            )
+        })
+    }
 }
 
 impl McpCatalog {
     /// One schema block per requested exact name, in request order. A name
     /// that resolves to nothing gets an error line instead of failing the
-    /// whole batch.
+    /// whole batch; a name that is on the native tool list gets the
+    /// call-it-directly nudge instead.
     fn schemas_text(&self, names: &[String]) -> String {
         let mut blocks: Vec<String> = names
             .iter()
             .take(MAX_BATCH_NAMES)
             .map(|name| match self.get(name) {
                 Some((key, tool)) => schema_text(key, tool),
-                None => format!(
-                    "name: {name}
-error: no MCP tool has this name; call search_tool with keywords"
-                ),
+                None => {
+                    let error = self.native_hint(name).unwrap_or_else(|| {
+                        "no MCP tool has this name; call search_tool with keywords".to_owned()
+                    });
+                    format!("name: {name}\nerror: {error}")
+                }
             })
             .collect();
         if names.len() > MAX_BATCH_NAMES {
@@ -725,7 +750,16 @@ pub(crate) fn register_mcp_tools(
     tools: Vec<Arc<DynamicMcpTool>>,
     warning: Option<String>,
 ) -> Option<Arc<McpCatalog>> {
-    let catalog = McpCatalog::from_tools(tools, warning, &|name| registry.get(name).is_some())?;
+    // Snapshot before the meta-tools register, so the name checks below
+    // never see `search_tool` / `use_tool` themselves. The snapshot doubles
+    // as the native-name set behind the call-it-directly nudges, so a
+    // subagent's allowlist subset gets exactly its own tools.
+    let native: BTreeSet<String> = registry
+        .names()
+        .into_iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    let catalog = McpCatalog::from_tools(tools, warning, &native)?;
     registry.register(Arc::new(SearchTool::new(Arc::clone(&catalog))));
     registry.register(Arc::new(UseTool::new(Arc::clone(&catalog))));
     Some(catalog)
@@ -793,9 +827,17 @@ impl ToolDyn for SearchTool {
             }
             let found = self.catalog.search(&name);
             match found.as_slice() {
-                [] => Err(ToolError::InvalidArgs(format!(
-                    "no MCP tool matches {name}. Call search_tool with other keywords or name \"list\"."
-                ))),
+                // A keyword search that stays empty on a native tool name is
+                // the model routing a directly callable tool through the MCP
+                // bridge; nudge it back. Only the empty branch: several
+                // keyword hits are ordinary results, not a misspelled name.
+                [] => Err(match self.catalog.native_hint(&name) {
+                    Some(hint) => ToolError::InvalidArgs(hint),
+                    None => ToolError::InvalidArgs(format!(
+                        "no MCP tool matches {name}. Call search_tool with other keywords or name \
+                         \"list\"."
+                    )),
+                }),
                 [(key, tool)] => Ok(ToolResult::text(schema_text(key, tool))),
                 many => {
                     let mut text = format!(
@@ -866,9 +908,14 @@ impl ToolDyn for UseTool {
         Box::pin(async move {
             let name = arg_name(&args)?;
             let Some((_, tool)) = self.catalog.get(&name) else {
-                return Err(ToolError::InvalidArgs(format!(
-                    "no MCP tool named {name}. Call search_tool with name \"list\"."
-                )));
+                return Err(match self.catalog.native_hint(&name) {
+                    // The model sent a directly callable tool's name through
+                    // the MCP bridge; teach it to call the tool itself.
+                    Some(hint) => ToolError::InvalidArgs(hint),
+                    None => ToolError::InvalidArgs(format!(
+                        "no MCP tool named {name}. Call search_tool with name \"list\"."
+                    )),
+                });
             };
             let mut arguments = args
                 .get("arguments")
@@ -976,6 +1023,50 @@ pub(crate) async fn mcp_list_tools(
         .map_err(|error| format!("MCP tools listing failed: {error}"))?;
     client.shutdown().await;
     Ok(tools.iter().map(|tool| tool.name.clone()).collect())
+}
+
+/// Test-only builder for one catalog tool that is never executed. The
+/// `new` constructors stay private to this module, so cross-module tests
+/// (subagent allowlists) need this to hand `register_mcp_tools` a tool.
+#[cfg(test)]
+pub(crate) fn stub_catalog_tool(
+    server: &str,
+    name: &str,
+    description: &str,
+) -> Arc<DynamicMcpTool> {
+    struct DeadChannel;
+    impl crate::mcp_client::JsonRpcChannel for DeadChannel {
+        fn request<'a>(
+            &'a self,
+            _id: u64,
+            method: &'a str,
+            _params: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, crate::mcp_client::McpError>> + Send + 'a>>
+        {
+            Box::pin(async move { Err(crate::mcp_client::McpError::protocol(method)) })
+        }
+        fn notify<'a>(
+            &'a self,
+            _method: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::mcp_client::McpError>> + Send + 'a>>
+        {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    Arc::new(DynamicMcpTool::new(
+        Arc::new(McpServerInfo::new(server, None)),
+        crate::mcp_client::McpTool {
+            name: name.to_owned(),
+            description: Some(description.to_owned()),
+            input_schema: serde_json::json!({"type": "object"}),
+            read_only: true,
+        },
+        Arc::new(tokio::sync::Mutex::new(crate::mcp_client::McpClient::new(
+            Arc::new(DeadChannel),
+        ))),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(std::env::temp_dir()),
+    ))
 }
 
 #[cfg(test)]
