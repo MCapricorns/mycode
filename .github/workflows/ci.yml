@@ -9,7 +9,7 @@
 # so a pull request does not wait on four LTO links.
 #
 # push to main: the same Windows check, plus plan the release and build the
-# release binaries (desktop and CLI) on the three native targets. The client
+# release binary on the three native targets. The client
 # downloads the models.dev catalog
 # into its runtime cache, so CI does not refresh a vendored snapshot. Release
 # builds use `[profile.release]`
@@ -57,12 +57,8 @@
 #   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
 #   mycode-desktop-<tag>-aarch64-apple-darwin.dmg        (+ .sha256)
-#   mycode-cli-<tag>-x86_64-pc-windows-msvc.zip          (+ .sha256)
-#   mycode-cli-<tag>-aarch64-pc-windows-msvc.zip         (+ .sha256)
-#   mycode-cli-<tag>-aarch64-apple-darwin.zip            (+ .sha256)
-# The `mycode-cli` zips carry the `mycode-cli` package's binary; only the
-# desktop app is wrapped into a dmg. Each binary self-updates from the
-# asset family named after its own executable stem.
+# Only the desktop app is wrapped into a dmg. It self-updates from the
+# `mycode-desktop` asset family.
 
 name: ci
 
@@ -236,15 +232,12 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary: mycode-desktop.exe
-            cli: mycode-cli.exe
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
             binary: mycode-desktop.exe
-            cli: mycode-cli.exe
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: mycode-desktop
-            cli: mycode-cli
     steps:
       - uses: actions/checkout@v5
         with:
@@ -284,36 +277,34 @@ jobs:
         shell: pwsh
         run: |
           $tag = $env:MYCODE_PACKAGE_TAG
-          foreach ($binary in @("${{ matrix.binary }}", "${{ matrix.cli }}")) {
-            $stem = [System.IO.Path]::GetFileNameWithoutExtension($binary)
-            $stage = "$stem-$tag-${{ matrix.target }}"
-            New-Item -ItemType Directory -Path $stage | Out-Null
-            Copy-Item "target/${{ matrix.target }}/release/$binary" "$stage/"
-            Copy-Item README.md "$stage/" -ErrorAction SilentlyContinue
-            Copy-Item LICENSE "$stage/" -ErrorAction SilentlyContinue
-            $zip = "$stem-$tag-${{ matrix.target }}.zip"
-            Compress-Archive -Path $stage -DestinationPath $zip
-            $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-            "$hash  $zip" | Out-File -Encoding ascii "$zip.sha256"
-          }
+          $binary = "${{ matrix.binary }}"
+          $stem = [System.IO.Path]::GetFileNameWithoutExtension($binary)
+          $stage = "$stem-$tag-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/$binary" "$stage/"
+          Copy-Item README.md "$stage/" -ErrorAction SilentlyContinue
+          Copy-Item LICENSE "$stage/" -ErrorAction SilentlyContinue
+          $zip = "$stem-$tag-${{ matrix.target }}.zip"
+          Compress-Archive -Path $stage -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Out-File -Encoding ascii "$zip.sha256"
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           tag="${MYCODE_PACKAGE_TAG}"
-          for binary in "${{ matrix.binary }}" "${{ matrix.cli }}"; do
-            stage="${binary}-${tag}-${{ matrix.target }}"
-            mkdir -p "$stage"
-            chmod +x "target/${{ matrix.target }}/release/${binary}"
-            cp "target/${{ matrix.target }}/release/${binary}" "$stage/"
-            cp README.md "$stage/" 2>/dev/null || true
-            cp LICENSE "$stage/" 2>/dev/null || true
-            zip="${binary}-${tag}-${{ matrix.target }}.zip"
-            zip -r "$zip" "$stage"
-            hash=$(shasum -a 256 "$zip" | awk '{print $1}')
-            printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
-          done
+          binary="${{ matrix.binary }}"
+          stage="${binary}-${tag}-${{ matrix.target }}"
+          mkdir -p "$stage"
+          chmod +x "target/${{ matrix.target }}/release/${binary}"
+          cp "target/${{ matrix.target }}/release/${binary}" "$stage/"
+          cp README.md "$stage/" 2>/dev/null || true
+          cp LICENSE "$stage/" 2>/dev/null || true
+          zip="${binary}-${tag}-${{ matrix.target }}.zip"
+          zip -r "$zip" "$stage"
+          hash=$(shasum -a 256 "$zip" | awk '{print $1}')
+          printf '%s  %s\n' "$hash" "$zip" > "$zip.sha256"
 
       # MYCode.app + ad-hoc codesign + hdiutil; writes the .dmg and its
       # .sha256. The zip stays: the in-app updater downloads it.

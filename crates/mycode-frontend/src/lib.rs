@@ -4,8 +4,8 @@
 //! Everything that is not pixels lives here: the view-model state machine
 //! ([`view_model::WorkspaceState`] plus the [`view_model::FrontendAction`]
 //! reducer), interface localization, read-only git status for the changes
-//! panel, the keyboard-shortcut list both settings pages show, and the
-//! pre-window CLI argument vocabulary. A frontend renders the
+//! panel, the keyboard-shortcut list the settings page shows, and the
+//! pre-window argument and launch steps. A frontend renders the
 //! state and feeds actions back; when product behavior changes, this crate
 //! is where the change lands so every frontend picks it up at once.
 //!
@@ -13,7 +13,7 @@
 //! in, replies and streaming events out. Frontends never talk to sessions,
 //! providers, tools, or credentials directly.
 
-pub mod cli;
+pub mod launch;
 pub mod driver;
 pub mod forms;
 pub mod git_status;

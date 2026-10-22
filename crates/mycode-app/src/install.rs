@@ -1,12 +1,5 @@
 //! Self-install into `<home>/bin`, PATH registration, and download cleanup.
 //!
-//! The terminal binary installs itself on every platform: the running
-//! executable is copied into `<home>/bin` and that directory is put on the
-//! user PATH — the HKCU `Environment` registry value on Windows, shell
-//! profile files on macOS — so a refreshed terminal resolves `mycode-cli`
-//! without a package manager, and self-updates always land in a
-//! user-writable directory.
-//!
 //! The desktop installs itself on Windows only (macOS ships a dmg the user
 //! drags to `/Applications`). Launched from anywhere but `<home>/bin`, it
 //! copies itself there, spawns the installed copy with the same arguments,
@@ -16,7 +9,7 @@
 //! once and recorded under `<home>`, so upgrades repair a shortcut the
 //! install never dropped while a user-deleted one stays gone. Sweeping
 //! `~/Downloads` and `~/Desktop` removes loose MYCode binaries and release
-//! archives of the self-installing families.
+//! archives.
 //!
 //! Debug builds and `MYCODE_NO_INSTALL=1` skip the whole dance so
 //! `cargo run` stays in `target/`.
@@ -38,12 +31,6 @@ const NO_INSTALL_ENV: &str = "MYCODE_NO_INSTALL";
 #[cfg(windows)]
 const INSTALLED_FROM_ENV: &str = "MYCODE_INSTALLED_FROM";
 
-/// `mycode-cli` plus the platform executable suffix.
-#[must_use]
-pub fn cli_exe_name() -> String {
-    format!("mycode-cli{}", env::consts::EXE_SUFFIX)
-}
-
 /// `mycode-desktop` plus the platform executable suffix.
 #[must_use]
 pub fn desktop_exe_name() -> String {
@@ -60,35 +47,6 @@ pub fn install_dir(home: &HomeLayout) -> PathBuf {
 #[must_use]
 pub fn install_skipped() -> bool {
     cfg!(debug_assertions) || env::var_os(NO_INSTALL_ENV).is_some()
-}
-
-/// One `ensure_*_installed` outcome, for the notice the CLI shows.
-#[derive(Debug, Default)]
-pub struct InstallReport {
-    /// The installed location inside `<home>/bin`.
-    pub target: PathBuf,
-    /// The running binary was copied into `target` during this call.
-    pub copied: bool,
-    /// This process already runs `target`, or installation was skipped.
-    pub running_installed: bool,
-    /// A PATH entry for the install dir was added during this call.
-    pub path_added: bool,
-    /// Human-readable failure detail when the copy or PATH write failed.
-    /// The binary keeps running regardless.
-    pub warning: Option<String>,
-}
-
-/// Whether the running executable already lives at `target`.
-fn running_at(target: &Path) -> Option<PathBuf> {
-    let exe = env::current_exe().ok()?.canonicalize().ok()?;
-    let target_canonical = target
-        .canonicalize()
-        .unwrap_or_else(|_| target.to_path_buf());
-    if paths_equal(&exe, &target_canonical) {
-        Some(exe)
-    } else {
-        None
-    }
 }
 
 #[cfg(windows)]
@@ -129,47 +87,6 @@ fn install_file(exe: &Path, target: &Path) -> io::Result<bool> {
         fs::set_permissions(target, fs::Permissions::from_mode(0o755))?;
     }
     Ok(true)
-}
-
-/// Installs the terminal binary into `<home>/bin` and registers that dir on
-/// the user PATH. The current process keeps running from its download;
-/// PATH makes the next terminal resolve `mycode-cli` to the installed copy.
-pub fn ensure_cli_installed(home: &HomeLayout) -> InstallReport {
-    let target = install_dir(home).join(cli_exe_name());
-    let mut report = InstallReport {
-        target: target.clone(),
-        ..InstallReport::default()
-    };
-    if install_skipped() {
-        report.running_installed = true;
-        return report;
-    }
-    if running_at(&target).is_some() {
-        report.running_installed = true;
-        sweep_downloaded_binaries();
-        return report;
-    }
-    let exe = match env::current_exe().and_then(|exe| exe.canonicalize()) {
-        Ok(exe) => exe,
-        Err(error) => {
-            report.warning = Some(format!("current exe unavailable: {error}"));
-            return report;
-        }
-    };
-    match install_file(&exe, &target) {
-        Ok(copied) => report.copied = copied,
-        Err(error) => report.warning = Some(format!("copy to {}: {error}", target.display())),
-    }
-    match ensure_path_entry(&install_dir(home)) {
-        Ok(added) => report.path_added = added,
-        Err(error) => {
-            report.warning = Some(match report.warning.take() {
-                Some(previous) => format!("{previous}; PATH: {error}"),
-                None => format!("PATH: {error}"),
-            });
-        }
-    }
-    report
 }
 
 /// What the desktop main should do after `ensure_desktop_installed`.
@@ -337,25 +254,20 @@ pub fn sweep_downloaded_binaries() {
 }
 
 /// Whether a loose filename in Downloads/Desktop is one of our release
-/// artifacts: a shipped binary, a `*-v*` archive, or its `.sha256` sidecar.
-/// Binary names match exactly. The desktop family counts only on Windows,
-/// where the desktop installs itself; on macOS the user may run it from a
-/// download or keep the dmg, so the CLI leaves those alone.
+/// artifacts: the shipped binary, a `*-v*` archive, or its `.sha256`
+/// sidecar. The binary name matches exactly, and only on Windows, where the
+/// desktop installs itself; on macOS the user may run it from a download or
+/// keep the dmg, so those files stay.
 fn is_download_artifact(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    let mut bare = vec!["mycode", "mycode.exe", "mycode-cli", "mycode-cli.exe"];
-    let mut archives = vec!["mycode-v", "mycode-cli-v"];
-    if cfg!(windows) {
-        bare.push("mycode-desktop.exe");
-        archives.push("mycode-desktop-v");
+    if !cfg!(windows) {
+        return false;
     }
-    if bare.contains(&name) {
+    if name == "mycode-desktop.exe" {
         return true;
     }
-    archives.iter().any(|stem| {
-        lower.starts_with(stem)
-            && (lower.ends_with(".zip") || lower.ends_with(".dmg") || lower.ends_with(".sha256"))
-    })
+    lower.starts_with("mycode-desktop-v")
+        && (lower.ends_with(".zip") || lower.ends_with(".dmg") || lower.ends_with(".sha256"))
 }
 
 /// Ensures `dir` appears in the user's PATH, appending it when absent.
@@ -575,35 +487,23 @@ mod tests {
 
     #[test]
     fn artifact_names_match_release_layout() {
-        for name in [
-            "mycode",
-            "mycode.exe",
-            "mycode-cli",
-            "mycode-cli.exe",
-            "mycode-v0.11.32-x86_64-pc-windows-msvc.zip",
-            "mycode-cli-v0.12.0-aarch64-apple-darwin.zip",
-            "mycode-cli-v0.12.0-x86_64-pc-windows-msvc.zip.sha256",
-        ] {
-            assert!(is_download_artifact(name), "{name}");
-        }
-        for name in [
-            "mycode-notes.txt",
-            "mycode-cli.zip",
-            "MYCODE-CLI.EXE.bak",
-            "MYCode.app",
-            "MYCode",
-            "other.zip",
-        ] {
-            assert!(!is_download_artifact(name), "{name}");
-        }
         // The desktop installs itself only on Windows; elsewhere the user
         // may run it from a download or keep the dmg.
         for name in [
             "mycode-desktop.exe",
             "mycode-desktop-v0.12.0-x86_64-pc-windows-msvc.zip",
-            "mycode-desktop-v0.12.0-aarch64-apple-darwin.dmg",
+            "mycode-desktop-v0.12.0-aarch64-apple-darwin.zip.sha256",
         ] {
             assert_eq!(is_download_artifact(name), cfg!(windows), "{name}");
+        }
+        for name in [
+            "mycode-notes.txt",
+            "mycode-desktop.zip",
+            "MYCODE-DESKTOP.EXE.bak",
+            "MYCode.app",
+            "other.zip",
+        ] {
+            assert!(!is_download_artifact(name), "{name}");
         }
     }
 

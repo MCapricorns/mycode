@@ -1,6 +1,6 @@
 [package]
 name = "mycode-frontend"
-description = "UI-agnostic product layer shared by MYCode frontends: view-model state machine, i18n, git status, and CLI argument parsing"
+description = "UI-agnostic product layer for the MYCode desktop app: view-model state machine, i18n, git status, launch arguments"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
