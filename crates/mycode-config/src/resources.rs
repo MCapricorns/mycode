@@ -210,7 +210,102 @@ fn push_skill(
     if slug.is_empty() || slug == "agents" || !seen.insert(slug.clone()) {
         return;
     }
-    let text = read_resource(path).unwrap_or_default();
+    let (title, description) = skill_meta(path, &slug);
+    skills.push(SkillFile {
+        slug,
+        title,
+        description,
+        path: path.to_path_buf(),
+        global,
+    });
+}
+
+/// One skill's derived prompt metadata under its cache identity.
+struct CachedSkillMeta {
+    mtime: std::time::SystemTime,
+    len: u64,
+    title: String,
+    description: String,
+}
+
+/// Skill-metadata cache capacity. Path keys carry no natural bound (unlike
+/// a `TypeId`-keyed cache), so the map is explicitly capped; past the cap
+/// it clears wholesale and rebuilds, which is a cold restart, not a
+/// behavior change.
+const MAX_SKILL_META_CACHE: usize = 512;
+
+fn skill_meta_cache()
+-> &'static std::sync::RwLock<std::collections::HashMap<PathBuf, CachedSkillMeta>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<std::collections::HashMap<PathBuf, CachedSkillMeta>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// `(title, description)` for one SKILL.md, cached process-wide by
+/// `(path, mtime, len)`.
+///
+/// Every turn, every subagent run, and every skills-page refresh runs
+/// [`discover_skills`], and each skill file used to be read in full (up to
+/// [`MAX_RESOURCE_BYTES`]) just to lift its frontmatter and first heading.
+/// The cache removes that repeat I/O.
+///
+/// Boundaries, kept explicit:
+/// - Only successful reads are cached. A failed read (including a
+///   transient Windows sharing violation) keeps today's behavior — the
+///   slug as title, no description — and writes nothing, so the next
+///   discovery retries the file and self-heals.
+/// - A file whose `fs::metadata()` or `modified()` fails has no cache
+///   identity: it takes the full read path and is never written.
+/// - Accepted staleness: an edit that keeps the byte length and lands
+///   within the filesystem's mtime granularity serves the old summary
+///   until the next `mtime`/`len` change. Only the catalog line and the
+///   skills page are affected — a SKILL.md body is never cached; the
+///   model's `read` and the frontend's file view always read the disk.
+fn skill_meta(path: &Path, slug: &str) -> (String, String) {
+    let uncached =
+        || read_skill_meta(path, slug).unwrap_or_else(|| (slug.to_owned(), String::new()));
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return uncached();
+    };
+    let Ok(mtime) = metadata.modified() else {
+        return uncached();
+    };
+    let len = metadata.len();
+    if let Ok(cache) = skill_meta_cache().read()
+        && let Some(hit) = cache.get(path)
+        && hit.mtime == mtime
+        && hit.len == len
+    {
+        return (hit.title.clone(), hit.description.clone());
+    }
+    let Some((title, description)) = read_skill_meta(path, slug) else {
+        return (slug.to_owned(), String::new());
+    };
+    // A poisoned lock only means a panic elsewhere while it was held; the
+    // map is still structurally valid.
+    let mut cache = skill_meta_cache()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.len() >= MAX_SKILL_META_CACHE {
+        cache.clear();
+    }
+    cache.insert(
+        path.to_path_buf(),
+        CachedSkillMeta {
+            mtime,
+            len,
+            title: title.clone(),
+            description: description.clone(),
+        },
+    );
+    (title, description)
+}
+
+/// Reads one SKILL.md and lifts its `(title, description)`. `None` when
+/// the read fails; that state is never cached.
+fn read_skill_meta(path: &Path, slug: &str) -> Option<(String, String)> {
+    let text = read_resource(path).ok()?;
     let (name, description) = skill_frontmatter(&text);
     let title = text
         .lines()
@@ -218,14 +313,8 @@ fn push_skill(
         .filter(|title| !title.is_empty())
         .map(str::to_owned)
         .or(name)
-        .unwrap_or_else(|| slug.clone());
-    skills.push(SkillFile {
-        slug,
-        title,
-        description: description.unwrap_or_default(),
-        path: path.to_path_buf(),
-        global,
-    });
+        .unwrap_or_else(|| slug.to_owned());
+    Some((title, description.unwrap_or_default()))
 }
 
 /// Longest skill description carried into the prompt catalog.
@@ -502,6 +591,83 @@ mod tests {
         assert!(
             catalog.contains("/pdf — pdf-tools: Fill and merge PDF forms."),
             "{catalog}"
+        );
+    }
+
+    /// The metadata cache sits between the directory scan and the prompt:
+    /// an unchanged file serves the cached summary, a real edit (length
+    /// change) is picked up on the next discovery.
+    #[test]
+    fn skill_metadata_is_cached_until_the_file_changes() {
+        let root = temp("meta-cache");
+        let dir = root.0.join(".agents").join("skills").join("pdf");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("SKILL.md");
+        // No `# ` heading: the frontmatter name is the title.
+        fs::write(
+            &path,
+            "---\nname: pdf-tools\ndescription: Fill and merge forms.\n---\n\nSteps.\n",
+        )
+        .unwrap();
+        let first = discover_skills(&root.0, None, None);
+        assert_eq!(
+            (first[0].title.as_str(), first[0].description.as_str()),
+            ("pdf-tools", "Fill and merge forms.")
+        );
+        let second = discover_skills(&root.0, None, None);
+        assert_eq!(first, second, "an unchanged file serves the same summary");
+        // A rewrite with a different length invalidates the cache entry
+        // through `len`, whatever the filesystem's mtime granularity did
+        // with the rewrite.
+        fs::write(
+            &path,
+            "---\nname: pdf-tools-v2\ndescription: Fill, merge, and stamp form fields.\n---\n\nSteps.\n",
+        )
+        .unwrap();
+        let third = discover_skills(&root.0, None, None);
+        assert_eq!(
+            (third[0].title.as_str(), third[0].description.as_str()),
+            ("pdf-tools-v2", "Fill, merge, and stamp form fields.")
+        );
+    }
+
+    /// A read that fails under an exclusive handle is never cached: the
+    /// discovery falls back to the slug title and the next discovery, with
+    /// the handle released, reads the real metadata. `fs::metadata` still
+    /// works on a share-locked file, so this exercises exactly the
+    /// failed-read-is-not-written branch.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_skill_read_is_not_cached_and_self_heals() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let root = temp("meta-locked");
+        let dir = root.0.join(".agents").join("skills").join("locked");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("SKILL.md");
+        fs::write(
+            &path,
+            "---\nname: locked-skill\ndescription: real value\n---\n# Locked\n",
+        )
+        .unwrap();
+        let _lock = fs::OpenOptions::new()
+            .write(true)
+            .share_mode(0)
+            .open(&path)
+            .expect("exclusive handle");
+        let found = discover_skills(&root.0, None, None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            (found[0].title.as_str(), found[0].description.as_str()),
+            ("locked", ""),
+            "a failed read falls back to the slug"
+        );
+        drop(_lock);
+        let found = discover_skills(&root.0, None, None);
+        assert_eq!(
+            (found[0].title.as_str(), found[0].description.as_str()),
+            ("Locked", "real value"),
+            "the released file reads its real metadata"
         );
     }
 }

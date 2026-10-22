@@ -73,6 +73,12 @@ use super::{McpCatalog, bound_mcp_result};
 use crate::mcp_client::McpTool;
 use mycode_agent::ToolDyn;
 
+/// Lowercased registry-name set for [`McpCatalog::from_tools`], mirroring
+/// how `register_mcp_tools` snapshots the registry.
+fn native(names: &[&str]) -> std::collections::BTreeSet<String> {
+    names.iter().map(|name| name.to_ascii_lowercase()).collect()
+}
+
 #[test]
 fn mcp_snippets_say_what_the_tool_does() {
     assert_eq!(
@@ -166,7 +172,7 @@ fn list_names_tools_without_schemas() {
             catalog_tool("github", "create_issue", "Open a GitHub issue."),
         ],
         None,
-        &|_| false,
+        &native(&[]),
     )
     .expect("catalog");
     let listed = catalog.list_text();
@@ -188,7 +194,7 @@ fn list_keeps_the_config_error_above_the_tools() {
     let catalog = McpCatalog::from_tools(
         Vec::new(),
         Some("MCP config unreadable: access denied".to_owned()),
-        &|_| false,
+        &native(&[]),
     )
     .expect("catalog");
     let listed = catalog.list_text();
@@ -353,7 +359,7 @@ async fn mcp_call_runs_the_server_tool() {
     drop(calls);
     let _ = std::fs::remove_dir_all(&root);
 
-    let catalog = super::McpCatalog::from_tools(tools, None, &|_| false).expect("catalog");
+    let catalog = super::McpCatalog::from_tools(tools, None, &native(&[])).expect("catalog");
     for spelling in [
         "lookup",
         "LOOKUP",
@@ -411,7 +417,7 @@ fn same_named_tools_on_two_servers_both_stay_reachable() {
         catalog_tool("alpha", "search", "Search alpha issues."),
         catalog_tool("beta", "search", "Search beta wiki pages."),
     ];
-    let catalog = McpCatalog::from_tools(tools, None, &|_| false).unwrap();
+    let catalog = McpCatalog::from_tools(tools, None, &native(&[])).unwrap();
     assert_eq!(catalog.get("search").map(|(key, _)| key), Some("search"));
     let (key, tool) = catalog.get("beta__search").expect("second server");
     assert_eq!((key, tool.server.id.as_str()), ("beta__search", "beta"));
@@ -441,7 +447,7 @@ fn the_prompt_note_names_connected_servers() {
         tool_on(&github, "create_issue", "Open a GitHub issue."),
         tool_on(&github, "list_pulls", "List pull requests."),
     ];
-    let catalog = McpCatalog::from_tools(tools, None, &|_| false).unwrap();
+    let catalog = McpCatalog::from_tools(tools, None, &native(&[])).unwrap();
     let note = catalog.prompt_note();
     assert!(note.contains("- anysearch (1 tool)\n"), "{note}");
     assert!(
@@ -461,7 +467,7 @@ fn a_tool_named_like_a_builtin_keeps_its_server_prefix() {
         catalog_tool("files", "read", "Read a remote file."),
         catalog_tool("files", "stat", "Stat a remote file."),
     ];
-    let catalog = McpCatalog::from_tools(tools, None, &|name| name == "read").unwrap();
+    let catalog = McpCatalog::from_tools(tools, None, &native(&["read"])).unwrap();
     let listed = catalog.list_text();
     assert!(
         listed.contains("files__read — Read a remote file."),
@@ -478,7 +484,7 @@ fn keyword_search_matches_names_servers_and_descriptions() {
         catalog_tool("github", "list_pulls", "List pull requests."),
         catalog_tool("linear", "create_ticket", "Open a Linear issue."),
     ];
-    let catalog = McpCatalog::from_tools(tools, None, &|_| false).unwrap();
+    let catalog = McpCatalog::from_tools(tools, None, &native(&[])).unwrap();
     let keys = |query: &str| -> Vec<String> {
         catalog
             .search(query)
@@ -491,4 +497,134 @@ fn keyword_search_matches_names_servers_and_descriptions() {
     assert_eq!(keys("pull, github"), ["list_pulls"]);
     assert!(keys("deploy").is_empty());
     assert!(keys("  ").is_empty());
+}
+
+/// Runs one tool call that must fail and returns its `InvalidArgs` text.
+async fn invalid_args_text(tool: &dyn ToolDyn, args: serde_json::Value) -> String {
+    let root = std::env::temp_dir().join(format!(
+        "mycode-mcp-nudge-{}-{}",
+        std::process::id(),
+        crate::unix_now().as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = mycode_agent::ToolCtx::new(&root);
+    let (mut stream, rx) = mycode_agent::ToolStream::channel();
+    let error = tool
+        .execute_dyn(args, &ctx, &mut stream)
+        .await
+        .expect_err("the lookup must fail");
+    drop(stream);
+    drop(rx);
+    let _ = std::fs::remove_dir_all(&root);
+    match error {
+        mycode_agent::ToolError::InvalidArgs(text) => text,
+        other => panic!("expected InvalidArgs, got {other}"),
+    }
+}
+
+/// A registry tool name that reaches `search_tool` / `use_tool` is told to
+/// call the tool directly, in either case; an unknown name keeps the
+/// generic errors.
+#[tokio::test]
+async fn a_native_name_miss_gets_a_call_it_directly_nudge() {
+    let catalog = McpCatalog::from_tools(
+        vec![catalog_tool("files", "stat", "Stat a remote file.")],
+        None,
+        &native(&["read"]),
+    )
+    .unwrap();
+    let use_tool = super::UseTool::new(std::sync::Arc::clone(&catalog));
+    for spelling in ["read", "Read"] {
+        let error = invalid_args_text(
+            &use_tool,
+            serde_json::json!({"name": spelling, "arguments": {}}),
+        )
+        .await;
+        assert!(
+            error.contains("already on the tool list"),
+            "{spelling}: {error}"
+        );
+        assert!(error.contains("directly"), "{spelling}: {error}");
+    }
+    let unknown = invalid_args_text(
+        &use_tool,
+        serde_json::json!({"name": "deploy", "arguments": {}}),
+    )
+    .await;
+    assert!(unknown.contains("no MCP tool named deploy"), "{unknown}");
+
+    let search_tool = super::SearchTool::new(std::sync::Arc::clone(&catalog));
+    // The empty-keyword-search branch nudges; a broad keyword with matches
+    // stays an ordinary result.
+    let error = invalid_args_text(&search_tool, serde_json::json!({"name": "Read"})).await;
+    assert!(error.contains("already on the tool list"), "{error}");
+    let unknown = invalid_args_text(&search_tool, serde_json::json!({"name": "deploy"})).await;
+    assert!(unknown.contains("no MCP tool matches deploy"), "{unknown}");
+    let text = mycode_agent::ToolDyn::execute_dyn(
+        &search_tool,
+        serde_json::json!({"name": "stat"}),
+        &mycode_agent::ToolCtx::new(std::path::Path::new(".")),
+        &mut mycode_agent::ToolStream::closed(),
+    )
+    .await;
+    assert!(text.is_ok(), "an exact MCP name still resolves: {text:?}");
+
+    let batch = catalog.schemas_text(&["read".to_owned(), "deploy".to_owned()]);
+    assert!(batch.contains("already on the tool list"), "{batch}");
+    assert!(batch.contains("no MCP tool has this name"), "{batch}");
+}
+
+/// The native-name snapshot is taken before the meta-tools register, so
+/// sending `search_tool` / `use_tool` to themselves keeps the generic
+/// error instead of a nudge.
+#[tokio::test]
+async fn the_nudge_snapshot_excludes_the_meta_tools() {
+    let registry = mycode_agent::ToolRegistry::new();
+    mycode_agent::register_builtins(&registry);
+    assert!(
+        super::register_mcp_tools(
+            &registry,
+            vec![catalog_tool("files", "stat", "Stat a remote file.")],
+            None,
+        )
+        .is_some()
+    );
+    for meta in ["search_tool", "use_tool"] {
+        let tool = registry.get(meta).expect("the meta-tool registered");
+        let error = invalid_args_text(
+            tool.as_ref(),
+            serde_json::json!({"name": meta, "arguments": {}}),
+        )
+        .await;
+        // `use_tool` misses by name, `search_tool` falls through to its
+        // empty keyword search; both keep their generic error.
+        assert!(error.contains("no MCP tool"), "{meta}: {error}");
+        assert!(
+            !error.contains("already on the tool list"),
+            "{meta}: {error}"
+        );
+    }
+}
+
+/// The register path gives a native collision the same server prefix the
+/// closure-based check used to.
+#[test]
+fn register_level_collision_keeps_the_server_prefix() {
+    let registry = mycode_agent::ToolRegistry::new();
+    registry.register(std::sync::Arc::new(mycode_agent::builtin::ReadTool));
+    let catalog = super::register_mcp_tools(
+        &registry,
+        vec![
+            catalog_tool("files", "read", "Read a remote file."),
+            catalog_tool("files", "stat", "Stat a remote file."),
+        ],
+        None,
+    )
+    .expect("catalog");
+    let listed = catalog.list_text();
+    assert!(
+        listed.contains("files__read — Read a remote file."),
+        "{listed}"
+    );
+    assert!(listed.contains("stat — Stat a remote file."), "{listed}");
 }
