@@ -158,8 +158,8 @@ pub enum BridgeCommand {
     /// Inject text into the running turn without cancelling it or its subagents.
     ///
     /// The core pushes into that session's steer inbox and replies at once.
-    /// A missing inbox means the turn already ended; the desktop then queues
-    /// the text so it is not lost.
+    /// A missing inbox means the turn already ended; the desktop then puts
+    /// the text back in the composer so it is not lost.
     Steer {
         /// Session identity spelling.
         session_id: String,
@@ -438,14 +438,15 @@ pub enum BridgeEvent {
         /// Session identity spelling.
         session_id: String,
         /// Rendered failure for the banner. [`protocol::CHAT_CANCELLED`] is a
-        /// quiet cancel: the desktop clears the turn and may send the queue.
+        /// quiet cancel: the desktop clears the turn and sends a message it
+        /// was holding for that stop.
         message: String,
         /// Ledger head after this turn's writes. Empty means the UI must
         /// leave `conversation.head` unchanged.
         head: String,
     },
     /// Steers that reached the turn after its last model request. They were
-    /// never sent; the UI queues them as follow-ups.
+    /// never sent; the UI puts them back in the composer.
     SteersReturned {
         /// Session identity spelling.
         session_id: String,

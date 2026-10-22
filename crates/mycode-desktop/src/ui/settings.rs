@@ -243,7 +243,22 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     let desk = crate::ui::desk::Desk::of(theme);
     let vm = workspace.vm();
     let settings = vm.settings.as_ref();
-    let servers = settings.map(|s| s.mcp_servers.iter().filter(|m| m.enabled).count());
+    // Configured servers plus magpie's, minus the ones a configured row
+    // already shadows: the count is the catalog the agent actually loads.
+    let servers = settings.map(|configured| {
+        configured.mcp_servers.iter().filter(|m| m.enabled).count()
+            + vm
+                .mcp_library
+                .iter()
+                .filter(|server| {
+                    server.enabled
+                        && !configured
+                            .mcp_servers
+                            .iter()
+                            .any(|row| row.id == server.id)
+                })
+                .count()
+    });
     let magpie = settings.map(|s| s.magpie.clone()).unwrap_or_default();
     let models = vm
         .catalog

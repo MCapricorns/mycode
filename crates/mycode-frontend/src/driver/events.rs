@@ -2,7 +2,7 @@
 //! frontend; the driver only decides which action each event becomes.
 use mycode_app::{BridgeCommand, BridgeEvent};
 
-use super::{Effect, FrontendDriver, ToastKind};
+use super::{Effect, FrontendDriver, HeldInterrupt, ToastKind};
 use crate::view_model::{
     CHAT_CANCELLED, CacheBreak, FrontendAction, UpdateState, cache_alert_text,
 };
@@ -15,12 +15,7 @@ impl FrontendDriver {
         let matches_active = |session_id: &str| active_session.as_deref() == Some(session_id);
         // A held interrupt belongs to one turn and ends with it, on screen
         // or not.
-        if let BridgeEvent::ChatDone { session_id, .. } | BridgeEvent::ChatFailed { session_id, .. } =
-            &event
-            && self.interrupt_after_compaction.as_ref() == Some(session_id)
-        {
-            self.interrupt_after_compaction = None;
-        }
+        let held = self.take_held_interrupt(&event);
         let action = match event {
             BridgeEvent::ChatText { session_id, delta } => {
                 if !matches_active(&session_id) {
@@ -46,13 +41,18 @@ impl FrontendDriver {
                 entry,
             } => {
                 if !matches_active(&session_id) {
+                    self.park_held_interrupt(held, &session_id, out);
                     return;
                 }
                 // Refresh the sidebar so the session title picks up the turn.
                 self.dispatch(BridgeCommand::ListSessions);
                 self.act(FrontendAction::ChatDone { head, entry }, out);
                 self.resync_after_turn(&session_id);
-                self.pump_queued_send(out);
+                // The turn answered before the stop landed: the message was
+                // never interrupted, so it goes out now.
+                if let Some(held) = held {
+                    self.send_held_interrupt(held, out);
+                }
                 return;
             }
             BridgeEvent::ChatFailed {
@@ -60,16 +60,22 @@ impl FrontendDriver {
                 message,
                 head,
             } => {
+                let cancelled = message == CHAT_CANCELLED;
                 if !matches_active(&session_id) {
+                    self.park_held_interrupt(held, &session_id, out);
                     return;
                 }
-                let cancelled = message == CHAT_CANCELLED;
                 self.act(FrontendAction::ChatFailed { message, head }, out);
                 self.resync_after_turn(&session_id);
-                // A user interrupt frees the turn; queued follow-ups start next.
-                // Provider errors keep the queue so a failed retry cannot loop.
                 if cancelled {
-                    self.pump_queued_send(out);
+                    // The stop landed: the held message is the next turn.
+                    if let Some(held) = held {
+                        self.send_held_interrupt(held, out);
+                    }
+                } else if let Some(held) = held {
+                    // The turn failed on its own; the message never went
+                    // out, so it goes back to the composer.
+                    self.restore_held_interrupt(held, out);
                 }
                 return;
             }
@@ -132,11 +138,11 @@ impl FrontendDriver {
                 // ends, the cancel goes to that session directly — the
                 // core indexes turn tokens per session, so a background
                 // chat is cancelled without touching the open one.
-                let interrupt =
-                    !active && self.interrupt_after_compaction.as_ref() == Some(&session_id);
-                if interrupt {
-                    self.interrupt_after_compaction = None;
-                }
+                let interrupt = !active
+                    && self
+                        .held_interrupt
+                        .as_ref()
+                        .is_some_and(|held| held.session_id == session_id);
                 if !matches_active(&session_id) {
                     if interrupt {
                         self.dispatch(BridgeCommand::CancelChat { session_id });
@@ -277,8 +283,6 @@ impl FrontendDriver {
                 }
                 self.act(FrontendAction::CompactFinished { ok, head }, out);
                 self.resync_after_turn(&session_id);
-                // Follow-ups queued while the composer was locked start now.
-                self.pump_queued_send(out);
                 let text = match message.as_str() {
                     "compacted" => crate::i18n::t(
                         "Context compacted. The next turn uses the summary.",
@@ -329,15 +333,50 @@ impl FrontendDriver {
         self.act(action, out);
     }
 
+    /// Takes the held interrupt this terminal event ends, if any. A held
+    /// interrupt for another session stays put.
+    fn take_held_interrupt(&mut self, event: &BridgeEvent) -> Option<HeldInterrupt> {
+        let (BridgeEvent::ChatDone { session_id, .. }
+        | BridgeEvent::ChatFailed { session_id, .. }) = event
+        else {
+            return None;
+        };
+        let held = self.held_interrupt.take()?;
+        if &held.session_id != session_id {
+            self.held_interrupt = Some(held);
+            return None;
+        }
+        Some(held)
+    }
+
+    /// Keeps a held draft for a chat that left the screen: its composer is
+    /// not here, so it waits with that chat's parked steers and comes back
+    /// when the chat opens.
+    fn park_held_interrupt(
+        &mut self,
+        held: Option<HeldInterrupt>,
+        session_id: &str,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(held) = held else {
+            return;
+        };
+        if let Some(text) = held.send {
+            self.act(
+                FrontendAction::SteersParked {
+                    session_id: session_id.to_owned(),
+                    texts: vec![text],
+                },
+                out,
+            );
+        }
+    }
+
     /// Reloads a chat that was opened mid-turn (or mid-`/compact`) once
     /// that work has ended, so rows committed while the open was in flight
-    /// show up. A queued follow-up about to start the next turn defers the
-    /// reload to that turn's end, so the reopen never races the send.
+    /// show up.
     pub(super) fn resync_after_turn(&mut self, session_id: &str) {
         if self.resync_on_turn_end.as_deref() != Some(session_id) {
-            return;
-        }
-        if !self.vm.queued.is_empty() && !self.vm.queue_paused {
             return;
         }
         self.resync_on_turn_end = None;

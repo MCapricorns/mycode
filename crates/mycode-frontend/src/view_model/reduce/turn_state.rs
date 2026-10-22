@@ -1,5 +1,5 @@
-//! Turn and queue bookkeeping the reducer calls: parking follow-ups with
-//! their chat, resetting the turn view, and appending entries once.
+//! Turn bookkeeping the reducer calls: parking steers with their chat,
+//! resetting the turn view, and appending entries once.
 
 use super::*;
 /// A mid-turn summary arrives while the final reply is still only in the
@@ -27,75 +27,33 @@ pub(super) fn bounded_draft(mut text: String) -> String {
     text
 }
 
-/// Appends one follow-up to the queue unless it is blank or the queue is full.
-pub(super) fn queue_message(state: &mut WorkspaceState, text: String) {
-    let text = bounded_draft(text);
-    if !text.trim().is_empty() && state.queued.len() < crate::view_model::MAX_QUEUED_MESSAGES {
-        state.queued.push(text);
-    }
-}
-
-/// Keeps the open chat's follow-up queue while another chat takes the
-/// screen. Events for a chat that is not open are dropped, so its queue
-/// could never send from here; clearing it lost what the user had typed.
-pub(super) fn park_queue(state: &mut WorkspaceState) {
-    let Some(session_id) = state
-        .active
-        .as_ref()
-        .map(|active| active.session_id.clone())
-    else {
-        return;
-    };
-    state
-        .parked_queues
-        .retain(|(parked, _)| parked != &session_id);
-    if !state.queued.is_empty() {
-        let queue = std::mem::take(&mut state.queued);
-        state.parked_queues.push((session_id, queue));
-    }
-}
-
-/// Files steers a chat off screen did not take at the end of its parked
-/// queue, under the same cap as a queue on screen.
+/// Files steers a chat off screen did not read. Events for a chat that is
+/// not open are dropped, so its composer cannot take them now; they come
+/// back when it opens.
 pub(super) fn park_steers(state: &mut WorkspaceState, session_id: String, texts: Vec<String>) {
     let index = match state
-        .parked_queues
+        .parked_steers
         .iter()
         .position(|(parked, _)| *parked == session_id)
     {
         Some(index) => index,
         None => {
-            state.parked_queues.push((session_id, Vec::new()));
-            state.parked_queues.len() - 1
+            state.parked_steers.push((session_id, Vec::new()));
+            state.parked_steers.len() - 1
         }
     };
-    let queue = &mut state.parked_queues[index].1;
+    let parked = &mut state.parked_steers[index].1;
     for text in texts {
         let text = bounded_draft(text);
-        if !text.trim().is_empty() && queue.len() < crate::view_model::MAX_QUEUED_MESSAGES {
-            queue.push(text);
+        if !text.trim().is_empty() {
+            parked.push(text);
         }
-    }
-}
-
-/// Brings a chat's parked follow-ups back when it opens again. They wait
-/// for an explicit send unless its turn is still running; then they start
-/// when it ends, as they would have without the switch.
-pub(super) fn unpark_queue(state: &mut WorkspaceState, session_id: &str, running: bool) {
-    if let Some(index) = state
-        .parked_queues
-        .iter()
-        .position(|(parked, _)| parked == session_id)
-    {
-        let (_, queue) = state.parked_queues.remove(index);
-        state.queued = queue;
-        state.queue_paused = !running;
     }
 }
 
 /// Drops the turn-scoped view of the conversation leaving the screen: its
-/// queue, steers, live jobs, asks, held summary, and the in-flight flag.
-/// Park the queue first ([`park_queue`]) when the chat is only leaving.
+/// steers, live jobs, asks, held summary, and the in-flight flag.
+/// Park the steers first ([`park_steers`]) when the chat is only leaving.
 /// Events for a session that is not open are dropped, so none of this would
 /// ever be cleared once another conversation takes the screen.
 pub(super) fn reset_turn_view(state: &mut WorkspaceState) {
@@ -104,8 +62,6 @@ pub(super) fn reset_turn_view(state: &mut WorkspaceState) {
     state.compacting = false;
     state.auto_compacting = false;
     state.pending_summaries.clear();
-    state.queued.clear();
-    state.queue_paused = false;
     state.pending_steers.clear();
     state.turn_alert = None;
     retire_live_jobs(state);

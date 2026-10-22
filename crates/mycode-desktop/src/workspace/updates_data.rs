@@ -183,17 +183,9 @@ impl Workspace {
         }
         if !dismissed && self.vm().pending_ask.is_some() {
             self.on_dismiss_ask(cx);
-            dismissed = true;
         }
-        // While a turn runs, Escape does nothing at all: it neither stops
-        // the turn (the Stop button is the only way out) nor recalls the
-        // queue, so a stray keypress cannot touch running work. A held
-        // queue — after Stop, when nothing is sending — still recalls into
-        // the composer for editing.
-        if !dismissed && !self.vm().sending && !self.vm().compacting && !self.vm().queued.is_empty()
-        {
-            self.on_recall_queued(None, window, cx);
-        }
+        // Escape never stops a running turn: the Stop button is the only way
+        // out, so a stray keypress cannot touch running work.
     }
 
     // ---- data export / import ----

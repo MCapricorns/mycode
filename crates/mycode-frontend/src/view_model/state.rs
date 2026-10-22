@@ -80,16 +80,11 @@ pub struct WorkspaceState {
     pub composer_draft: String,
     /// Text typed on the welcome desk, sent once the new session is open.
     pub pending_welcome_send: Option<String>,
-    /// Follow-ups waiting for the in-flight turn to finish.
-    pub queued: Vec<String>,
-    /// Queues of chats that left the screen, by session id. A chat's queue
-    /// comes back when it opens again.
-    pub parked_queues: Vec<(String, Vec<String>)>,
-    /// The user stopped the turn, so the queue waits for an explicit send
-    /// (or a recall into the composer) instead of starting on its own.
-    pub queue_paused: bool,
     /// Steers sent to the running turn that its ledger has not shown yet.
     pub pending_steers: Vec<String>,
+    /// Steers a chat kept while another one was on screen, by session id.
+    /// They come back to the composer when that chat opens again.
+    pub parked_steers: Vec<(String, Vec<String>)>,
     /// Every thinking trace shows as one collapsed row. Persisted in
     /// `ui.json`; expanded by default.
     pub thinking_collapsed: bool,
@@ -100,8 +95,8 @@ pub struct WorkspaceState {
     /// not carried over the wire.
     pub turn_started_ms: u64,
     /// A manual `/compact` is running. It is not a turn — no streaming
-    /// bubble — but it locks the composer the same way so a follow-up
-    /// queues instead of racing the compaction's expected-head check.
+    /// bubble — but it locks the composer the same way, so a send cannot
+    /// race the compaction's expected-head check.
     pub compacting: bool,
     /// The running turn waits on an automatic compaction summary. An
     /// interrupt holds off until it ends, so the summary is not thrown away.
@@ -116,6 +111,11 @@ pub struct WorkspaceState {
     pub pending_summaries: Vec<ConversationEntry>,
     /// Per-server tool names from the last listing, keyed by server id.
     pub mcp_tools: Vec<(String, Vec<String>)>,
+    /// MCP servers magpie's Library writes to `~/.mycode/mcp.json`. They are
+    /// read-only here, and a configured server with the same id wins.
+    pub mcp_library: Vec<mycode_app::McpServerSettings>,
+    /// Why the Library's `mcp.json` could not be read, when it could not.
+    pub mcp_library_error: Option<String>,
     /// MCP server ids with a tools probe in flight.
     pub mcp_probing: Vec<String>,
     /// Prompt resources for the open session: (name, path).
@@ -367,6 +367,13 @@ pub enum FrontendAction {
     },
     /// A server's tools probe failed; the row shows the reason inline.
     McpProbeFailed { server_id: String, message: String },
+    /// The magpie Library's MCP servers were read from `mcp.json`.
+    McpLibraryLoaded {
+        /// Servers in file order.
+        servers: Vec<mycode_app::McpServerSettings>,
+        /// Why the file could not be read, when it could not.
+        error: Option<String>,
+    },
     /// The model is still writing an `agent` call: show or relabel its
     /// placeholder row until the call starts.
     ToolPreparing {
@@ -449,33 +456,21 @@ pub enum FrontendAction {
         /// MCP server ids with a stored key.
         mcp_keys: Vec<String>,
     },
-    /// The user queued a follow-up while a turn is in flight.
-    MessageQueued(String),
     /// The user steered the running turn: the text goes to the model
     /// before its next step, without stopping the turn. It shows as
     /// pending until the ledger commits it.
     SteerSent(String),
     /// Steers the turn did not take: a refused `Steer`, or texts the core
-    /// returned after the turn's last request. They join the queue without
-    /// touching the draft the user may be typing.
+    /// returned after the turn's last request. They leave the pending strip;
+    /// the driver puts them back in the composer.
     SteersReturned(Vec<String>),
-    /// Steers a chat that is not on screen did not take. They wait in its
-    /// parked queue and come back when it opens.
+    /// Steers a chat that is not on screen did not take. They wait parked
+    /// and come back to the composer when that chat opens.
     SteersParked {
         /// Session identity spelling.
         session_id: String,
         texts: Vec<String>,
     },
-    /// The user dismissed one queued follow-up.
-    QueuedMessageRemoved(usize),
-    /// The whole queue went back to the composer.
-    QueueCleared,
-    /// The next queued follow-up was taken to send.
-    QueuedMessageTaken,
-    /// One queued follow-up moved to the front so an interrupt can send it.
-    QueuedMessagePromoted(usize),
-    /// The queue was held after a user stop, or released by an explicit send.
-    QueuePaused(bool),
     /// Opens or closes the subagent detail window.
     SubagentWindowChanged(Option<String>),
     /// The user closed one running subagent from its row.
@@ -652,5 +647,3 @@ pub enum FrontendAction {
 
 /// Maximum composer text before the send is rejected locally.
 pub const MAX_COMPOSER_CHARS: usize = 64 * 1024;
-/// Follow-ups waiting behind one in-flight turn.
-pub const MAX_QUEUED_MESSAGES: usize = 8;

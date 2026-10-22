@@ -115,8 +115,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             let session_id = summary.session_id.clone();
             // A turn still running in the previous chat keeps running, but
             // its events no longer reach this view; the fresh chat must not
-            // inherit its in-flight flag, queue, or asks.
-            park_queue(state);
+            // inherit its in-flight flag, steers, or asks.
             reset_turn_view(state);
             state.active = Some(ActiveConversation {
                 session_id: summary.session_id,
@@ -144,7 +143,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             restore_live_reasoning(state);
         }
         FrontendAction::ConversationParked => {
-            park_queue(state);
             state.active = None;
             for session in &mut state.sessions {
                 session.active = false;
@@ -176,8 +174,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                 None
             };
             if switched {
-                // Queue, tasks, and asks belong to the previous session.
-                park_queue(state);
+                // Steers, tasks, and asks belong to the previous session.
                 reset_turn_view(state);
             }
             let session_id = conversation.session_id.clone();
@@ -200,9 +197,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                 conversation.streaming = previous.streaming.take();
             }
             state.active = Some(conversation);
-            if switched {
-                unpark_queue(state, &session_id, running);
-            }
             // For the conversation already on screen, the flag may lag a
             // just-armed turn by a few async hops; only the fresh-open case
             // trusts the wire value outright.
@@ -272,11 +266,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                     .collect();
             }
         }
-        FrontendAction::MessageQueued(text) => {
-            queue_message(state, text);
-            state.composer_draft.clear();
-            state.mention = None;
-        }
         FrontendAction::SteerSent(text) => {
             state.pending_steers.push(text);
             state.composer_draft.clear();
@@ -286,36 +275,12 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             park_steers(state, session_id, texts);
         }
         FrontendAction::SteersReturned(texts) => {
+            // The driver puts them back in the composer; here they only
+            // leave the pending strip.
             for text in texts {
                 if let Some(position) = state.pending_steers.iter().position(|sent| *sent == text) {
                     state.pending_steers.remove(position);
                 }
-                queue_message(state, text);
-            }
-        }
-        FrontendAction::QueuedMessageRemoved(index) => {
-            if index < state.queued.len() {
-                state.queued.remove(index);
-            }
-            state.queue_paused &= !state.queued.is_empty();
-        }
-        FrontendAction::QueueCleared => {
-            state.queued.clear();
-            state.queue_paused = false;
-        }
-        FrontendAction::QueuedMessageTaken => {
-            if !state.queued.is_empty() {
-                state.queued.remove(0);
-            }
-            state.queue_paused &= !state.queued.is_empty();
-        }
-        FrontendAction::QueuePaused(paused) => {
-            state.queue_paused = paused && !state.queued.is_empty();
-        }
-        FrontendAction::QueuedMessagePromoted(index) => {
-            if index < state.queued.len() {
-                let item = state.queued.remove(index);
-                state.queued.insert(0, item);
             }
         }
         FrontendAction::SubagentWindowChanged(call_id) => {
@@ -695,6 +660,10 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             state.mcp_tools.retain(|(id, _)| *id != server_id);
             state.error = Some(message);
         }
+        FrontendAction::McpLibraryLoaded { servers, error } => {
+            state.mcp_library = servers;
+            state.mcp_library_error = error;
+        }
         FrontendAction::ShowMainView(view) => {
             state.view = view;
             // Crossing views closes every floating menu so no stale layer
@@ -943,6 +912,7 @@ fn fill_open_slash(state: &mut WorkspaceState) {
         &mention.fragment,
         &state.enabled_skills(),
         servers,
+        &state.mcp_library,
         &state.mcp_tools,
     );
     if let Some(mention) = state.mention.as_mut() {

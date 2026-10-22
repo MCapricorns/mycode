@@ -505,41 +505,7 @@ fn a_new_session_clears_the_previous_context_meter() {
 }
 
 #[test]
-fn a_held_queue_stays_held_until_it_empties_or_a_new_session_opens() {
-    let mut state = open(Vec::new(), None);
-    reduce(&mut state, FrontendAction::QueuePaused(true));
-    assert!(!state.queue_paused, "an empty queue is never held");
-
-    reduce(&mut state, FrontendAction::MessageQueued("one".to_owned()));
-    reduce(&mut state, FrontendAction::MessageQueued("two".to_owned()));
-    reduce(&mut state, FrontendAction::QueuePaused(true));
-    assert!(state.queue_paused);
-    reduce(
-        &mut state,
-        FrontendAction::SteersReturned(vec!["three".to_owned()]),
-    );
-    assert!(state.queue_paused, "returned steers join a held queue");
-    reduce(&mut state, FrontendAction::QueuedMessageRemoved(0));
-    assert!(state.queue_paused);
-    reduce(&mut state, FrontendAction::QueuedMessageTaken);
-    reduce(&mut state, FrontendAction::QueuedMessageRemoved(0));
-    assert!(state.queued.is_empty());
-    assert!(!state.queue_paused, "the hold ends with the queue");
-
-    reduce(&mut state, FrontendAction::MessageQueued("five".to_owned()));
-    reduce(&mut state, FrontendAction::MessageQueued("six".to_owned()));
-    reduce(&mut state, FrontendAction::QueuePaused(true));
-    reduce(&mut state, FrontendAction::QueueCleared);
-    assert!(state.queued.is_empty() && !state.queue_paused);
-
-    reduce(&mut state, FrontendAction::MessageQueued("four".to_owned()));
-    reduce(&mut state, FrontendAction::QueuePaused(true));
-    reduce(&mut state, FrontendAction::SessionDeleted);
-    assert!(state.queued.is_empty() && !state.queue_paused);
-}
-
-#[test]
-fn a_steer_shows_until_it_commits_and_a_returned_one_is_queued() {
+fn a_steer_shows_until_it_commits_and_a_returned_one_leaves_the_strip() {
     let mut state = open(Vec::new(), None);
     state.composer_draft = "typing the next one".to_owned();
     // The core may commit a steer or hand it back unread, so both arms
@@ -560,10 +526,9 @@ fn a_steer_shows_until_it_commits_and_a_returned_one_is_queued() {
         FrontendAction::SteersReturned(vec!["second".to_owned()]),
     );
     assert!(state.pending_steers.is_empty());
-    assert_eq!(state.queued, ["second"]);
     assert_eq!(
         state.composer_draft, "typing the next one",
-        "a returned steer must not wipe the draft"
+        "the strip only; the driver puts the text back in the composer"
     );
     state.pending_steers.push("late".to_owned());
     reduce(

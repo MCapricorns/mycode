@@ -2,14 +2,13 @@
 //!
 //! Model, reasoning, and folder sit as pill chips inside the bar, alongside a
 //! `⌘K` / `Ctrl+K` hint; typing `@` references a project file. While a turn
-//! is running the round action is Stop: it ends the whole turn, including
-//! every subagent, and holds the queue. A draft sent with Enter queues for
-//! after the turn; the arrow beside Stop queues too, and Ctrl+Enter
-//! interrupts the turn and sends the draft right away. Ctrl+G steers: the
-//! draft reaches the running turn before its next step without stopping it,
-//! and waits in a strip above the queue until the agent reads it. Each
-//! running scout or artisan is cancelled from its own `agent` row in the
-//! transcript.
+//! is running the round action is Stop: it ends the whole turn, every
+//! subagent, and any tool still running. A draft sent with Enter (or Ctrl+G)
+//! steers the running turn: it reaches the model before its next step
+//! without stopping anything, and waits in a strip above the composer until
+//! the agent reads it. The arrow beside Stop steers too, and Ctrl+Enter
+//! stops the turn and sends the draft right after. Each running scout or
+//! artisan is cancelled from its own `agent` row in the transcript.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
@@ -31,18 +30,17 @@ use crate::workspace::Workspace;
 
 /// Resting composer hint. The product name does not belong in the field.
 const COMPOSER_PLACEHOLDER: (&str, &str) = ("Ask the agent", "向代理提问");
-const QUEUE_PLACEHOLDER: (&str, &str) = (
-    "Queue; Ctrl+Enter interrupts; Ctrl+G steers",
-    "回车排队 · Ctrl+Enter 打断发送 · Ctrl+G 引导",
+const STEER_PLACEHOLDER: (&str, &str) = (
+    "Enter steers the running turn; Ctrl+Enter interrupts",
+    "回车引导 · Ctrl+Enter 打断发送",
 );
 
-/// Placeholder for the composer. While a turn is running, typed text queues
-/// for after the turn; Ctrl+Enter interrupts and sends it right away, and
-/// Ctrl+G hands it to the running turn.
+/// Placeholder for the composer. While a turn is running, typed text steers
+/// (Enter or Ctrl+G); Ctrl+Enter stops the turn and sends it right after.
 #[must_use]
 pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
     let (english, chinese) = if sending {
-        QUEUE_PLACEHOLDER
+        STEER_PLACEHOLDER
     } else {
         COMPOSER_PLACEHOLDER
     };
@@ -76,31 +74,17 @@ pub(super) fn render_composer(
     // the full name. No hover tooltip here: it covered the thinking chip
     // beside it without saying more than the picker already does.
     let show_thinking = selected_model_supports_reasoning(workspace.vm());
-    let has_session = workspace.vm().active.is_some();
     // A manual compact is not a turn, but it locks the composer the same
-    // way: Enter queues, Ctrl+Enter cancels it and sends the draft.
+    // way: Enter waits, Ctrl+Enter stops it and sends the draft.
     let sending = workspace.vm().sending || workspace.vm().compacting;
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
     let has_attachments = !workspace.attachments.is_empty();
-    let has_queue = !workspace.vm().queued.is_empty();
-    let can_send = if has_session {
-        has_draft || has_queue || has_attachments
-    } else {
-        // A draft or a dropped attachment alone enables the arrow:
-        // `submit_from_welcome` answers a missing folder with a toast
-        // instead of leaving a dead button.
-        has_draft || has_attachments
-    };
+    // A draft or a dropped attachment alone enables the arrow:
+    // `submit_from_welcome` answers a missing folder with a toast instead of
+    // leaving a dead button.
+    let can_send = has_draft || has_attachments;
     let steer_panel = (!workspace.vm().pending_steers.is_empty())
         .then(|| render_pending_steers(&workspace.vm().pending_steers, cx).into_any_element());
-    let queue_panel = if has_queue {
-        let paused = workspace.vm().queue_paused;
-        Some(
-            render_queued_followups(&workspace.vm().queued, sending, paused, cx).into_any_element(),
-        )
-    } else {
-        None
-    };
     let compacting = workspace.vm().compacting;
     let has_pending_ask = workspace.vm().pending_ask.is_some();
     if workspace.composer_busy != sending {
@@ -237,7 +221,6 @@ pub(super) fn render_composer(
                 .flex_col()
                 .gap_1()
                 .when_some(steer_panel, |this, steers| this.child(steers))
-                .when_some(queue_panel, |this, queue| this.child(queue))
                 .when_some(compact_card, |this, card| this.child(card))
                 .when_some(ask_card, |this, card| this.child(card))
                 .child(
@@ -327,9 +310,10 @@ pub(super) fn render_composer(
                                 })
                                 .child(composer_palette_hint(cx))
                                 // While a turn runs the arrow stays: it
-                                // queues the draft; the stop sits beside it.
+                                // steers the draft in; the stop sits beside
+                                // it.
                                 .when(sending && has_draft, |this| {
-                                    this.child(composer_send_button(cx))
+                                    this.child(composer_steer_button(cx))
                                 })
                                 .child(composer_round_button(sending, can_send, cx)),
                         ),
@@ -401,12 +385,12 @@ fn composer_round_button(
         })
 }
 
-/// The send arrow shown next to the stop square while a turn runs: click
-/// queues the draft for after the turn, same as Enter.
-fn composer_send_button(cx: &Context<Workspace>) -> impl IntoElement {
+/// The steer arrow shown next to the stop square while a turn runs: click
+/// hands the draft to the running turn, same as Enter and Ctrl+G.
+fn composer_steer_button(cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     div()
-        .id("composer-send-running")
+        .id("composer-steer-running")
         .size(px(30.))
         .flex_shrink_0()
         .rounded_full()
@@ -416,13 +400,13 @@ fn composer_send_button(cx: &Context<Workspace>) -> impl IntoElement {
         .text_color(theme.foreground)
         .cursor_pointer()
         .hover(|style| style.bg(theme.secondary_hover))
-        .on_click(cx.listener(move |workspace, _, window, cx| {
-            workspace.on_send(window, cx);
+        .on_click(cx.listener(move |workspace, _, _, cx| {
+            workspace.on_steer_send(cx);
         }))
         .tooltip(|window, cx| {
             Tooltip::new(t(
-                "Queue for after this turn (Ctrl+Enter interrupts)",
-                "排队到本轮之后（Ctrl+Enter 打断发送）",
+                "Steer this turn without stopping it (Ctrl+G)",
+                "引导本轮任务，不打断（Ctrl+G）",
             ))
             .build(window, cx)
         })
@@ -569,205 +553,6 @@ fn render_pending_steers(items: &[String], cx: &Context<Workspace>) -> impl Into
                 .text_color(theme.muted_foreground)
                 .child(div().min_w_0().flex_1().truncate().child(preview))
         }))
-}
-
-/// Queued follow-ups with explicit actions: recall (back into the composer
-/// to edit or drop), interrupt and send, or send a queue a stop is holding.
-/// The strip rides in the same frosted panel as the diff card so it reads
-/// as a surface, not loose text floating above the composer.
-fn render_queued_followups(
-    items: &[String],
-    sending: bool,
-    paused: bool,
-    cx: &mut Context<Workspace>,
-) -> impl IntoElement {
-    let theme = cx.theme();
-    let desk = Desk::of(theme);
-    let hint = if paused {
-        t(
-            "Held after Stop. Send it, or recall to edit.",
-            "已停止，暂不发送。可发送，或撤回到输入框修改。",
-        )
-    } else {
-        t("Sends when this turn ends.", "本轮结束后依次发送。")
-    };
-    let many = items.len() > 1;
-    let send_label = if !sending {
-        t("Send", "发送")
-    } else if paused {
-        t("Send after this turn", "本轮后发送")
-    } else {
-        t("Interrupt & send", "打断并发送")
-    };
-    skin::popover_panel("composer-queue", theme)
-        .flex()
-        .flex_col()
-        .gap_1()
-        .w_full()
-        .px_3()
-        .py_2()
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(crate::ui::lamp(if paused {
-                    desk.faint
-                } else {
-                    desk.amber
-                }))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                        .text_color(desk.faint)
-                        .child(format!("{}  {}", t("QUEUED", "已排队"), items.len())),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(hint),
-                )
-                .when(many, |this| {
-                    this.child(
-                        queue_action("queued-recall-all", t("Recall all", "全部撤回"), false, cx)
-                            .on_click(cx.listener(|workspace, _, window, cx| {
-                                workspace.on_recall_queued(None, window, cx);
-                            })),
-                    )
-                })
-                .child(
-                    queue_action("queued-send", send_label, true, cx).on_click(cx.listener(
-                        move |workspace, _, _, cx| {
-                            if sending && !paused {
-                                workspace.on_interrupt_queued(0, cx);
-                            } else {
-                                workspace.on_resume_queued(cx);
-                            }
-                        },
-                    )),
-                ),
-        )
-        .children(items.iter().enumerate().map(|(index, text)| {
-            let preview: SharedString = ellipsis(text, 72).into();
-            div()
-                .id(SharedString::from(format!("queued-{index}")))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .min_w_0()
-                .h(px(24.))
-                .pl(px(15.))
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .overflow_hidden()
-                        .truncate()
-                        .child(preview),
-                )
-                .child(
-                    queue_icon(
-                        SharedString::from(format!("queued-recall-{index}")),
-                        IconName::Pencil,
-                        t("Recall to edit", "撤回到输入框修改"),
-                        theme,
-                    )
-                    .on_click(cx.listener(move |workspace, _, window, cx| {
-                        workspace.on_recall_queued(Some(index), window, cx);
-                    })),
-                )
-                .child(
-                    queue_icon(
-                        SharedString::from(format!("queued-remove-{index}")),
-                        IconName::X,
-                        t("Remove from the queue", "移出队列"),
-                        theme,
-                    )
-                    .on_click(cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_remove_queued(index, cx);
-                    })),
-                )
-                .child(
-                    queue_icon(
-                        SharedString::from(format!("queued-send-{index}")),
-                        IconName::CornerDownLeft,
-                        if sending {
-                            t("Interrupt this turn and send now", "打断本轮并立即发送")
-                        } else {
-                            t("Send now", "立即发送")
-                        },
-                        theme,
-                    )
-                    .on_click(cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_interrupt_queued(index, cx);
-                    })),
-                )
-        }))
-}
-
-/// One 20px icon button on a queued-message row: edit back into the composer,
-/// drop the item, or send it now (interrupting a running turn).
-fn queue_icon(
-    id: impl Into<gpui_kit::ElementId>,
-    icon: IconName,
-    label: &'static str,
-    theme: &gpui_kit::component::theme::Theme,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    div()
-        .id(id)
-        .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
-        .size(px(20.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .flex_shrink_0()
-        .rounded(skin::radius_xs())
-        .cursor_pointer()
-        .hover(|this| {
-            this.bg(skin::frost_hover(theme))
-                .text_color(theme.foreground)
-        })
-        .child(Icon::new(icon).xsmall())
-}
-
-/// A compact text action in the queue strip. `strong` is the send action.
-fn queue_action(
-    id: impl Into<gpui_kit::ElementId>,
-    label: &'static str,
-    strong: bool,
-    cx: &Context<Workspace>,
-) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let theme = cx.theme();
-    div()
-        .id(id)
-        .flex_shrink_0()
-        .h(px(22.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded(skin::radius_xs())
-        .text_xs()
-        .text_color(if strong {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        })
-        .cursor_pointer()
-        .hover(|this| {
-            this.bg(skin::frost_hover(theme))
-                .text_color(theme.foreground)
-        })
-        .child(label)
 }
 
 fn composer_meter_chip(

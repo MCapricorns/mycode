@@ -76,12 +76,15 @@ pub(super) fn parse_mention(text: &str) -> Option<ComposerMention> {
 /// Commands, then skills, then enabled MCP servers and their listed tools.
 ///
 /// An empty fragment shows every command, every skill, and every enabled
-/// server. Tool rows appear once the fragment matches that server or tool,
-/// so `/` itself stays a short explicit catalog instead of every schema.
+/// server. Server rows come from the settings document and from the magpie
+/// Library's `mcp.json`; a configured server with the same id wins. Tool rows
+/// appear once the fragment matches that server or tool, so `/` itself stays
+/// a short explicit catalog instead of every schema.
 pub(super) fn slash_items(
     fragment: &str,
     skills: &[SkillEntry],
     servers: &[mycode_app::McpServerSettings],
+    library: &[mycode_app::McpServerSettings],
     tools: &[(String, Vec<String>)],
 ) -> Vec<MentionItem> {
     let fragment = fragment.to_lowercase();
@@ -117,7 +120,14 @@ pub(super) fn slash_items(
             fallback.push(item());
         }
     }
-    for server in servers.iter().filter(|server| server.enabled) {
+    let library = library
+        .iter()
+        .filter(|server| !servers.iter().any(|configured| configured.id == server.id));
+    for server in servers
+        .iter()
+        .chain(library)
+        .filter(|server| server.enabled)
+    {
         let id = server.id.to_lowercase();
         if fragment.is_empty() || id.starts_with(&fragment) {
             items.push(MentionItem {
@@ -218,7 +228,7 @@ mod tests {
         let skills = vec![skill("review", "Review")];
         let servers = vec![server("context7", true), server("off", false)];
         let tools = vec![("context7".to_owned(), vec!["resolve-library-id".to_owned()])];
-        let items = slash_items("", &skills, &servers, &tools);
+        let items = slash_items("", &skills, &servers, &[], &tools);
         assert!(items.iter().any(|item| item.insert == "/new"));
         assert!(items.iter().any(|item| item.insert == "/settings"));
         assert!(
@@ -231,11 +241,31 @@ mod tests {
         assert!(!items.iter().any(|item| item.insert.contains("resolve")));
     }
 
+    /// magpie's Library servers are the whole catalog on a fresh install, so
+    /// they have to show up like configured ones; a configured id still wins.
+    #[test]
+    fn slash_lists_library_servers_once() {
+        let library = vec![server("anysearch", true), server("github", false)];
+        let items = slash_items("", &[], &[], &library, &[]);
+        assert!(items.iter().any(|item| item.insert == "mcp:anysearch"));
+        assert!(!items.iter().any(|item| item.insert == "mcp:github"));
+        let configured = vec![server("anysearch", true)];
+        let items = slash_items("", &[], &configured, &library, &[]);
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item.insert == "mcp:anysearch")
+                .count(),
+            1,
+            "the configured row and the library row are one entry"
+        );
+    }
+
     #[test]
     fn slash_prefix_includes_matching_mcp_tools() {
         let servers = vec![server("context7", true)];
         let tools = vec![("context7".to_owned(), vec!["resolve-library-id".to_owned()])];
-        let items = slash_items("resolve", &[], &servers, &tools);
+        let items = slash_items("resolve", &[], &servers, &[], &tools);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].insert, "mcp:context7/resolve-library-id");
         assert_eq!(items[0].group, MentionGroup::Mcp);
@@ -243,10 +273,10 @@ mod tests {
 
     #[test]
     fn enter_prefers_an_exact_command_over_the_first_row() {
-        let items = slash_items("settings", &[], &[], &[]);
+        let items = slash_items("settings", &[], &[], &[], &[]);
         assert_eq!(preferred_slash_index("settings", &items), 0);
         assert_eq!(items[0].insert, "/settings");
-        let broad = slash_items("", &[], &[], &[]);
+        let broad = slash_items("", &[], &[], &[], &[]);
         assert_eq!(broad[0].insert, "/new");
         assert_eq!(preferred_slash_index("", &broad), 0);
         assert_eq!(
@@ -265,7 +295,7 @@ mod tests {
             skill("ferris-windows", "Windows Engineering"),
             skill("git-helper", "Git Helper"),
         ];
-        let items = slash_items("git", &skills, &[], &[]);
+        let items = slash_items("git", &skills, &[], &[], &[]);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].insert, "/git-helper", "prefix match comes first");
         assert_eq!(items[1].insert, "/ferris-git", "substring match follows");

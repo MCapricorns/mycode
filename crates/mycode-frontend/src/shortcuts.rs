@@ -95,8 +95,8 @@ pub fn shortcuts() -> Vec<Shortcut> {
             "Enter".to_owned(),
             t("Send", "发送"),
             Some(t(
-                "While a task runs, the message waits in the queue until it ends",
-                "任务运行中则排队，等它结束再发",
+                "While a task runs, it steers that task instead",
+                "任务运行中则改为引导当前任务",
             )),
         ),
         compose(

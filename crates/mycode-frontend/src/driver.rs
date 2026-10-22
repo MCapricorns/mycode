@@ -263,6 +263,16 @@ const REPAIR_TOAST_DELAY: Duration = Duration::from_millis(500);
 /// Wakes once a day of runtime, then checks for an update when that is enabled.
 const UPDATE_RECHECK_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// A stop the user asked for, and the draft that goes out once the turn is
+/// gone. The draft waits here instead of the composer, so a message sent
+/// beside the cancel cannot become the turn that cancel kills.
+pub(crate) struct HeldInterrupt {
+    /// Session whose turn is stopping.
+    session_id: String,
+    /// Draft to send once the turn is done. `None` for a bare stop.
+    send: Option<String>,
+}
+
 /// The shared frontend controller. Owns the core bridge, the view-model
 /// state, and the product bookkeeping; renders nothing itself.
 pub struct FrontendDriver {
@@ -334,9 +344,6 @@ pub struct FrontendDriver {
     /// Version a self-update installed since the last launch. Toasted once
     /// the first settings reply lands, so it renders in the UI language.
     applied_update: Option<String>,
-    /// A user stop is unwinding: steers the turn hands back join a held
-    /// queue instead of starting a new turn. Cleared when a turn starts.
-    queue_hold_on_return: bool,
     /// Invalidates asynchronous recall lookups when their conversation
     /// changes.
     recall_generation: u64,
@@ -375,9 +382,9 @@ pub struct FrontendDriver {
     /// Attachments of sends still waiting for their `Sent` reply, keyed by
     /// session. A failed send hands them back instead of dropping them.
     pending_send_attachments: BTreeMap<String, mycode_app::Attachments>,
-    /// Session whose interrupt waits for its automatic compaction to end;
+    /// The turn being stopped, and the draft that goes out once it is gone;
     /// see [`FrontendDriver::interrupt_send`].
-    interrupt_after_compaction: Option<String>,
+    held_interrupt: Option<HeldInterrupt>,
     /// The open folder's git status and opened diff; see [`git`].
     git: git::GitWatch,
     /// Free-text answers to the pending ask card, aligned with its rows.
@@ -441,7 +448,6 @@ impl FrontendDriver {
             manual_update_check: false,
             update_armed: false,
             applied_update: None,
-            queue_hold_on_return: false,
             recall_generation: 0,
             repaired_configs: Vec::new(),
             repairs_toasted: 0,
@@ -456,7 +462,7 @@ impl FrontendDriver {
             resync_on_turn_end: None,
             held_send: None,
             pending_send_attachments: BTreeMap::new(),
-            interrupt_after_compaction: None,
+            held_interrupt: None,
             git: git::GitWatch::default(),
             ask_texts: Vec::new(),
             ask_index: 0,
@@ -756,7 +762,6 @@ impl FrontendDriver {
                 | FrontendAction::SteerCommitted { .. }
                 | FrontendAction::SteersReturned(_)
                 | FrontendAction::SummaryShown(_)
-                | FrontendAction::MessageQueued(_)
                 | FrontendAction::AskRequested(_)
                 | FrontendAction::CompactArmed
                 | FrontendAction::CompactFinished { .. }
@@ -803,6 +808,14 @@ impl FrontendDriver {
             && self.vm.view == MainView::Settings
         {
             self.flush_settings_text_save(out);
+        }
+        // magpie rewrites its own `mcp.json`; reading it when its page opens
+        // shows what the Library has now, not what it had at startup.
+        if matches!(
+            action,
+            FrontendAction::ShowSettingsSection(crate::view_model::SettingsSection::Mcp)
+        ) {
+            self.reload_mcp_library(out);
         }
         if let FrontendAction::SettingsMcpRemoved(index) = &action
             && let Some(id) = self
@@ -896,6 +909,18 @@ impl FrontendDriver {
     /// Marks the roles cache dirty so the next read re-scans.
     pub fn invalidate_agent_roles(&mut self) {
         self.agent_roles_stale = true;
+    }
+
+    /// Reads the MCP servers magpie's Library writes, so the settings page,
+    /// its nav count, and the composer's `/` menu list one catalog.
+    pub(crate) fn reload_mcp_library(&mut self, out: &mut Vec<Effect>) {
+        let (servers, error) = match crate::global_mcp_servers(&self.home) {
+            Ok(servers) => (servers, None),
+            // The page shows the reason; an unreadable file must not look
+            // like an empty Library.
+            Err(message) => (Vec::new(), Some(message)),
+        };
+        self.act(FrontendAction::McpLibraryLoaded { servers, error }, out);
     }
 
     /// Loads the provider catalog the first time a surface needs it. The

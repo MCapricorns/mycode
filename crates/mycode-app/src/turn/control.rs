@@ -50,7 +50,7 @@ impl TurnControl {
     /// Runs before the terminal event goes out. The UI reopens the session
     /// when it hears the turn end, and a token still published then reads
     /// as a turn still running: the composer stuck on Stop, every send
-    /// queued behind a turn that is gone.
+    /// steering a turn that is gone.
     ///
     /// `Steer` pushes while holding the inbox map lock, and the guard's drop
     /// removes the entry under that lock, so no steer lands after the drain.
