@@ -1,10 +1,10 @@
-//! Dropped pictures and code files: reading, limits, and removal.
+//! Pictures and code files waiting for the next prompt: dropping them,
+//! pasting them, and the limits both paths share.
 //!
-//! Dropping a file on the composer attaches it to the next prompt instead of
-//! switching the project. Limits mirror what hosted vision APIs accept and
-//! keep code small enough to resend every turn; see
-//! [`mycode_core::attachments`]. Directories keep their old meaning: a folder
-//! dropped on the composer binds as the project.
+//! A file dropped on the composer attaches to the next prompt instead of
+//! switching the project, and a pasted picture attaches the same way. Limits
+//! mirror what hosted vision APIs accept; see [`mycode_core::attachments`]. A
+//! folder dropped on the composer binds as the project.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +15,7 @@ use gpui_kit::Context;
 use mycode_core::{AttachError, MAX_FILE_BYTES, MAX_IMAGE_BYTES};
 
 use super::Workspace;
+use super::clipboard;
 use super::toasts::ToastKind;
 use crate::i18n::t;
 
@@ -93,11 +94,7 @@ impl Workspace {
                 return;
             }
             match read_image(path) {
-                Ok((mime, data)) => {
-                    if let Err(error) = self.attachments.push_image(name.clone(), mime, data) {
-                        self.toast_attachment_error(&name, error, cx);
-                    }
-                }
+                Ok((mime, data)) => self.push_picture(name, mime, data, cx),
                 Err(error) => self.push_toast(error, ToastKind::Warning, cx),
             }
             return;
@@ -115,6 +112,54 @@ impl Workspace {
             },
             Err(error) => self.push_toast(error, ToastKind::Warning, cx),
         }
+    }
+
+    /// Attaches the picture a paste carries. `true` means the paste was
+    /// consumed, so the composer inserts no text for it.
+    pub(crate) fn on_composer_paste(
+        &mut self,
+        item: &gpui_kit::ClipboardItem,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match clipboard::pasted(item) {
+            Ok(Some(picture)) => {
+                self.push_picture(
+                    picture.file_name(),
+                    picture.mime,
+                    picture.base64(),
+                    cx,
+                );
+                true
+            }
+            Ok(None) => false,
+            Err(error) => {
+                self.push_toast(error, ToastKind::Warning, cx);
+                true
+            }
+        }
+    }
+
+    /// Adds one encoded picture, refusing it when the selected model cannot
+    /// see pictures at all.
+    fn push_picture(
+        &mut self,
+        name: String,
+        mime: &'static str,
+        data: String,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.selected_model_takes_images() {
+            let reason = t(
+                "the selected model cannot see images; pick a vision model first",
+                "当前模型看不了图片，请先选择支持图片的模型",
+            );
+            self.push_toast(format!("{name}: {reason}"), ToastKind::Warning, cx);
+            return;
+        }
+        if let Err(error) = self.attachments.push_image(name.clone(), mime, data) {
+            self.toast_attachment_error(&name, error, cx);
+        }
+        cx.notify();
     }
 
     /// Whether the selected catalog model advertises image input. A catalog
