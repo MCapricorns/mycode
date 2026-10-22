@@ -1,2 +1,4 @@
 /target/
 minimax.txt
+
+__pycache__/
