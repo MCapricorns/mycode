@@ -10,10 +10,13 @@
 
 ### Added
 
+- `wiki/memory-report.md`：内存占用静态审查与构建基准（依赖图 427 个包、dev 69.8 MB / release 38.1 MB 二进制、mimalloc 覆盖验证与全部内存上限清单）。
 - 桌面版输入框支持粘贴剪贴板图片：`Ctrl+V`（macOS `Cmd+V`）把剪贴板里的图片附加到下一条消息，粘贴内容只有一个图片路径或 `file://` URL 时也按图片附加。平台剪贴板已给出 PNG / JPEG / WebP / GIF 的按原样使用，Windows 截图给的位图先转成 PNG；图片同样受 4 张 / 3.75 MB / 合计 6 MiB 和「所选模型能否看图」的限制，纯文本粘贴仍然照常插入正文。
 
 ### Changed
 
+- 工作区重排为严格线性链：每个 crate 只依赖链上的上一层（`pub use` 转发其公共 API），`mycode-frontend` / `mycode-desktop` 不再跨层直连底层 crate；`mycode-config` 接入 `mycode-core` 后，链上全部二进制与测试目标统一获得 mimalloc 全局分配器与 VC-LTL 链接，随之删除 `mycode-config` 重复的 VC-LTL 声明与三份重复的 `unix_now` 帮助函数。
+- 精简 Cargo.toml 与 crate 级文档注释：去掉叙事段落与 ASCII 图，压成一句式「为什么」；线性链图示见 `wiki/images/architecture.svg`。
 - 移除终端版 `mycode-cli`：桌面版是唯一的前端，工作区、发布构建、自更新资产、自安装与下载清理、快捷键表都只保留 `mycode-desktop`。启动参数、`--help` / `--version`、以及自更新助手仍由 `mycode-frontend` 的 `launch` 模块提供。
 - `docs/` 换成 `wiki/index.html`：一份可搜索的知识图谱，节点覆盖 crate、模块、流程与落盘数据。点节点看说明、该层的关联节点，以及它背后的源文件；点文件名直接在页面里读源码（行号、跳到 GitHub、一键复制）。整页自包含，双击也能离线打开。
 - 把超过 1000 行的文件拆开：`highlight`、`tool`、`edit/engine`、`session/store/index`、`view_model/reduce`、`builtin/shell`、`builtin/grep`、`mcp_tools`、`compaction`、`ui/chat/tools`、`workspace` 及若干测试文件，各自按职责落到子模块。
