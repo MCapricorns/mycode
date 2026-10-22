@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MYCode · 知识图谱</title>
+<style>
+  :root {
+    --bg: #0a0d14;
+    --surface: #101521;
+    --surface-2: #151b28;
+    --surface-3: #1b2231;
+    --line: rgba(255, 255, 255, .08);
+    --line-strong: rgba(255, 255, 255, .16);
+    --text: #e8ebf2;
+    --muted: #9aa4b8;
+    --dim: #6b7688;
+    --crate: #7c8cff;
+    --module: #45c8b0;
+    --flow: #b48ef0;
+    --data: #e3b341;
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    flex-direction: column;
+    background:
+      radial-gradient(900px 420px at 82% -8%, rgba(124, 140, 255, .18), transparent 60%),
+      radial-gradient(700px 380px at 4% 0%, rgba(69, 200, 176, .1), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.6 "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+
+  header.top {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 12px 22px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(10, 13, 20, .78);
+    backdrop-filter: blur(12px);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand svg { width: 26px; height: 26px; border-radius: 8px; background: #fff; padding: 4px; }
+  .brand strong { font-size: 15px; letter-spacing: .01em; }
+  .brand span { color: var(--dim); font-size: 12px; margin-left: 8px; }
+  nav.links { display: flex; gap: 16px; margin-left: 10px; }
+  nav.links a { color: var(--muted); font-size: 12.5px; text-decoration: none; }
+  nav.links a:hover { color: var(--text); }
+  #search {
+    margin-left: auto;
+    width: 260px;
+    padding: 8px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 9px;
+    background: rgba(10, 13, 20, .9);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+  }
+  #search::placeholder { color: var(--dim); }
+  #search:focus { outline: none; border-color: var(--crate); box-shadow: 0 0 0 3px rgba(124, 140, 255, .18); }
+
+  main { display: flex; flex: 1; min-height: 0; }
+  #map { position: relative; flex: 1; min-width: 0; overflow: auto; padding: 18px 4px 40px 18px; }
+  #layer { transform-origin: 0 0; }
+  #map svg { display: block; }
+
+  .zoom-wrap { position: sticky; top: 0; height: 0; display: flex; justify-content: flex-end; padding-right: 14px; z-index: 3; }
+  .zoom { display: flex; gap: 6px; }
+  .zoom button {
+    width: 30px; height: 30px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: rgba(16, 21, 33, .92);
+    color: var(--muted);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .zoom button:hover { color: var(--text); border-color: var(--line-strong); }
+  .zoom button.fit { width: auto; padding: 0 10px; font-size: 12px; }
+
+  .edge { fill: none; stroke: rgba(255, 255, 255, .1); stroke-width: 1.2; transition: stroke .15s, opacity .15s; }
+  .edge.back { stroke-dasharray: 4 5; }
+  .edge.hot { stroke: var(--crate); stroke-width: 1.9; }
+  .lane-label { fill: var(--dim); font-size: 11.5px; letter-spacing: .12em; }
+  .lane-band { fill: rgba(255, 255, 255, .022); }
+  .lane-band.alt { fill: rgba(255, 255, 255, .045); }
+
+  .node { cursor: pointer; outline: none; }
+  .node rect { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1; rx: 10; transition: fill .15s, stroke .15s; }
+  .node text { fill: var(--text); font-size: 12.5px; }
+  .node .dot { stroke: none; }
+  .node.crate .dot { fill: var(--crate); }
+  .node.module .dot { fill: var(--module); }
+  .node.flow .dot { fill: var(--flow); }
+  .node.data .dot { fill: var(--data); }
+  .node:hover rect { fill: var(--surface-3); }
+  .node:focus-visible rect { stroke: #fff; }
+  .node.hot rect { fill: var(--surface-3); stroke: rgba(255, 255, 255, .3); }
+  .node.active rect { fill: #222a3b; stroke: #fff; stroke-width: 1.6; }
+  .node.dim { opacity: .3; }
+  .node.crate rect { stroke: rgba(124, 140, 255, .55); }
+  .node.module rect { stroke: rgba(69, 200, 176, .45); }
+  .node.flow rect { stroke: rgba(180, 142, 240, .45); }
+  .node.data rect { stroke: rgba(227, 179, 65, .45); }
+
+  aside#detail {
+    width: 372px;
+    flex: none;
+    border-left: 1px solid var(--line);
+    background: rgba(16, 21, 33, .72);
+    padding: 20px 22px 32px;
+    overflow: auto;
+  }
+  .chip {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--line-strong);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .chip.crate { color: var(--crate); border-color: rgba(124, 140, 255, .4); }
+  .chip.module { color: var(--module); border-color: rgba(69, 200, 176, .4); }
+  .chip.flow { color: var(--flow); border-color: rgba(180, 142, 240, .4); }
+  .chip.data { color: var(--data); border-color: rgba(227, 179, 65, .4); }
+  #detail h2 { margin: 10px 0 8px; font-size: 19px; font-weight: 650; letter-spacing: .01em; }
+  #detail p.summary { margin: 0 0 4px; color: #c8cfdd; }
+  .section { margin-top: 22px; }
+  .section h3 {
+    margin: 0 0 10px;
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--dim);
+    font-weight: 600;
+  }
+  .file {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: rgba(21, 27, 40, .7);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .file:hover { border-color: var(--line-strong); background: var(--surface-3); }
+  .file .name { font-family: var(--mono); font-size: 12.5px; }
+  .file .dir { color: var(--dim); font-size: 11.5px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file .lines { margin-left: auto; color: var(--dim); font-size: 11px; flex: none; }
+  .related { display: flex; flex-wrap: wrap; gap: 6px; }
+  .related button {
+    padding: 4px 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .related button:hover { color: var(--text); border-color: var(--line-strong); }
+  .empty { color: var(--dim); }
+
+  #codeView {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: rgba(8, 11, 17, .72);
+    backdrop-filter: blur(3px);
+    z-index: 20;
+  }
+  #codeView[hidden] { display: none; }
+  .sheet {
+    display: flex;
+    flex-direction: column;
+    margin: 26px auto;
+    width: min(1180px, calc(100vw - 48px));
+    max-height: calc(100vh - 52px);
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    background: var(--surface);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, .55);
+    overflow: hidden;
+  }
+  .sheet header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(21, 27, 40, .6);
+  }
+  .sheet .path { font-family: var(--mono); font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sheet .path .dir { color: var(--dim); }
+  .sheet .meta { margin-left: auto; color: var(--dim); font-size: 11.5px; white-space: nowrap; }
+  .sheet header a, .sheet header button {
+    flex: none;
+    padding: 5px 11px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .sheet header a:hover, .sheet header button:hover { color: var(--text); }
+  .scroll { overflow: auto; flex: 1; background: #0c1017; }
+  .cols { display: flex; align-items: flex-start; min-width: min-content; }
+  .gutter {
+    position: sticky;
+    left: 0;
+    flex: none;
+    padding: 12px 12px 24px;
+    border-right: 1px solid var(--line);
+    background: #0c1017;
+    color: #4d5666;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 20px;
+    text-align: right;
+    user-select: none;
+  }
+  .code {
+    padding: 12px 22px 24px 16px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 20px;
+    white-space: pre;
+    tab-size: 4;
+    color: #d7dcea;
+  }
+  .code .ln { min-height: 20px; }
+  .code .k { color: #c792ea; }
+  .code .t { color: #7fd3c1; }
+  .code .s { color: #a5d6a7; }
+  .code .c { color: #5d6a7d; font-style: italic; }
+  .code .n { color: #e3b341; }
+  .code .a { color: #7c8cff; }
+
+  footer { padding: 7px 22px; border-top: 1px solid var(--line); color: var(--dim); font-size: 11.5px; }
+
+  @media (max-width: 900px) {
+    aside#detail { width: 300px; }
+    nav.links { display: none; }
+    #search { width: 150px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 256 256" aria-hidden="true"><path d="M76 182V82l52 56 52-56v100" fill="none" stroke="#000" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <strong>MYCode</strong><span>知识图谱</span>
+  </div>
+  <nav class="links">
+    <a href="https://github.com/MCapricorns/mycode#readme">README</a>
+    <a href="https://github.com/MCapricorns/mycode/releases">Releases</a>
+    <a href="https://github.com/MCapricorns/mycode/blob/main/CHANGELOG.md">更新日志</a>
+  </nav>
+  <input id="search" type="search" placeholder="搜索 crate、模块、文件…" title="按 / 聚焦搜索框" autocomplete="off" spellcheck="false">
+</header>
+<main>
+  <div id="map">
+    <div class="zoom-wrap">
+      <div class="zoom">
+        <button type="button" id="zoomOut" aria-label="缩小">−</button>
+        <button type="button" id="zoomIn" aria-label="放大">＋</button>
+        <button type="button" class="fit" id="zoomFit">适应</button>
+      </div>
+    </div>
+    <div id="layer"></div>
+  </div>
+  <aside id="detail"><p class="empty">选一个节点。</p></aside>
+</main>
+<footer id="foot"></footer>
+<section id="codeView" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="codePath">
+    <header>
+      <span class="path" id="codePath"></span>
+      <span class="meta" id="codeMeta"></span>
+      <a id="codeGithub" href="#" target="_blank" rel="noopener">GitHub</a>
+      <button type="button" id="codeCopy">复制</button>
+      <button type="button" id="codeClose" aria-label="关闭">✕</button>
+    </header>
+    <div class="scroll">
+      <div class="cols">
+        <div class="gutter" id="codeGutter"></div>
+        <div class="code" id="codeBody"></div>
+      </div>
+    </div>
+  </div>
+</section>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="rgba(255,255,255,.3)"></path>
+    </marker>
+  </defs>
+</svg>
+<script type="application/json" id="graph-data">__GRAPH_JSON__</script>
+<script type="application/json" id="file-data">__FILE_JSON__</script>
+<script>
+"use strict";
+const GRAPH = JSON.parse(document.getElementById("graph-data").textContent);
+const FILES = JSON.parse(document.getElementById("file-data").textContent);
+const NODES = GRAPH.nodes;
+const LANES = GRAPH.lanes;
+const NS = "http://www.w3.org/2000/svg";
+const REPO = "https://github.com/MCapricorns/mycode";
+
+const byId = new Map(NODES.map((node) => [node.id, node]));
+let selectedId = null;
+let currentFile = null;
+const nodeNames = new Map();
+NODES.forEach((node) => {
+  (node.files || []).forEach((file) => {
+    if (!nodeNames.has(file)) nodeNames.set(file, []);
+    nodeNames.get(file).push(node);
+  });
+});
+
+/* ── 图 ───────────────────────────────────────────────────────── */
+const SLOT = 200;
+const ROW_H = 74;
+const NODE_H = 40;
+const LABEL_W = 96;
+const MARGIN_X = 24;
+const MARGIN_Y = 26;
+const ROW_TOP = 24;
+const NODE_MIN_W = 120;
+const NODE_MAX_W = 188;
+
+const layer = document.getElementById("layer");
+const map = document.getElementById("map");
+const detail = document.getElementById("detail");
+
+function nodeWidth(label) {
+  return Math.max(NODE_MIN_W, Math.min(NODE_MAX_W, Math.round(label.length * 7.2 + 44)));
+}
+// 每一层是一行：左边层名，右边该层的节点从左到右排开。
+const rowCounts = LANES.map((_, lane) => NODES.filter((node) => node.lane === lane).length);
+const columns = Math.max(...rowCounts, 1);
+const graphW = MARGIN_X * 2 + LABEL_W + SLOT * columns;
+const graphH = MARGIN_Y * 2 + ROW_TOP + ROW_H * LANES.length;
+
+const pos = new Map();
+NODES.forEach((node) => {
+  const peers = NODES.filter((other) => other.lane === node.lane);
+  const index = peers.indexOf(node);
+  const w = nodeWidth(node.label);
+  pos.set(node.id, {
+    w,
+    x: MARGIN_X + LABEL_W + SLOT * index + SLOT / 2,
+    y: MARGIN_Y + ROW_TOP + node.lane * ROW_H,
+  });
+});
+
+const svg = document.createElementNS(NS, "svg");
+svg.setAttribute("width", graphW);
+svg.setAttribute("height", graphH);
+svg.setAttribute("viewBox", "0 0 " + graphW + " " + graphH);
+
+LANES.forEach((label, lane) => {
+  const top = MARGIN_Y + ROW_TOP + lane * ROW_H;
+  const band = document.createElementNS(NS, "rect");
+  band.setAttribute("class", "lane-band" + (lane % 2 ? " alt" : ""));
+  band.setAttribute("x", MARGIN_X - 6);
+  band.setAttribute("y", top - 12);
+  band.setAttribute("width", graphW - MARGIN_X * 2 + 12);
+  band.setAttribute("height", ROW_H - 10);
+  band.setAttribute("rx", 12);
+  svg.appendChild(band);
+
+  const text = document.createElementNS(NS, "text");
+  text.setAttribute("class", "lane-label");
+  text.setAttribute("x", MARGIN_X + 4);
+  text.setAttribute("y", top + NODE_H / 2 + 4);
+  text.textContent = label;
+  svg.appendChild(text);
+});
+
+const edgeLayer = document.createElementNS(NS, "g");
+const nodeLayer = document.createElementNS(NS, "g");
+svg.appendChild(edgeLayer);
+svg.appendChild(nodeLayer);
+
+const edges = [];
+NODES.forEach((node) => {
+  (node.links || []).forEach((target) => {
+    const to = byId.get(target);
+    if (!to) return;
+    const from = pos.get(node.id);
+    const dest = pos.get(target);
+    const down = dest.y > from.y;
+    const sx = from.x;
+    const ex = dest.x;
+    const sy = from.y + (down ? NODE_H : 0);
+    const ey = dest.y + (down ? 0 : NODE_H);
+    const bend = Math.min(70, Math.max(22, Math.abs(ey - sy) / 3.4));
+    const dir = down ? 1 : -1;
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("class", "edge" + (down ? "" : " back"));
+    path.setAttribute("marker-end", "url(#arrow)");
+    path.setAttribute(
+      "d",
+      "M" + sx + "," + sy +
+      " C" + sx + "," + (sy + dir * bend) +
+      " " + ex + "," + (ey - dir * bend) +
+      " " + ex + "," + ey
+    );
+    edgeLayer.appendChild(path);
+    edges.push({ from: node.id, to: target, path });
+  });
+});
+
+const nodeEls = new Map();
+NODES.forEach((node) => {
+  const { x, y, w } = pos.get(node.id);
+  const group = document.createElementNS(NS, "g");
+  group.setAttribute("class", "node " + node.group);
+  group.setAttribute("transform", "translate(" + (x - w / 2) + "," + y + ")");
+  group.setAttribute("tabindex", "0");
+  group.setAttribute("role", "button");
+  group.setAttribute("aria-label", node.label);
+  group.dataset.id = node.id;
+
+  const box = document.createElementNS(NS, "rect");
+  box.setAttribute("width", w);
+  box.setAttribute("height", NODE_H);
+  group.appendChild(box);
+
+  const dot = document.createElementNS(NS, "circle");
+  dot.setAttribute("class", "dot");
+  dot.setAttribute("cx", 17);
+  dot.setAttribute("cy", NODE_H / 2);
+  dot.setAttribute("r", 3.4);
+  group.appendChild(dot);
+
+  const label = document.createElementNS(NS, "text");
+  label.setAttribute("x", 30);
+  label.setAttribute("y", NODE_H / 2 + 5);
+  label.textContent = node.label;
+  group.appendChild(label);
+
+  group.addEventListener("click", () => select(node.id));
+  group.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      select(node.id);
+    }
+  });
+  nodeLayer.appendChild(group);
+  nodeEls.set(node.id, group);
+});
+
+/* ── 缩放 ─────────────────────────────────────────────────────── */
+let zoom = 1;
+let manualZoom = false;
+function applyZoom(next) {
+  zoom = Math.max(0.55, Math.min(1.6, next));
+  layer.style.transform = "scale(" + zoom + ")";
+  layer.style.width = graphW * zoom + "px";
+  layer.style.height = graphH * zoom + "px";
+}
+function fitZoom() {
+  const wide = (map.clientWidth - 40) / graphW;
+  const tall = (map.clientHeight - 40) / graphH;
+  manualZoom = false;
+  applyZoom(Math.min(1, wide, tall));
+}
+document.getElementById("zoomIn").addEventListener("click", () => { manualZoom = true; applyZoom(zoom + 0.1); });
+document.getElementById("zoomOut").addEventListener("click", () => { manualZoom = true; applyZoom(zoom - 0.1); });
+document.getElementById("zoomFit").addEventListener("click", fitZoom);
+window.addEventListener("resize", () => { if (!manualZoom) fitZoom(); });
+
+/* ── 详情 ─────────────────────────────────────────────────────── */
+const GROUP_LABELS = { crate: "crate", module: "模块", flow: "流程", data: "数据" };
+
+function fileLineCount(path) {
+  const text = FILES[path];
+  if (!text) return 0;
+  return text.replace(/\n$/, "").split("\n").length;
+}
+
+function select(id, options) {
+  const node = byId.get(id);
+  if (!node) return;
+  const neighbors = new Set([id, ...(node.links || [])]);
+  NODES.forEach((other) => {
+    if ((other.links || []).includes(id)) neighbors.add(other.id);
+  });
+  edges.forEach((edge) => edge.path.classList.toggle("hot", edge.from === id || edge.to === id));
+  nodeEls.forEach((element, otherId) => {
+    element.classList.toggle("active", otherId === id);
+    element.classList.toggle("hot", neighbors.has(otherId) && otherId !== id);
+    element.classList.toggle("dim", !neighbors.has(otherId));
+  });
+
+  const files = (node.files || []).map((path) => {
+    const slash = path.lastIndexOf("/");
+    const dir = slash < 0 ? "" : path.slice(0, slash + 1);
+    const name = path.slice(slash + 1);
+    return '<button type="button" class="file" data-file="' + path + '">' +
+      '<span class="name">' + name + '</span>' +
+      '<span class="dir">' + dir + '</span>' +
+      '<span class="lines">' + fileLineCount(path) + ' 行</span>' +
+      '</button>';
+  }).join("");
+  const related = (node.links || [])
+    .filter((target) => byId.has(target))
+    .map((target) => '<button type="button" data-jump="' + target + '">' + byId.get(target).label + '</button>')
+    .join("");
+
+  detail.innerHTML =
+    '<span class="chip ' + node.group + '">' + (GROUP_LABELS[node.group] || node.group) + "</span>" +
+    "<h2>" + node.label + "</h2>" +
+    '<p class="summary">' + node.summary + "</p>" +
+    (files ? '<div class="section"><h3>源码</h3>' + files + "</div>" : "") +
+    (related ? '<div class="section"><h3>关联</h3><div class="related">' + related + "</div></div>" : "");
+  detail.querySelectorAll("[data-file]").forEach((button) => {
+    button.addEventListener("click", () => openCode(button.dataset.file));
+  });
+  detail.querySelectorAll("[data-jump]").forEach((button) => {
+    button.addEventListener("click", () => select(button.dataset.jump));
+  });
+  if (!options || !options.quiet) detail.scrollTop = 0;
+  selectedId = id;
+  updateHash();
+}
+
+function clearSelection() {
+  nodeEls.forEach((element) => element.classList.remove("active", "hot", "dim"));
+  edges.forEach((edge) => edge.path.classList.remove("hot"));
+  detail.innerHTML = '<p class="empty">选一个节点。</p>';
+  selectedId = null;
+  updateHash();
+}
+
+/* ── 源码 ─────────────────────────────────────────────────────── */
+const codeView = document.getElementById("codeView");
+const codeBody = document.getElementById("codeBody");
+const codeGutter = document.getElementById("codeGutter");
+const codePath = document.getElementById("codePath");
+const codeMeta = document.getElementById("codeMeta");
+const codeGithub = document.getElementById("codeGithub");
+
+const KEYWORDS = /^(as|async|await|break|const|continue|crate|dyn|else|enum|extern|false|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|Self|static|struct|super|trait|true|type|unsafe|use|where|while)\b/;
+
+function highlight(text) {
+  // 只区分注释、字符串、关键字、类型和数字：够看，不会错位。
+  const lines = [];
+  let line = [];
+  let i = 0;
+  const push = (cls, chunk) => {
+    const parts = chunk.split("\n");
+    parts.forEach((part, index) => {
+      if (index > 0) {
+        lines.push(line);
+        line = [];
+      }
+      if (part) {
+        const span = document.createElement("span");
+        if (cls) span.className = cls;
+        span.textContent = part;
+        line.push(span);
+      }
+    });
+  };
+  while (i < text.length) {
+    if (text.startsWith("//", i)) {
+      const end = text.indexOf("\n", i);
+      const stop = end < 0 ? text.length : end;
+      push("c", text.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    if (text.startsWith("/*", i)) {
+      const end = text.indexOf("*/", i + 2);
+      const stop = end < 0 ? text.length : end + 2;
+      push("c", text.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    const char = text[i];
+    if (char === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      push("s", text.slice(i, Math.min(j + 1, text.length)));
+      i = j + 1;
+      continue;
+    }
+    if (char === "#" && line.length === 0 && (text.startsWith("#[", i) || text.startsWith("#![", i))) {
+      const end = text.indexOf("]", i);
+      const stop = end < 0 ? i + 1 : end + 1;
+      push("a", text.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    if (/[0-9]/.test(char) && !/[A-Za-z0-9_]/.test(text[i - 1] || "")) {
+      let j = i;
+      while (j < text.length && /[0-9_xXa-fA-F.]/.test(text[j])) j += 1;
+      push("n", text.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(char)) {
+      let j = i;
+      while (j < text.length && /[A-Za-z0-9_]/.test(text[j])) j += 1;
+      const word = text.slice(i, j);
+      if (KEYWORDS.test(word)) push("k", word);
+      else if (/^[A-Z]/.test(word)) push("t", word);
+      else push(null, word);
+      i = j;
+      continue;
+    }
+    let j = i;
+    while (j < text.length && !/[A-Za-z0-9_"#\/]/.test(text[j])) j += 1;
+    if (j === i) j += 1;
+    push(null, text.slice(i, j));
+    i = j;
+  }
+  lines.push(line);
+  if (lines.length > 1 && lines[lines.length - 1].length === 0) lines.pop();
+  return lines;
+}
+
+function openCode(path, line) {
+  const text = FILES[path];
+  if (!text) return;
+  currentFile = path;
+  const slash = path.lastIndexOf("/");
+  codePath.innerHTML = '<span class="dir">' + path.slice(0, slash + 1) + "</span>" + path.slice(slash + 1);
+  const lines = highlight(text);
+  const frag = document.createDocumentFragment();
+  const gut = document.createDocumentFragment();
+  lines.forEach((spans, index) => {
+    const row = document.createElement("div");
+    row.className = "ln";
+    spans.forEach((span) => row.appendChild(span));
+    frag.appendChild(row);
+    const number = document.createElement("div");
+    number.textContent = index + 1;
+    gut.appendChild(number);
+  });
+  codeBody.replaceChildren(frag);
+  codeGutter.replaceChildren(gut);
+  codeMeta.textContent = lines.length + " 行";
+  codeGithub.href = REPO + "/blob/main/" + path + (line ? "#L" + line : "");
+  codeView.hidden = false;
+  document.getElementById("codeCopy").textContent = "复制";
+  const scroll = codeView.querySelector(".scroll");
+  scroll.scrollTop = line ? Math.max(0, (line - 1) * 20 - 120) : 0;
+  scroll.scrollLeft = 0;
+  document.getElementById("codeClose").focus();
+  updateHash();
+}
+
+function closeCode() {
+  codeView.hidden = true;
+  currentFile = null;
+  updateHash();
+}
+
+document.getElementById("codeClose").addEventListener("click", closeCode);
+codeView.addEventListener("click", (event) => { if (event.target === codeView) closeCode(); });
+document.getElementById("codeCopy").addEventListener("click", async () => {
+  const text = FILES[currentFile];
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  document.getElementById("codeCopy").textContent = "已复制";
+});
+
+/* ── 搜索与地址 ───────────────────────────────────────────────── */
+const search = document.getElementById("search");
+
+function filter(term) {
+  const needle = term.trim().toLowerCase();
+  if (!needle) {
+    clearSelection();
+    return;
+  }
+  nodeEls.forEach((element, id) => {
+    const node = byId.get(id);
+    const haystack = (node.label + " " + node.summary + " " + (node.files || []).join(" ")).toLowerCase();
+    element.classList.toggle("dim", !haystack.includes(needle));
+    element.classList.remove("hot", "active");
+  });
+}
+
+search.addEventListener("input", (event) => filter(event.target.value));
+
+function updateHash() {
+  const parts = [];
+  if (selectedId) parts.push("n=" + encodeURIComponent(selectedId));
+  if (currentFile) parts.push("f=" + encodeURIComponent(currentFile));
+  const next = parts.length ? "#" + parts.join("&") : "#";
+  if (location.hash !== next) history.replaceState(null, "", next);
+}
+
+function readHash() {
+  const raw = location.hash.replace(/^#/, "");
+  const params = new URLSearchParams(raw);
+  const id = params.get("n");
+  const file = params.get("f");
+  if (id && byId.has(id)) select(id);
+  if (file && FILES[file]) openCode(file);
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    if (!codeView.hidden) closeCode();
+    else clearSelection();
+    return;
+  }
+  if (event.key === "/" && document.activeElement !== search) {
+    event.preventDefault();
+    search.focus();
+    search.select();
+  }
+});
+
+/* ── 启动 ─────────────────────────────────────────────────────── */
+document.getElementById("foot").textContent =
+  LANES.length + " 层 · " + NODES.length + " 个节点 · " + Object.keys(FILES).length +
+  " 个源文件 · 依赖方向自上而下：界面 → 前端 → 应用核 → 代理 / 模型 / 工具 → 核心与配置";
+
+layer.appendChild(svg);
+applyZoom(1);
+fitZoom();
+readHash();
+if (!selectedId) select("app");
+</script>
+</body>
+</html>
