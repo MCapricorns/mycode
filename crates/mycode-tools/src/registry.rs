@@ -1,4 +1,4 @@
-//! `ToolRegistry` — name-keyed store of type-erased tools. See `docs/tools.md`.
+//! `ToolRegistry` — name-keyed store of type-erased tools. See `wiki/index.html`.
 //!
 //! Registration is **last-wins** per name: a later registration replaces an
 //! earlier tool under the same name. Specs are

@@ -1,5 +1,5 @@
 //! Inner-loop mechanics: one LLM response cycle and one tool dispatch.
-//! See `docs/agent.md`.
+//! See `wiki/index.html`.
 //!
 //! Everything here is a free function over `(&TurnEnv, &mut AgentState)`
 //! so the agent loop in [`crate::agent`] can call it with
@@ -446,7 +446,7 @@ fn canonical_tool_name(name: &str) -> &str {
 /// Lookup, search/file capability binding, argument validation,
 /// cancellation, and tool errors are lifecycle failures: they
 /// return **as an `is_error` tool result** so the loop continues and the
-/// model can react. See `docs/agent.md`. Nothing here waits for a
+/// model can react. See `wiki/index.html`. Nothing here waits for a
 /// Core permission prompt. Turns do not snapshot files before a tool runs.
 ///
 /// Tools that declare `search_access` / `file_access` resolve the final

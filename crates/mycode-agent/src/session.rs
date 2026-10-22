@@ -6,7 +6,7 @@
 //! the events. Reservations are single-use under expected-head
 //! compare-and-swap. The service runs on one session actor inside a
 //! generation fence. Opening a session loads offset rows only. The typed
-//! surface is documented in `docs/agent.md`.
+//! surface is documented in `wiki/index.html`.
 mod actor;
 mod digest;
 mod dto;

@@ -1,9 +1,8 @@
 //! Strict product-settings authority for the MYCode frontends.
 //!
 //! [`AppSettings`] is the single settings document at `settings.json`: the
-//! desktop and terminal settings pages edit it through typed APIs and it is
-//! published with revision compare-and-swap through the hardened owned-file
-//! transaction.
+//! desktop settings pages edit it through typed APIs and it is published with
+//! revision compare-and-swap through the hardened owned-file transaction.
 //! Secrets never live here; credentials stay in the secret store.
 //!
 //! A document that cannot be parsed or validated is copied aside and
@@ -592,7 +591,7 @@ mod tests {
         // The invalid theme fell back to the default; its language survived.
         assert_eq!(settings.appearance.theme, "dark");
         assert_eq!(settings.appearance.language, "zh");
-        // magpie's binding survived; the retired web family was dropped.
+        // A repair keeps magpie's binding and drops the retired web family.
         assert!(settings.magpie.enabled);
         assert_eq!(settings.magpie.model, "deepseek/deepseek-chat");
         // Healthy subagent role routes and disabled skills survive retired

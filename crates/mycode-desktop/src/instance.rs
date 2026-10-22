@@ -3,8 +3,7 @@
 //! The session store keeps one writer per process. Two desktops on one home
 //! could open the same chat, and each would cut the JSONL bytes the other
 //! committed off as a torn tail on its next append. The desktop is the only
-//! frontend that opens any stored session — the terminal writes only the
-//! sessions it creates — so it alone holds an exclusive lock on
+//! writer of stored sessions, so it alone holds an exclusive lock on
 //! `<home>/mycode-desktop.instance` for its whole life. The OS releases the
 //! lock however the process ends, so a crash never leaves the home locked.
 //!

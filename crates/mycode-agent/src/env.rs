@@ -1,5 +1,5 @@
 //! The per-turn environment: everything one turn of the agent loop needs
-//! from its surroundings. See `docs/agent.md`.
+//! from its surroundings. See `wiki/index.html`.
 
 use parking_lot::Mutex;
 use std::path::PathBuf;

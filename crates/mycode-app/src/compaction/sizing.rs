@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn chinese_text_counts_about_a_token_a_character() {
         assert_eq!(text_tokens("abcdefgh"), 2);
-        // Four ASCII characters a token used to put these at three.
+        // A token is about four ASCII characters, and about one CJK one.
         assert_eq!(text_tokens("上下文压缩会丢消息"), 9);
         assert_eq!(text_tokens("压缩 ok"), 2 + 1);
     }

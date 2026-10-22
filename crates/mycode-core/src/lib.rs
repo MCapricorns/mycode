@@ -11,7 +11,7 @@
 //!
 //! This is a leaf crate: it has no dependency on any other MYCode crate, which
 //! is what lets the agent, the tools, and the desktop all agree on one set of
-//! types. See `docs/core.md`.
+//! types. See `wiki/index.html`.
 
 pub mod attachments;
 pub mod error;

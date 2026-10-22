@@ -1,8 +1,11 @@
 use mycode_core::{ContentBlock, TextBlock, ToolCall};
 
+use super::scripted::{
+    assistant_message, large_history, scripted_wire, tool_result_message,
+};
 use super::{
-    CompactStatus, PLAUSIBLE_SUMMARY, TokenScale, assistant_message, large_history, padded,
-    scratch_home, scripted_wire, summary_wire, tool_result_message, user, user_text,
+    CompactStatus, PLAUSIBLE_SUMMARY, TokenScale, padded, scratch_home, summary_wire, user,
+    user_text,
 };
 use crate::compaction::echo::{split_echo, user_echo, with_echo};
 
@@ -136,7 +139,7 @@ async fn the_users_words_outlive_the_summary_that_replaces_them() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// A summary over the cap used to lose its end, where the next steps are.
+/// A summary over the cap keeps its end, where the next steps are.
 #[tokio::test]
 async fn an_overlong_summary_keeps_its_next_steps() {
     let (root, home) = scratch_home();

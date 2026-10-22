@@ -1,8 +1,8 @@
 use super::{CompactStatus, padded, scratch_home, summary_wire_with, user, user_text};
 
 /// A checkpoint whose covered count runs past this ledger was cut from
-/// other history. It used to clamp the transcript to nothing, so the new
-/// summary retold the stale checkpoint and none of the messages it replaced.
+/// other history. Clamping the transcript to nothing would retell the stale
+/// checkpoint instead of the messages it replaced.
 #[tokio::test]
 async fn a_checkpoint_that_does_not_fit_the_ledger_is_ignored() {
     let (root, home) = scratch_home();

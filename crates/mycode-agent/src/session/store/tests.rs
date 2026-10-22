@@ -259,8 +259,8 @@ fn rewind_keeps_the_prefix_and_window_pages_backward() {
 }
 
 /// A rewind forks onto a new branch; reopening the session must land on the
-/// branch writes last went to, never back on the smallest branch id — that
-/// pick used to replay the pre-rewind conversation.
+/// branch writes last went to, never on the smallest branch id, which replays
+/// the pre-rewind conversation.
 #[test]
 fn reopening_after_a_rewind_lands_on_the_new_branch() {
     let scratch = Scratch::new();

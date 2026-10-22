@@ -659,8 +659,8 @@ impl SseTransport for OverflowTransport {
 }
 
 /// A request the provider refuses as over its window is compacted and sent
-/// once more. The turn used to end on the refusal, and every later turn
-/// sent the same oversized history and was refused again.
+/// once more, instead of ending the turn and resending the same oversized
+/// history on every later turn.
 #[tokio::test]
 async fn a_request_refused_as_too_long_is_compacted_and_sent_again() {
     let transport = Arc::new(OverflowTransport::default());

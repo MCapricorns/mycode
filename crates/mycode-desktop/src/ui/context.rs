@@ -284,10 +284,9 @@ pub(super) fn render_inspector_drawer(
             div()
                 .id("inspector-drawer")
                 // The backdrop is a sibling underneath, and a normal hitbox
-                // does not block it. Pin used to set `pinned` and the same
-                // click then reached the backdrop, which set `open` back to
-                // false. The title-bar toggle was the only way to show it
-                // again. Occlude drops the backdrop out of that hit test.
+                // does not block it: without occlusion the same click that
+                // pins would reach the backdrop, which sets `open` back to
+                // false. Occlude drops the backdrop out of that hit test.
                 .occlude()
                 .absolute()
                 .top(px(INSPECTOR_OVERLAY_MARGIN))

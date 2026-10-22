@@ -61,7 +61,7 @@ pub enum AgentEvent {
     Error(MycodeError),
 }
 
-/// Incremental assistant content while streaming. See `docs/core.md`.
+/// Incremental assistant content while streaming. See `wiki/index.html`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum MessageDelta {

@@ -335,8 +335,8 @@ mod tests {
                 .expect("private home");
         }
         let home = crate::HomeLayout::from_root(&root).expect("layout");
-        // Each writer used to read, then CAS against the revision it read;
-        // every racer but one failed with a conflict and its key was lost.
+        // Each writer reads the stored bytes, then CAS against the revision
+        // it read; every racer but one wins and its key survives.
         let writers: Vec<_> = (0..6)
             .map(|index| {
                 let home = home.clone();

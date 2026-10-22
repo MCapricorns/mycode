@@ -269,9 +269,9 @@ fn block_content(content: &[ContentBlock]) -> Vec<Value> {
 }
 
 /// Replay key for an Anthropic `redacted_thinking` block kept on a
-/// [`ThinkingBlock`]. Its encrypted `data` has no text or signature, so
-/// without this the block was dropped from the next request, and a tool
-/// loop with thinking enabled was rejected for not opening with thinking.
+/// [`ThinkingBlock`]. Its encrypted `data` has no text or signature, so the
+/// key is what keeps the block in the next request; without it a tool loop
+/// with thinking enabled is rejected for not opening with thinking.
 const REDACTED_THINKING: &str = "redacted_thinking";
 
 fn redacted_thinking_data(thinking: &ThinkingBlock) -> Option<String> {

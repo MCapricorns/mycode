@@ -1,5 +1,5 @@
 //! The headless product driver: one `CoreBridge`, one [`WorkspaceState`], and
-//! every product decision that used to live inside the desktop window.
+//! every product decision the window renders.
 //!
 //! A frontend owns exactly one driver. It feeds user intent in as method
 //! calls or [`FrontendAction`]s, drains bridge traffic with
@@ -13,11 +13,9 @@
 //! frontend can pace streamed deltas (the desktop's typewriter frames)
 //! while control messages are handled immediately.
 use std::collections::{BTreeMap, HashSet};
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
-use std::task::{Context, Poll, Wake, Waker};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -249,6 +247,9 @@ enum DriverMsg {
     },
 }
 
+mod pump;
+use self::pump::block_on;
+
 /// Typing `@` walks the project tree. Wait until the fragment settles so
 /// each keystroke does not start another full walk.
 const MENTION_SEARCH_DEBOUNCE: Duration = Duration::from_millis(180);
@@ -261,33 +262,6 @@ const UI_STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 const REPAIR_TOAST_DELAY: Duration = Duration::from_millis(500);
 /// Wakes once a day of runtime, then checks for an update when that is enabled.
 const UPDATE_RECHECK_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// A thread that can be unparked by a [`Waker`]. Lets reply futures — a
-/// tokio oneshot each — resolve on plain threads without a runtime.
-struct Parker(std::thread::Thread);
-
-impl Wake for Parker {
-    fn wake(self: Arc<Self>) {
-        self.0.unpark();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.0.unpark();
-    }
-}
-
-/// Resolves one future to completion on the calling thread.
-fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(Parker(std::thread::current())));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::park(),
-        }
-    }
-}
 
 /// The shared frontend controller. Owns the core bridge, the view-model
 /// state, and the product bookkeeping; renders nothing itself.
@@ -542,7 +516,7 @@ impl FrontendDriver {
     }
 
     /// The frontend reports whether the conversation viewport sits at its
-    /// tail. Drivers that cannot scroll (a CLI) leave this `true`.
+    /// tail. A frontend that cannot scroll leaves this `true`.
     pub fn set_conversation_at_tail(&mut self, at_tail: bool) {
         self.conversation_at_tail = at_tail;
     }
@@ -585,8 +559,8 @@ impl FrontendDriver {
     }
 
     /// Whether the startup `LoadUiState` reply has been folded in. A
-    /// frontend that opens its own folder (the terminal's working
-    /// directory) waits for this, or the remembered project replaces it.
+    /// frontend that opens its own folder waits for this, or the remembered
+    /// project replaces it.
     pub fn ui_state_loaded(&self) -> bool {
         self.ui_state_loaded
     }

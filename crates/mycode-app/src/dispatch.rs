@@ -88,9 +88,9 @@ pub(crate) fn run_core(
                     model,
                     reasoning,
                 } => {
-                    // One live turn per session. A second turn used to replace
-                    // the cancel token without stopping the first, so both
-                    // pumps appended to the same branch. Only the turn token
+                    // One live turn per session: a second turn would replace
+                    // the cancel token without stopping the first, and both
+                    // pumps would append to the same branch. Only the turn token
                     // is cancelled: subagents are children of that token and
                     // stop with it. Sweeping the subagent map here also
                     // stopped children the user meant to steer.

@@ -4,7 +4,7 @@
 //! operations; `evict` drops one ledger in memory. `reserve-event` and
 //! `reserve-branch` issue single-use reservations, and `load-event`,
 //! `read-payloads`, and `read-payload-window` read payloads inside the
-//! session actor. See `docs/agent.md`.
+//! session actor. See `wiki/index.html`.
 use super::ids::{BranchId, BranchReservationId, SessionCallId, SessionEventId, SessionId};
 
 /// Maximum number of branches in one session ledger.
