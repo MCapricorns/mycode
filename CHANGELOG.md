@@ -27,8 +27,9 @@
 
 ### Fixed
 
-- macOS 发布构建重新通过：`install_file`、`ensure_path_entry` 及其 PATH 读写辅助函数只在 Windows 编译，不再在 macOS 上被判为 dead code（发布构建按 `-Dwarnings` 把 dead code 当错误，上一轮的三平台发布因此没有发出去）。
+- macOS 发布构建重新通过：`install_file`、`ensure_path_entry` 及其 PATH 读写辅助函数（连同只在 Windows 用得到的 `std::io` 导入）只在 Windows 编译，不再在 macOS 上被判为 dead code、unused import（发布构建按 `-Dwarnings` 把警告当错误，上一轮的三平台发布因此没有发出去）。
 - README 顶部恢复 banner，架构一节恢复分层架构图与消息流程图；图从 `docs/images/` 移到 `wiki/images/`，架构图按现在的八个 crate 重画（去掉已删除的终端版）。
+- 新增 `check-macos` 作业：在 macos-latest 上跑 `cargo check --workspace --all-targets` 并把警告当错误。Windows 上的检查看不到 `cfg(not(windows))` 的代码，0.12.22 的三平台发布就是被这样一段 unix PATH 安装代码卡住的。发布现在也要求这个作业通过。
 
 ## [0.12.21] - 2026-10-21
 
