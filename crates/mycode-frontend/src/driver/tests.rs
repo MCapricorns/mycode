@@ -358,18 +358,35 @@ fn an_interrupt_during_auto_compaction_waits_for_the_summary() {
     };
     driver.on_event(compacting(true), &mut out);
     driver.interrupt_send("change of plan", &mut out);
-    assert_eq!(driver.vm.queued, ["change of plan"]);
-    assert_eq!(
-        driver.interrupt_after_compaction.as_deref(),
-        Some(session.as_str()),
-        "the stop waits for the summary"
-    );
+    {
+        let held = driver.held_interrupt.as_ref().expect("the stop is held");
+        assert_eq!(held.session_id, session);
+        assert_eq!(held.send.as_deref(), Some("change of plan"));
+    }
+    // The message left the composer while the stop waits.
+    assert!(out.iter().any(|effect| matches!(
+        effect,
+        super::Effect::ComposerSet { text, .. } if text.is_empty()
+    )));
     driver.on_event(compacting(false), &mut out);
+    assert!(!driver.vm.auto_compacting, "the summary ended");
     assert!(
-        driver.interrupt_after_compaction.is_none(),
-        "the stop went out"
+        driver.held_interrupt.is_some(),
+        "the message waits for the turn to be gone"
     );
-    assert!(!driver.vm.auto_compacting);
+    driver.on_event(
+        BridgeEvent::ChatFailed {
+            session_id: session.clone(),
+            message: mycode_app::CHAT_CANCELLED.to_owned(),
+            head: String::new(),
+        },
+        &mut out,
+    );
+    assert!(
+        driver.held_interrupt.is_none(),
+        "the stop landed; the held message went out"
+    );
+    assert!(driver.vm.sending, "the held message started the next turn");
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -538,9 +555,9 @@ fn the_driver_keeps_the_open_folders_git_status_fresh() {
 }
 
 /// A steer goes to the running turn without stopping it and shows as
-/// pending; a turn that cannot take it hands it back to the queue.
+/// pending; a turn that cannot take it hands it back to the composer.
 #[test]
-fn a_steer_reaches_the_running_turn_and_a_refusal_queues_it() {
+fn a_steer_reaches_the_running_turn_and_a_refusal_returns_it() {
     use mycode_app::{BranchId, BridgeReply, SessionId};
 
     let (mut driver, root) = scratch_driver("steer");
@@ -552,7 +569,6 @@ fn a_steer_reaches_the_running_turn_and_a_refusal_queues_it() {
     driver.steer_send("also check b.rs", &mut out);
     assert!(driver.vm.sending, "the turn keeps running");
     assert_eq!(driver.vm.pending_steers, ["also check b.rs"]);
-    assert!(driver.vm.queued.is_empty());
     assert!(out.iter().any(|effect| matches!(
         effect,
         super::Effect::ComposerSet { text, .. } if text.is_empty()
@@ -566,15 +582,21 @@ fn a_steer_reaches_the_running_turn_and_a_refusal_queues_it() {
         &mut out,
     );
     assert!(driver.vm.pending_steers.is_empty());
-    assert_eq!(driver.vm.queued, ["also check b.rs"]);
+    assert!(
+        out.iter().any(|effect| matches!(
+            effect,
+            super::Effect::ComposerSet { text, .. } if text == "also check b.rs"
+        )),
+        "the refused steer is back in the composer"
+    );
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
 
 /// With no turn running there is nothing to steer: the keypress explains
-/// itself instead of sending or queueing the draft.
+/// itself instead of sending the draft.
 #[test]
-fn a_steer_with_no_turn_running_does_not_send_or_queue() {
+fn a_steer_with_no_turn_running_does_not_send() {
     use mycode_app::{BranchId, SessionId};
 
     let (mut driver, root) = scratch_driver("steer-idle");
@@ -585,7 +607,6 @@ fn a_steer_with_no_turn_running_does_not_send_or_queue() {
     driver.steer_send("start here", &mut out);
     assert!(!driver.vm.sending, "the draft did not start a turn");
     assert!(driver.vm.pending_steers.is_empty());
-    assert!(driver.vm.queued.is_empty(), "the draft did not queue");
     assert!(
         out.iter().any(|effect| matches!(
             effect,
@@ -600,10 +621,10 @@ fn a_steer_with_no_turn_running_does_not_send_or_queue() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Steers a chat off screen did not take wait in its parked queue instead of
+/// Steers a chat off screen did not take wait parked for it instead of
 /// being dropped with the event.
 #[test]
-fn steers_returned_to_a_chat_off_screen_wait_in_its_queue() {
+fn steers_returned_to_a_chat_off_screen_are_parked() {
     use mycode_app::{BranchId, BridgeEvent, SessionId};
 
     let (mut driver, root) = scratch_driver("steer-parked");
@@ -619,9 +640,12 @@ fn steers_returned_to_a_chat_off_screen_wait_in_its_queue() {
         },
         &mut out,
     );
-    assert!(driver.vm.queued.is_empty(), "not the open chat's queue");
+    assert!(
+        driver.vm.pending_steers.is_empty(),
+        "another chat's steer never shows here"
+    );
     assert_eq!(
-        driver.vm.parked_queues,
+        driver.vm.parked_steers,
         [(other, vec!["late steer".to_owned()])]
     );
     driver.shutdown();
@@ -636,8 +660,8 @@ fn code_attachment() -> mycode_app::Attachments {
     attachments
 }
 
-/// A busy turn cannot take attachments with a queued follow-up, so the
-/// submit hands them back instead of dropping them.
+/// A busy turn cannot take attachments with a steer, so the submit hands
+/// them back instead of dropping them.
 #[test]
 fn a_busy_turn_returns_attachments_to_the_composer() {
     use mycode_app::{BranchId, SessionId};
@@ -650,7 +674,10 @@ fn a_busy_turn_returns_attachments_to_the_composer() {
     let mut out = Vec::new();
     let returned = driver.submit_with("look", code_attachment(), &mut out);
     assert!(returned.is_some_and(|attachments| !attachments.is_empty()));
-    assert!(driver.vm.queued.is_empty(), "attachments do not queue");
+    assert!(
+        driver.vm.pending_steers.is_empty(),
+        "the text stayed in the composer with them"
+    );
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -29,7 +29,7 @@ impl FrontendDriver {
             }
             ReplyScope::Steer { session, text } => {
                 // The turn ended, or had not registered yet, before the
-                // steer arrived: it goes back to the queue, not away.
+                // steer arrived: it goes back to the composer, not away.
                 if matches!(reply, BridgeReply::Steered(Err(_))) {
                     self.return_steers(&session, vec![text], out);
                 }
@@ -116,6 +116,9 @@ impl FrontendDriver {
                         focus: false,
                     });
                     self.mention_query = None;
+                    // Steers this chat did not read while another one was on
+                    // screen come back now that its composer is here.
+                    self.unpark_steers(&session_id, out);
                 }
                 self.follow_session_project(&session_id, out);
                 self.dispatch(BridgeCommand::ListResources {
@@ -198,6 +201,9 @@ impl FrontendDriver {
                     out.push(Effect::SyncProxyField);
                 }
                 self.act(FrontendAction::SettingsLoaded(Box::new(state)), out);
+                // magpie's Library servers come from its own file; the
+                // settings document never carries them.
+                self.reload_mcp_library(out);
                 self.prompt_magpie_install(out);
                 self.toast_applied_update(out);
             }
@@ -306,8 +312,8 @@ impl FrontendDriver {
             // carries no state.
             BridgeReply::ChatCancelled(Ok(())) => {}
             // The core has no turn for this session, yet the composer still
-            // shows one running: settle it like a quiet cancel so Stop and
-            // the queue are not left stuck behind a turn that is gone.
+            // shows one running: settle it like a quiet cancel so Stop is not
+            // left stuck behind a turn that is gone.
             BridgeReply::ChatCancelled(Err(_)) => {
                 if self.vm.sending {
                     self.act(
@@ -322,7 +328,10 @@ impl FrontendDriver {
                     if let Some(session_id) = self.open_session_id() {
                         self.resync_after_turn(&session_id);
                     }
-                    self.pump_queued_send(out);
+                    // The stop has landed: a message held for it goes out.
+                    if let Some(held) = self.held_interrupt.take() {
+                        self.send_held_interrupt(held, out);
+                    }
                 }
             }
             BridgeReply::Steered(_) => {}

@@ -48,7 +48,7 @@ pub use self::reduce::{
     preferred_slash_index, reasoning_levels_for, reduce, selected_model_supports_reasoning,
     selected_reasoning_levels,
 };
-pub use self::state::{MAX_COMPOSER_CHARS, MAX_QUEUED_MESSAGES, WorkspaceState};
+pub use self::state::{MAX_COMPOSER_CHARS, WorkspaceState};
 pub use self::usage::{
     CacheAlert, ContextMeterParts, TurnStats, cache_alert_text, compact_count, context_meter_parts,
     context_remaining_percent, turn_cache_hit,

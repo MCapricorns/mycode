@@ -264,7 +264,7 @@ impl Workspace {
             && self.composer.read(cx).focus_handle(cx).is_focused(window)
         {
             // Enter is left to on_composer_event: accepting the mention here
-            // and again there ran a command and queued the raw draft.
+            // and again there ran a command on the raw draft.
             let index = moved(
                 self.mention_highlight(),
                 self.vm()

@@ -444,6 +444,24 @@ fn same_named_tools_on_two_servers_both_stay_reachable() {
     );
 }
 
+/// The note names every connected server: a deferred tool is only findable
+/// when the model knows which servers exist and how to reach them.
+#[test]
+fn the_prompt_note_names_connected_servers() {
+    let tools = vec![
+        catalog_tool("anysearch", "search", "Search the web.", false),
+        catalog_tool("github", "create_issue", "Open a GitHub issue.", false),
+        catalog_tool("github", "list_pulls", "List pull requests.", false),
+    ];
+    let catalog = McpCatalog::from_tools_with_warning(tools, None, &|_| false).unwrap();
+    let note = catalog.prompt_note();
+    assert!(
+        note.contains("Connected MCP servers: anysearch, github."),
+        "{note}"
+    );
+    assert!(note.contains("search_tool"), "{note}");
+}
+
 #[test]
 fn a_direct_tool_named_like_a_builtin_is_served_by_search_tool() {
     let tools = vec![

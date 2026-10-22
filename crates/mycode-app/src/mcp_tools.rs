@@ -521,12 +521,29 @@ impl McpCatalog {
     }
 
     /// Prompt note that does not preload every deferred tool name.
+    ///
+    /// Every list comes from what connected for this turn, so a server
+    /// magpie's Library adds later reaches the prompt without a rebuild.
     pub(crate) fn prompt_note(&self) -> String {
         let mut note = String::new();
         if let Some(warning) = &self.warning {
             note.push_str("Project MCP config: ");
             note.push_str(warning);
             note.push('\n');
+        }
+        // Name the servers: a deferred tool is only findable if the model
+        // knows its server is connected and how to reach it.
+        let mut servers: Vec<&str> = self
+            .by_name
+            .values()
+            .map(|tool| tool.server_id.as_str())
+            .collect();
+        servers.sort_unstable();
+        servers.dedup();
+        if !servers.is_empty() {
+            note.push_str("Connected MCP servers: ");
+            note.push_str(&servers.join(", "));
+            note.push_str(".\n");
         }
         if !self.direct.is_empty() {
             note.push_str("Direct MCP tools: ");

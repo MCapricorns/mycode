@@ -331,23 +331,14 @@ impl Workspace {
                     if buffer.is_empty() {
                         continue 'outer;
                     }
-                    let rush = this
-                        .update(cx, |workspace, _| !workspace.vm().queued.is_empty())
-                        .unwrap_or(false);
-                    if !rush
-                        && buffer.front().is_some_and(stream::is_stream_delta)
+                    if buffer.front().is_some_and(stream::is_stream_delta)
                         && let Some(wait) = not_before.checked_duration_since(Instant::now())
                         && !wait.is_zero()
                     {
                         cx.background_executor().timer(wait).await;
                         continue;
                     }
-                    let (slice, rest) = if rush {
-                        let pending = std::mem::take(&mut buffer);
-                        (pending.into_iter().collect(), VecDeque::new())
-                    } else {
-                        stream::split_stream_frame(std::mem::take(&mut buffer))
-                    };
+                    let (slice, rest) = stream::split_stream_frame(std::mem::take(&mut buffer));
                     buffer = rest;
                     let mut streamed = false;
                     for event in slice {
@@ -359,10 +350,10 @@ impl Workspace {
                             return;
                         }
                     }
-                    if streamed && !rush {
+                    if streamed {
                         not_before = Instant::now() + stream::STREAM_FRAME;
                     }
-                    if !buffer.is_empty() && !rush {
+                    if !buffer.is_empty() {
                         let now = Instant::now();
                         let wait = not_before
                             .checked_duration_since(now)
@@ -509,8 +500,8 @@ impl Workspace {
                 if self.accept_open_mention(window, cx) {
                     return;
                 }
-                // Ctrl+Enter on a busy turn interrupts and sends right away;
-                // a plain Enter queues the follow-up inside `submit`.
+                // Ctrl+Enter on a busy turn stops it and sends right after;
+                // a plain Enter steers it into the running turn (`submit`).
                 let sending = self.vm().sending || self.vm().compacting;
                 if *secondary && sending {
                     if !self.attachments.is_empty() {
@@ -825,11 +816,6 @@ impl Workspace {
 
     pub(crate) fn vm(&self) -> &WorkspaceState {
         self.driver.vm()
-    }
-
-    /// The owned home, for readers of magpie's Library files.
-    pub(crate) fn home(&self) -> &HomeLayout {
-        self.driver.home()
     }
 
     pub(crate) fn focus_handle(&self) -> &gpui_kit::FocusHandle {

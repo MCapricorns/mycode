@@ -1,8 +1,8 @@
-//! Driving one model turn: compaction, the chat turn itself, and the send
-//! queue that feeds it.
+//! Driving one model turn: compaction, the chat turn itself, and the steer
+//! and interrupt paths that reach a running turn.
 use mycode_app::{BranchId, BridgeCommand, SessionId};
 
-use super::{Effect, FrontendDriver, ToastKind};
+use super::{Effect, FrontendDriver, HeldInterrupt, ToastKind};
 use crate::view_model::{EntryKind, FrontendAction};
 
 fn failed_start(message: String) -> FrontendAction {
@@ -215,9 +215,9 @@ impl FrontendDriver {
         Some((session, first.text.to_string()))
     }
 
-    /// The composer's submit path: welcome-desk start, queue while a turn
-    /// runs, a normal send, or an explicit send of the held queue on an
-    /// empty draft. `draft` is the composer text the frontend just read.
+    /// The composer's submit path: welcome-desk start, a steer into the
+    /// running turn, or a normal send. `draft` is the composer text the
+    /// frontend just read.
     pub fn submit(&mut self, draft: &str, out: &mut Vec<Effect>) {
         let _ = self.submit_with(draft, mycode_app::Attachments::default(), out);
     }
@@ -225,17 +225,17 @@ impl FrontendDriver {
     /// [`Self::submit`] with images and code files picked in the composer.
     ///
     /// Returns the attachments when the message did not go out, so the
-    /// frontend can put them back instead of losing them. A busy turn queues
-    /// text only: attachments cannot ride the follow-up queue, so the submit
-    /// waits for the turn to end instead of silently dropping them.
+    /// frontend can put them back instead of losing them. A busy turn takes
+    /// text only: attachments cannot ride a steer, so they wait in the
+    /// composer for the turn to end instead of being dropped.
     pub fn submit_with(
         &mut self,
         draft: &str,
         attachments: mycode_app::Attachments,
         out: &mut Vec<Effect>,
     ) -> Option<mycode_app::Attachments> {
-        // The widget's text is the source of truth: mirror it so mentions,
-        // the queue, and a later recall all work on what is on screen.
+        // The widget's text is the source of truth: mirror it so mentions
+        // and a later restore work on what is on screen.
         if draft != self.vm.composer_draft {
             self.act(FrontendAction::ComposerChanged(draft.to_owned()), out);
         }
@@ -246,8 +246,8 @@ impl FrontendDriver {
             return self.submit_from_welcome(draft, attachments, out);
         }
         if self.vm.sending || self.vm.compacting {
-            // A submit on a busy turn or compact queues the follow-up;
-            // the interrupt path is `interrupt_send`.
+            // A submit on a busy turn steers the running one; the stop and
+            // send path is `interrupt_send`.
             if !attachments.is_empty() {
                 self.toast(
                     crate::i18n::t(
@@ -259,70 +259,120 @@ impl FrontendDriver {
                 );
                 return Some(attachments);
             }
-            if !draft.trim().is_empty() {
-                self.enqueue_follow_up(draft.to_owned(), out);
-            }
+            self.steer_send(draft, out);
             return None;
         }
         if !draft.trim().is_empty() || !attachments.is_empty() {
             let sent = self.send_text(draft.to_owned(), true, attachments.clone(), out);
             return (!sent).then_some(attachments);
         }
-        // Send with an empty composer is an explicit send of the queue,
-        // so it also releases a queue held by a stop.
-        self.queue_hold_on_return = false;
-        self.act(FrontendAction::QueuePaused(false), out);
-        self.pump_queued_send(out);
         None
     }
 
     /// Interrupt-submit (Ctrl+Enter, Cmd+Enter on the macOS desktop): stop
-    /// the running turn and send this draft right away. With an empty draft
-    /// it behaves like the queue's interrupt — the held queue runs after the
-    /// cancel lands.
+    /// the running turn and send this draft right after it. With an empty
+    /// draft it is a plain stop.
+    ///
+    /// The draft leaves the composer and waits in
+    /// [`FrontendDriver::held_interrupt`] until the turn is gone: a send
+    /// dispatched beside the cancel can hand that cancel the turn it just
+    /// started, which is how a message went out while the model stopped.
     ///
     /// While the turn waits on an automatic compaction summary, the stop
     /// waits for the summary to end. Stopping it threw the summary away,
     /// and the send that followed summarized the same history again.
     pub fn interrupt_send(&mut self, draft: &str, out: &mut Vec<Effect>) {
-        if draft.trim().is_empty() {
-            self.queue_hold_on_return = false;
-            self.act(FrontendAction::QueuePaused(false), out);
-            if self.vm.sending || self.vm.compacting {
-                self.interrupt_turn(out);
-            } else {
-                self.pump_queued_send(out);
+        let text = draft.to_owned();
+        if !self.vm.sending && !self.vm.compacting {
+            // Nothing is running to interrupt: the draft is an ordinary send.
+            if !text.trim().is_empty() {
+                let _ = self.send_text(text, true, mycode_app::Attachments::default(), out);
             }
             return;
         }
-        let before = self.vm.queued.len();
-        self.enqueue_follow_up(draft.to_owned(), out);
-        // A capped queue dropped the draft: interrupt anyway so the held
-        // queue runs instead of leaving the keypress a no-op.
-        let index = if self.vm.queued.len() > before {
-            self.vm.queued.len() - 1
-        } else {
-            0
-        };
-        self.interrupt_queued(index, out);
+        let send = !text.trim().is_empty();
+        if send {
+            out.push(Effect::ComposerSet {
+                text: String::new(),
+                focus: false,
+            });
+            self.act(FrontendAction::ComposerChanged(String::new()), out);
+            self.toast(
+                crate::i18n::t(
+                    "Stopping this turn. The message goes out right after.",
+                    "正在停止本轮，紧接着发送这条消息。",
+                ),
+                ToastKind::Info,
+                out,
+            );
+        }
+        self.stop_turn_with(send.then_some(text), out);
     }
 
-    /// Steer-submit (Ctrl+G, Cmd+G on the macOS desktop): hands this draft to
-    /// the running turn without stopping it. The model reads it before its
-    /// next step; until the ledger has it, it shows as pending. A turn that
-    /// ends before reading it hands it back to the queue. With no turn
-    /// running it does not fall back to send: a submit here could queue the
-    /// draft behind a compaction, which reads as "Ctrl+G queued it".
+    /// Stops the running turn for an interrupt, or once its automatic
+    /// compaction ends when it is summarizing now. `send` waits in
+    /// [`FrontendDriver::held_interrupt`] until the turn is gone.
+    fn stop_turn_with(&mut self, send: Option<String>, out: &mut Vec<Effect>) {
+        let Some(session_id) = self.open_session_id() else {
+            return;
+        };
+        let held = HeldInterrupt { session_id, send };
+        if !self.vm.auto_compacting {
+            self.cancel_turn(out);
+        }
+        self.held_interrupt = Some(held);
+    }
+
+    /// Sends the draft held by an interrupt now that its turn is gone.
+    pub(crate) fn send_held_interrupt(
+        &mut self,
+        held: HeldInterrupt,
+        out: &mut Vec<Effect>,
+    ) {
+        if let Some(text) = held.send {
+            // The composer was cleared when the interrupt was armed; a
+            // draft typed since must survive the send.
+            let _ = self.send_text(text, false, mycode_app::Attachments::default(), out);
+        }
+    }
+
+    /// Hands a held draft back when the turn ended on its own: nothing was
+    /// interrupted, so the message was never sent.
+    pub(crate) fn restore_held_interrupt(
+        &mut self,
+        held: HeldInterrupt,
+        out: &mut Vec<Effect>,
+    ) {
+        if let Some(text) = held.send {
+            self.restore_above_draft(text, out);
+        }
+    }
+
+    /// Steer-submit (Enter while a turn runs, Ctrl+G, Cmd+G on the macOS
+    /// desktop): hands this draft to the running turn without stopping it.
+    /// The model reads it before its next step; until the ledger has it, it
+    /// shows as pending. A turn that ends before reading it hands it back to
+    /// the composer.
+    ///
+    /// With no turn running it does not fall back to send: the draft would
+    /// race a `/compact`, which reads as "the key queued it".
     pub fn steer_send(&mut self, draft: &str, out: &mut Vec<Effect>) {
         let session_id = self.open_session_id();
         let Some(session_id) = session_id.filter(|_| self.vm.sending) else {
             if !draft.trim().is_empty() {
                 out.push(Effect::Toast {
                     kind: ToastKind::Warning,
-                    text: crate::i18n::t(
-                        "Nothing is running to steer. Press Enter to send.",
-                        "没有正在运行的任务可引导。按回车发送。",
-                    )
+                    text: if self.vm.compacting {
+                        crate::i18n::t(
+                            "Compacting context. The message waits in the composer.",
+                            "正在压缩上下文，消息先留在输入框里。",
+                        )
+                    } else {
+                        crate::i18n::t(
+                            "Nothing is running to steer. Press Enter to send.",
+                            "没有正在运行的任务可引导。按回车发送。",
+                        )
+                    }
                     .to_owned(),
                 });
             }
@@ -340,14 +390,16 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::Steer { session_id, text });
     }
 
-    /// Steers a turn did not take go back to their chat's queue: the one on
-    /// screen, or the one parked while another chat is open.
+    /// Steers a turn did not take go back to the composer, above the draft
+    /// the user may be typing. A chat that is not on screen keeps them
+    /// parked for its next open.
     pub(crate) fn return_steers(
         &mut self,
         session_id: &str,
         texts: Vec<String>,
         out: &mut Vec<Effect>,
     ) {
+        self.act(FrontendAction::SteersReturned(texts.clone()), out);
         if self.open_session_id().as_deref() != Some(session_id) {
             self.act(
                 FrontendAction::SteersParked {
@@ -358,12 +410,22 @@ impl FrontendDriver {
             );
             return;
         }
-        self.act(FrontendAction::SteersReturned(texts), out);
-        // Steers handed back after a user stop join a held queue.
-        if self.queue_hold_on_return {
-            self.act(FrontendAction::QueuePaused(true), out);
+        let texts: Vec<String> = texts
+            .into_iter()
+            .filter(|text| !text.trim().is_empty())
+            .collect();
+        if texts.is_empty() {
+            return;
         }
-        self.pump_queued_send(out);
+        self.restore_above_draft(texts.join("\n\n"), out);
+        self.toast(
+            crate::i18n::t(
+                "The turn ended before reading this; it is back in the composer.",
+                "本轮在读到之前就结束了，这条已放回输入框。",
+            ),
+            ToastKind::Info,
+            out,
+        );
     }
 
     /// Enter or send on the welcome desk starts a task with that text.
@@ -416,30 +478,6 @@ impl FrontendDriver {
         }
     }
 
-    /// Removes one queued follow-up.
-    pub fn remove_queued(&mut self, index: usize, out: &mut Vec<Effect>) {
-        self.act(FrontendAction::QueuedMessageRemoved(index), out);
-    }
-
-    /// Takes queued follow-ups back into the composer so they can be edited
-    /// or dropped: one item, or the whole queue when `index` is `None`.
-    /// Recalled text goes above any draft already in the composer.
-    pub fn recall_queued(&mut self, index: Option<usize>, out: &mut Vec<Effect>) {
-        let recalled: Vec<String> = match index {
-            Some(index) => self.vm.queued.get(index).cloned().into_iter().collect(),
-            None => self.vm.queued.clone(),
-        };
-        if recalled.is_empty() {
-            return;
-        }
-        let removed = match index {
-            Some(index) => FrontendAction::QueuedMessageRemoved(index),
-            None => FrontendAction::QueueCleared,
-        };
-        self.act(removed, out);
-        self.restore_above_draft(recalled.join("\n\n"), out);
-    }
-
     /// Puts `text` back in the composer, above any draft already there.
     pub(crate) fn restore_above_draft(&mut self, mut text: String, out: &mut Vec<Effect>) {
         let draft = self.vm.composer_draft.clone();
@@ -454,34 +492,40 @@ impl FrontendDriver {
         self.act(FrontendAction::ComposerChanged(text), out);
     }
 
-    /// Sends a held queue now. While a turn still runs, the queue is only
-    /// released and starts when that turn ends.
-    pub fn resume_queued(&mut self, out: &mut Vec<Effect>) {
-        self.queue_hold_on_return = false;
-        self.act(FrontendAction::QueuePaused(false), out);
-        self.pump_queued_send(out);
-    }
-
-    /// Stops the in-flight turn and sends one queued follow-up immediately.
-    pub fn interrupt_queued(&mut self, index: usize, out: &mut Vec<Effect>) {
-        self.queue_hold_on_return = false;
-        self.act(FrontendAction::QueuedMessagePromoted(index), out);
-        self.act(FrontendAction::QueuePaused(false), out);
-        if self.vm.sending || self.vm.compacting {
-            self.interrupt_turn(out);
+    /// Steers a chat did not read while another chat was on screen come back
+    /// to the composer now that it opens. A switch just cleared the field,
+    /// so the parked text lands there alone.
+    pub(crate) fn unpark_steers(&mut self, session_id: &str, out: &mut Vec<Effect>) {
+        let Some(index) = self
+            .vm
+            .parked_steers
+            .iter()
+            .position(|(parked, _)| parked == session_id)
+        else {
+            return;
+        };
+        let (_, texts) = self.vm.parked_steers.remove(index);
+        let text = texts
+            .into_iter()
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if text.is_empty() {
             return;
         }
-        self.pump_queued_send(out);
-    }
-
-    /// Stops the running turn for an interrupt, or once its automatic
-    /// compaction ends when it is summarizing now.
-    fn interrupt_turn(&mut self, out: &mut Vec<Effect>) {
-        if self.vm.auto_compacting {
-            self.interrupt_after_compaction = self.open_session_id();
-            return;
-        }
-        self.cancel_turn(out);
+        out.push(Effect::ComposerSet {
+            text: text.clone(),
+            focus: false,
+        });
+        self.act(FrontendAction::ComposerChanged(text), out);
+        self.toast(
+            crate::i18n::t(
+                "This chat could not take the message; it is back in the composer.",
+                "这个消息没能送进那个对话，内容已放回输入框。",
+            ),
+            ToastKind::Info,
+            out,
+        );
     }
 
     /// Stops one running subagent. The parent turn and the other children stay.
@@ -511,16 +555,11 @@ impl FrontendDriver {
     }
 
     /// Aborts the in-flight turn; its terminal event resets the sending state.
-    ///
-    /// A plain stop holds the queue: the follow-ups stay listed, and steers
-    /// the turn hands back join them, but nothing is sent until the user
-    /// sends or recalls them.
+    /// Steers the turn never read come back to the composer.
     pub fn cancel_chat(&mut self, out: &mut Vec<Effect>) {
         if !self.vm.sending && !self.vm.compacting {
             return;
         }
-        self.act(FrontendAction::QueuePaused(true), out);
-        self.queue_hold_on_return = true;
         self.cancel_turn(out);
     }
 
@@ -535,36 +574,6 @@ impl FrontendDriver {
             session_id: conversation.session_id.clone(),
         });
         let _ = out;
-    }
-
-    /// Enqueues a follow-up while a turn is running; the composer stays free
-    /// for the next draft. The queue is capped so a stuck turn cannot grow
-    /// without bound.
-    pub(crate) fn enqueue_follow_up(&mut self, draft: String, out: &mut Vec<Effect>) {
-        if self.vm.queued.len() >= crate::view_model::MAX_QUEUED_MESSAGES {
-            return;
-        }
-        self.act(FrontendAction::MessageQueued(draft), out);
-        out.push(Effect::ComposerSet {
-            text: String::new(),
-            focus: false,
-        });
-    }
-
-    /// Starts the next queued follow-up once the in-flight turn is idle.
-    /// Does not wipe the composer: the user may already be typing another
-    /// message behind the queue.
-    pub(crate) fn pump_queued_send(&mut self, out: &mut Vec<Effect>) {
-        if self.vm.sending
-            || self.vm.compacting
-            || self.vm.queued.is_empty()
-            || self.vm.queue_paused
-        {
-            return;
-        }
-        let draft = self.vm.queued[0].clone();
-        self.act(FrontendAction::QueuedMessageTaken, out);
-        let _ = self.send_text(draft, false, mycode_app::Attachments::default(), out);
     }
 
     /// Hands welcome attachments back when the start that held them failed.
@@ -628,7 +637,6 @@ impl FrontendDriver {
             self.pending_send_attachments
                 .insert(session.to_string(), attachments.clone());
         }
-        self.queue_hold_on_return = false;
         self.act(FrontendAction::TurnArmed, out);
         if clear_composer {
             self.vm.composer_draft.clear();

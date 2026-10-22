@@ -382,10 +382,6 @@ fn chat_failed_head_updates_conversation_without_clearing_context() {
 fn a_session_created_mid_turn_does_not_inherit_the_running_turn() {
     let mut state = open(Vec::new(), None);
     reduce(&mut state, FrontendAction::TurnArmed);
-    reduce(
-        &mut state,
-        FrontendAction::MessageQueued("follow up".to_owned()),
-    );
     state.pending_steers.push("steer".to_owned());
     assert!(state.sending);
     reduce(
@@ -403,12 +399,6 @@ fn a_session_created_mid_turn_does_not_inherit_the_running_turn() {
     // The old turn's events no longer reach this view, so nothing would
     // ever clear these for the fresh chat.
     assert!(!state.sending);
-    assert!(state.queued.is_empty());
-    assert_eq!(
-        state.parked_queues,
-        [("ses".to_owned(), vec!["follow up".to_owned()])],
-        "the previous chat keeps its queue"
-    );
     assert!(state.pending_steers.is_empty());
     assert!(!state.history_loading);
     assert_eq!(
@@ -435,54 +425,43 @@ fn reopened(session: &str, running: bool) -> ActiveConversation {
     }
 }
 
-/// Follow-ups queued behind a turn stay with their chat, even when another
-/// chat took the screen, and come back when it opens.
+/// Steers a chat off screen did not read stay parked with it, and a deleted
+/// chat's parked steers go with it.
 #[test]
-fn queued_follow_ups_come_back_with_their_chat() {
+fn parked_steers_stay_with_their_chat() {
     let mut state = open(Vec::new(), None);
-    reduce(&mut state, FrontendAction::TurnArmed);
     reduce(
         &mut state,
-        FrontendAction::MessageQueued("follow up".to_owned()),
+        FrontendAction::ConversationParked,
     );
     reduce(
         &mut state,
-        FrontendAction::ConversationOpened(reopened("other", false)),
+        FrontendAction::SteersParked {
+            session_id: "ses".to_owned(),
+            texts: vec!["late steer".to_owned()],
+        },
     );
     assert!(
-        state.queued.is_empty(),
-        "another chat never sends this queue"
+        state.pending_steers.is_empty(),
+        "a parked steer is not on screen"
     );
-    // Back while the turn still runs: the queue starts when it ends.
+    assert_eq!(
+        state.parked_steers,
+        [("ses".to_owned(), vec!["late steer".to_owned()])]
+    );
     reduce(
         &mut state,
-        FrontendAction::ConversationOpened(reopened("ses", true)),
+        FrontendAction::SteersParked {
+            session_id: "ses".to_owned(),
+            texts: vec!["after".to_owned()],
+        },
     );
-    assert_eq!(state.queued, ["follow up"]);
-    assert!(!state.queue_paused);
-    // Away and back after the turn ended: the queue waits for a send.
-    reduce(&mut state, FrontendAction::ConversationParked);
-    assert!(state.queued.is_empty());
-    reduce(
-        &mut state,
-        FrontendAction::ConversationOpened(reopened("ses", false)),
-    );
-    assert_eq!(state.queued, ["follow up"]);
-    assert!(
-        state.queue_paused,
-        "a queue whose turn ended away waits for an explicit send"
-    );
-    // A deleted chat's parked queue goes with it.
-    reduce(
-        &mut state,
-        FrontendAction::ConversationOpened(reopened("other", false)),
-    );
-    assert_eq!(state.parked_queues.len(), 1);
+    assert_eq!(state.parked_steers[0].1, ["late steer", "after"]);
     reduce(
         &mut state,
         FrontendAction::SessionBindingsForgotten("ses".to_owned()),
     );
-    assert!(state.parked_queues.is_empty());
+    assert!(state.parked_steers.is_empty());
 }
 
 /// A reopen of the chat on screen that lands just after a send armed the
@@ -743,10 +722,9 @@ fn compacting_locks_the_composer_and_finish_advances_the_head() {
     };
     reduce(&mut state, FrontendAction::CompactArmed);
     assert!(state.compacting);
-    // A draft typed while the card is up is still in the composer, and a
-    // queued message waits — nothing is dropped mid-compact.
+    // A draft typed while the card is up is still in the composer: nothing
+    // is dropped mid-compact.
     state.composer_draft = "follow up".to_owned();
-    state.queued.push("queued".to_owned());
     reduce(
         &mut state,
         FrontendAction::CompactFinished {
@@ -757,7 +735,6 @@ fn compacting_locks_the_composer_and_finish_advances_the_head() {
     assert!(!state.compacting);
     assert_eq!(state.active.as_ref().expect("open").head, "evt-sum");
     assert_eq!(state.composer_draft, "follow up");
-    assert_eq!(state.queued.len(), 1);
 }
 
 #[test]

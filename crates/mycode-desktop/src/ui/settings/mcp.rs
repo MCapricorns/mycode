@@ -84,7 +84,10 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
     let theme = cx.theme();
     let mcp_row_elements: Vec<AnyElement> =
         mcp_rows.into_iter().map(|row| mcp_row(row, cx)).collect();
-    let magpie_servers = mycode_frontend::global_mcp_servers(workspace.home()).unwrap_or_default();
+    // magpie's own file is read into the view model, so this page, the nav
+    // count, and the composer's `/` menu show one catalog.
+    let library_error = workspace.vm().mcp_library_error.clone();
+    let magpie_servers = workspace.vm().mcp_library.clone();
     let magpie_rows: Vec<AnyElement> = magpie_servers
         .iter()
         .map(|server| {
@@ -200,7 +203,14 @@ fn render_mcp_list(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> An
                  同 id 的自有服务器优先。",
             )),
             theme,
-            vec![if magpie_rows.is_empty() {
+            vec![if let Some(error) = library_error {
+                div()
+                    .id("mcp-magpie-error")
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(error)
+                    .into_any_element()
+            } else if magpie_rows.is_empty() {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
