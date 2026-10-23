@@ -60,16 +60,9 @@ pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<Resou
         workspace_root.join(".agents").join("AGENTS.md"),
         false,
     );
+    // magpie's Library writes the home-level instructions file; the user
+    // home's own `.agents` tree is not a source.
     push("AGENTS.md", home.root().join("AGENTS.md"), true);
-    // The OS user home, not the parent of the MYCode root: with
-    // `MYCODE_HOME` relocated, that parent is an arbitrary directory.
-    if let Some(user_home) = os_user_home() {
-        push(
-            "AGENTS.md",
-            user_home.join(".agents").join("AGENTS.md"),
-            true,
-        );
-    }
     files
 }
 
@@ -96,22 +89,12 @@ pub struct SkillFile {
     pub global: bool,
 }
 
-/// Operating-system user home directory for global `.agents` discovery.
-#[must_use]
-pub fn os_user_home() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-}
-
 /// Host-global skill catalog roots for read-only tool anchoring.
 ///
-/// The workspace `.agents` tree sits inside the session cwd and needs no
-/// extra anchor; the user-home tree and magpie's Library folder are
-/// returned. Missing directories are dropped, so a machine without global
-/// skills anchors nothing.
+/// Skills live only in magpie's Library folder (`<mycode_home>/skills`), so a
+/// machine without a Library anchors nothing.
 #[must_use]
-pub fn skill_read_roots(user_home: Option<&Path>, mycode_home: Option<&Path>) -> Vec<PathBuf> {
+pub fn skill_read_roots(mycode_home: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = mycode_home {
         let skills = home.join("skills");
@@ -119,43 +102,23 @@ pub fn skill_read_roots(user_home: Option<&Path>, mycode_home: Option<&Path>) ->
             roots.push(skills);
         }
     }
-    if let Some(home) = user_home {
-        let agents = home.join(".agents");
-        roots.extend(
-            [agents.clone(), agents.join("skills")]
-                .into_iter()
-                .filter(|root| root.is_dir()),
-        );
-    }
     roots
 }
 
-/// Discovers `/` skills from the workspace, magpie's Library folder, and
-/// the user-global `.agents` tree.
+/// Discovers `/` skills from magpie's Library folder.
 ///
-/// Directory entries are sorted by path before they are read, duplicate slugs
-/// keep the first hit (workspace before magpie before global), and the result
-/// is sorted by slug. There is no discovery cap; callers truncate to
-/// [`MAX_SKILLS`].
+/// magpie installs skills as `<name>/SKILL.md` folders under
+/// `<mycode_home>/skills`. Entries are sorted by path before they are read,
+/// duplicate slugs keep the first hit, and the result is sorted by slug.
+/// There is no discovery cap; callers truncate to [`MAX_SKILLS`].
 #[must_use]
-pub fn discover_skills(
-    workspace_root: &Path,
-    user_home: Option<&Path>,
-    mycode_home: Option<&Path>,
-) -> Vec<SkillFile> {
+pub fn discover_skills(mycode_home: Option<&Path>) -> Vec<SkillFile> {
     let mut skills = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    let mut push_root = |root: &Path, global: bool| {
-        collect_skills(root, &mut skills, &mut seen, global);
-        collect_skills(&root.join("skills"), &mut skills, &mut seen, global);
-    };
-    push_root(&workspace_root.join(".agents"), false);
     if let Some(mycode_home) = mycode_home {
-        // magpie's Library installs skills as `<name>/SKILL.md` folders.
-        push_root(&mycode_home.join("skills"), true);
-    }
-    if let Some(user_home) = user_home {
-        push_root(&user_home.join(".agents"), true);
+        let root = mycode_home.join("skills");
+        collect_skills(&root, &mut skills, &mut seen, true);
+        collect_skills(&root.join("skills"), &mut skills, &mut seen, true);
     }
     skills.sort_by(|left, right| {
         left.slug
@@ -485,83 +448,61 @@ mod tests {
     }
 
     #[test]
-    fn read_roots_list_global_tree_and_drop_missing() {
+    fn read_roots_list_the_library_and_drop_missing() {
+        assert!(super::skill_read_roots(None).is_empty());
         let home = temp("roots");
-        assert!(super::skill_read_roots(None, None).is_empty());
-        assert!(
-            super::skill_read_roots(Some(&home.0), None).is_empty(),
-            "missing .agents anchors nothing"
-        );
-        fs::create_dir_all(home.0.join(".agents").join("skills")).unwrap();
-        let roots = super::skill_read_roots(Some(&home.0), None);
-        assert_eq!(
-            roots,
-            vec![
-                home.0.join(".agents"),
-                home.0.join(".agents").join("skills")
-            ]
-        );
+        assert!(super::skill_read_roots(Some(&home.0)).is_empty());
+        fs::create_dir_all(home.0.join("skills")).unwrap();
+        let roots = super::skill_read_roots(Some(&home.0));
+        assert_eq!(roots, vec![home.0.join("skills")]);
     }
 
     #[test]
     fn magpie_library_skills_are_discovered_and_anchored() {
-        let workspace = temp("magpie-workspace");
         let home = temp("magpie-home");
         skill(&home.0.join("skills"), "magpie-skill", "Magpie Skill");
-        let found = discover_skills(&workspace.0, None, Some(&home.0));
+        let found = discover_skills(Some(&home.0));
         assert_eq!(found.len(), 1);
         assert!(found[0].global);
         assert_eq!(
-            super::skill_read_roots(None, Some(&home.0)),
+            super::skill_read_roots(Some(&home.0)),
             vec![home.0.join("skills")]
         );
+        assert!(discover_skills(None).is_empty());
     }
 
     #[test]
     fn a_flat_skill_file_matches_its_extension_in_any_case() {
-        let workspace = temp("flat-case");
-        let skills = workspace.0.join(".agents").join("skills");
+        let home = temp("flat-case");
+        let skills = home.0.join("skills");
         fs::create_dir_all(&skills).unwrap();
         fs::write(skills.join("upper.MD"), "# upper\n").unwrap();
         fs::write(skills.join("lower.md"), "# lower\n").unwrap();
         fs::write(skills.join("notes.txt"), "not a skill\n").unwrap();
-        let found = discover_skills(&workspace.0, None, None);
+        let found = discover_skills(Some(&home.0));
         let slugs: Vec<_> = found.iter().map(|skill| skill.slug.as_str()).collect();
         assert_eq!(slugs, ["lower", "upper"]);
     }
 
     #[test]
-    fn skills_sort_by_slug_and_workspace_wins_duplicates() {
-        let workspace = temp("workspace");
-        let user = temp("user");
+    fn skills_sort_by_slug() {
+        let home = temp("sort");
         for slug in ["zebra", "alpha", "middle"] {
-            skill(&workspace.0.join(".agents"), slug, slug);
+            skill(&home.0.join("skills"), slug, slug);
         }
-        skill(&user.0.join(".agents"), "alpha", "global alpha");
-        skill(&user.0.join(".agents"), "only-global", "global");
-        let first = discover_skills(&workspace.0, Some(&user.0), None);
-        let second = discover_skills(&workspace.0, Some(&user.0), None);
+        let first = discover_skills(Some(&home.0));
+        let second = discover_skills(Some(&home.0));
         assert_eq!(first, second);
         let slugs: Vec<_> = first.iter().map(|skill| skill.slug.as_str()).collect();
-        assert_eq!(slugs, ["alpha", "middle", "only-global", "zebra"]);
-        assert!(!first[0].global);
-        assert_eq!(first[0].title, "alpha");
-        assert!(
-            first
-                .iter()
-                .any(|skill| skill.slug == "only-global" && skill.global)
-        );
+        assert_eq!(slugs, ["alpha", "middle", "zebra"]);
+        assert!(first[0].global);
     }
 
     #[test]
     fn catalog_points_skills_at_a_read_by_path() {
-        let workspace = temp("catalog");
-        skill(
-            &workspace.0.join(".agents").join("skills"),
-            "review",
-            "Review",
-        );
-        let found = discover_skills(&workspace.0, None, None);
+        let home = temp("catalog");
+        skill(&home.0.join("skills"), "review", "Review");
+        let found = discover_skills(Some(&home.0));
         let catalog = super::render_skill_catalog(&found).expect("catalog");
         assert!(catalog.contains("/review"), "{catalog}");
         assert!(
@@ -573,14 +514,14 @@ mod tests {
     #[test]
     fn frontmatter_description_reaches_the_catalog() {
         let root = temp("frontmatter");
-        let dir = root.0.join(".agents").join("skills").join("pdf");
+        let dir = root.0.join("skills").join("pdf");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join("SKILL.md"),
             "---\nname: pdf-tools\ndescription: >\n  Fill and merge PDF forms.\n  Use for any .pdf task.\nlicense: MIT\n---\n\nSteps.\n",
         )
         .unwrap();
-        let skills = discover_skills(&root.0, None, None);
+        let skills = discover_skills(Some(&root.0));
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].title, "pdf-tools");
         assert_eq!(
@@ -600,7 +541,7 @@ mod tests {
     #[test]
     fn skill_metadata_is_cached_until_the_file_changes() {
         let root = temp("meta-cache");
-        let dir = root.0.join(".agents").join("skills").join("pdf");
+        let dir = root.0.join("skills").join("pdf");
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("SKILL.md");
         // No `# ` heading: the frontmatter name is the title.
@@ -609,12 +550,12 @@ mod tests {
             "---\nname: pdf-tools\ndescription: Fill and merge forms.\n---\n\nSteps.\n",
         )
         .unwrap();
-        let first = discover_skills(&root.0, None, None);
+        let first = discover_skills(Some(&root.0));
         assert_eq!(
             (first[0].title.as_str(), first[0].description.as_str()),
             ("pdf-tools", "Fill and merge forms.")
         );
-        let second = discover_skills(&root.0, None, None);
+        let second = discover_skills(Some(&root.0));
         assert_eq!(first, second, "an unchanged file serves the same summary");
         // A rewrite with a different length invalidates the cache entry
         // through `len`, whatever the filesystem's mtime granularity did
@@ -624,7 +565,7 @@ mod tests {
             "---\nname: pdf-tools-v2\ndescription: Fill, merge, and stamp form fields.\n---\n\nSteps.\n",
         )
         .unwrap();
-        let third = discover_skills(&root.0, None, None);
+        let third = discover_skills(Some(&root.0));
         assert_eq!(
             (third[0].title.as_str(), third[0].description.as_str()),
             ("pdf-tools-v2", "Fill, merge, and stamp form fields.")
@@ -642,7 +583,7 @@ mod tests {
         use std::os::windows::fs::OpenOptionsExt as _;
 
         let root = temp("meta-locked");
-        let dir = root.0.join(".agents").join("skills").join("locked");
+        let dir = root.0.join("skills").join("locked");
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("SKILL.md");
         fs::write(
@@ -655,7 +596,7 @@ mod tests {
             .share_mode(0)
             .open(&path)
             .expect("exclusive handle");
-        let found = discover_skills(&root.0, None, None);
+        let found = discover_skills(Some(&root.0));
         assert_eq!(found.len(), 1);
         assert_eq!(
             (found[0].title.as_str(), found[0].description.as_str()),
@@ -663,7 +604,7 @@ mod tests {
             "a failed read falls back to the slug"
         );
         drop(_lock);
-        let found = discover_skills(&root.0, None, None);
+        let found = discover_skills(Some(&root.0));
         assert_eq!(
             (found[0].title.as_str(), found[0].description.as_str()),
             ("Locked", "real value"),

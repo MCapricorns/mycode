@@ -71,8 +71,6 @@ project code: do not search it.",
     }
 }
 
-pub(crate) use mycode_agent::os_user_home;
-
 /// Compact environment facts for the system prompt: OS, arch, the session
 /// cwd, and the one shell tool `script` mode resolves to right now. Shared
 /// by the main session and subagent prompts so the model never guesses the
@@ -136,7 +134,6 @@ pub(crate) fn session_system_prompt(
     mcp_note: Option<&str>,
     extra_roots: &[std::path::PathBuf],
     directive: &str,
-    user_home: Option<&std::path::Path>,
     skill_settings: &mycode_agent::SkillsSettings,
 ) -> String {
     let resources = mycode_agent::discover_resources(home, cwd);
@@ -150,22 +147,14 @@ pub(crate) fn session_system_prompt(
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&part);
     }
-    push_workspace_skills(
-        &mut system_prompt,
-        cwd,
-        extra_roots,
-        user_home,
-        Some(home.root()),
-        skill_settings,
-    );
+    push_workspace_skills(&mut system_prompt, Some(home.root()), skill_settings);
     if let Some(note) = mcp_note {
         system_prompt.push_str("\n\n<mcp>\n");
         system_prompt.push_str(note);
         system_prompt.push_str(
             // The note already says how to reach the servers' tools.
-            "`search_tool` and `tool_search` are reads: emit them in the same response as other \
-independent calls, `agent` included, instead of waiting for them. A server named as \
-connecting is still handshaking; its tools appear on the tool list once it is ready.\n</mcp>",
+            "`search_tool` and `tool_search` are reads reached through `call` inside `run_code`; \
+a connecting server is still handshaking, and its tools become callable once it is ready.\n</mcp>",
         );
     }
     let (mut roots, scratch) = split_scratch_root(extra_roots);
@@ -179,45 +168,23 @@ connecting is still handshaking; its tools appear on the tool list once it is re
         let _ = write!(
             system_prompt,
             "Relative paths stay in the session cwd. For the other folders, pass an \
-absolute path to `read`, `write`, `edit`, `find`, and `grep`, or an absolute \
-path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in the session \
-cwd.",
+absolute path to `call(\"read\", …)`, `call(\"write\", …)`, `call(\"edit\", …)`, `call(\"find\", …)`, \
+and `call(\"grep\", …)` inside `run_code`, or an absolute path inside a `{shell_tool}` script \
+(`mode` `script`). `{shell_tool}` starts in the session cwd.",
         );
     }
     push_scratch_note(&mut system_prompt, scratch);
     system_prompt
 }
 
-/// Appends the skill catalog of `cwd`, magpie's Library folder, the
-/// user-global tree, and the workspace folders the user added. The session
-/// and every subagent call this, so both see the same skills for the same
-/// folders.
+/// Appends the catalog of magpie's Library skills. The session and every
+/// subagent call this, so both see the same skills.
 pub(crate) fn push_workspace_skills(
     prompt: &mut String,
-    cwd: &std::path::Path,
-    extras: &[std::path::PathBuf],
-    user_home: Option<&std::path::Path>,
     mycode_home: Option<&std::path::Path>,
     settings: &mycode_agent::SkillsSettings,
 ) {
-    let mut skills = mycode_agent::discover_skills(cwd, user_home, mycode_home);
-    // Any local process can write under the OS temp root; skills come only
-    // from folders the user added.
-    let (workspace_roots, _) = split_scratch_root(extras);
-    for extra in workspace_roots {
-        for skill in mycode_agent::discover_skills(extra, None, None) {
-            if skills.iter().any(|existing| existing.slug == skill.slug) {
-                continue;
-            }
-            skills.push(skill);
-        }
-    }
-    skills.sort_by(|left, right| {
-        left.slug
-            .cmp(&right.slug)
-            .then_with(|| left.global.cmp(&right.global))
-            .then_with(|| left.path.cmp(&right.path))
-    });
+    let skills = mycode_agent::discover_skills(mycode_home);
     push_skill_catalog(prompt, skills, settings);
 }
 
@@ -308,7 +275,6 @@ mod tests {
             None,
             &[],
             "",
-            None,
             &Default::default(),
         );
         assert!(
@@ -350,9 +316,8 @@ mod tests {
             crate::unix_now().as_nanos()
         ));
         let _guard = TempDir(root.clone());
-        fs::create_dir_all(root.join(".agents")).unwrap();
         for slug in ["zebra", "alpha", "middle"] {
-            let dir = root.join(".agents").join(slug);
+            let dir = root.join("skills").join(slug);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("SKILL.md"), format!("# {slug}\n")).unwrap();
         }
@@ -368,7 +333,6 @@ mod tests {
             None,
             &forward,
             "",
-            None,
             &Default::default(),
         );
         let second = session_system_prompt(
@@ -378,7 +342,6 @@ mod tests {
             None,
             &reverse,
             "",
-            None,
             &Default::default(),
         );
         assert_eq!(first, second);
