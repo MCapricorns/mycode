@@ -29,7 +29,6 @@ use crate::workspace::{ToastKind, Workspace};
 
 pub(crate) use chat::composer_placeholder;
 pub(crate) use command_palette::ToggleCommandPalette;
-pub(crate) use settings::McpForm;
 
 /// Renders the whole window chrome and content.
 pub fn render_root(

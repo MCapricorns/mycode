@@ -29,7 +29,6 @@ pub use mycode_agent::*;
 pub use compaction::{
     display_summary_text, is_display_only_summary as is_compaction_summary, summary_body,
 };
-pub use export::IMPORT_NEEDS_MCP_CONFIRM;
 mod search;
 mod settings_io;
 mod state;
@@ -243,9 +242,6 @@ pub enum BridgeCommand {
     ImportData {
         /// Bundle file chosen in an open dialog.
         path: PathBuf,
-        /// The user confirmed a bundle that changes MCP server commands.
-        /// Without it such an import fails with [`IMPORT_NEEDS_MCP_CONFIRM`].
-        confirm_mcp_commands: bool,
     },
     /// List discovered prompt resources for the session workspace.
     ListResources {

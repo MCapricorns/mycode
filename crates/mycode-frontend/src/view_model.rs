@@ -56,6 +56,6 @@ pub use self::usage::{
 
 // Kept public API: the `FrontendAction` vocabulary is `pub`, so its payload
 // types must be too (`private_interfaces`).
-pub use self::settings::{McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry};
+pub use self::settings::{ModelsSubview, SettingsSection, SettingsState, SkillEntry};
 pub use self::state::{FrontendAction, MainView, ProxyTestState, UpdateState};
 pub use self::usage::CacheBreak;

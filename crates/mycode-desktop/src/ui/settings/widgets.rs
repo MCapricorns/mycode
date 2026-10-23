@@ -2,12 +2,11 @@
 //! two-line row header every settings list reuses.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, TestSupportExt as _, div, px,
 };
 
@@ -215,24 +214,6 @@ pub(super) fn choice_chips<V: AsRef<str>, L: AsRef<str>>(
         .into_any_element()
 }
 
-pub(super) fn labeled_field(
-    label: &str,
-    input: Entity<InputState>,
-    theme: &Theme,
-) -> impl IntoElement {
-    div()
-        .id(format!("form-field-{label}"))
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(label.to_owned()),
-        )
-        .child(div().h(px(30.)).child(Input::new(&input)))
-}
 
 /// The data side of a [`dropdown_field`]: what the row shows and which
 /// option is current.

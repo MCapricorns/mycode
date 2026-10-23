@@ -742,7 +742,7 @@ mod tests {
         let path = root.join("settings.json");
         fs::write(
             &path,
-            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"mcpServers":[],"appearance":{"theme":"dark"}}"#,
+            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark"}}"#,
         )
         .expect("write");
         let sid = super::windows_acl::current_user_sid_string().expect("sid");
@@ -776,7 +776,7 @@ mod tests {
         let path = root.join("settings.json");
         fs::write(
             &path,
-            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"mcpServers":[],"appearance":{"theme":"dark"}}"#,
+            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark"}}"#,
         )
         .expect("write");
         let sid = super::windows_acl::current_user_sid_string().expect("sid");

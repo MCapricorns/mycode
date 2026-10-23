@@ -1,26 +1,12 @@
-//! MCP servers from a project's `.mycode/mcp.json` and from the magpie
-//! Library's `~/.mycode/mcp.json`.
+//! MCP servers from magpie's Library file `~/.mycode/mcp.json`.
 
 use std::path::Path;
 
 use crate::mcp_import::parse_mcp_library;
 use crate::settings::McpServerSettings;
 
-/// Largest project MCP document read; a pasted config is a few KiB.
+/// Largest Library MCP document read; a pasted config is a few KiB.
 const MAX_PROJECT_MCP_BYTES: u64 = 256 * 1024;
-
-/// Reads project MCP servers.
-///
-/// A project with no file returns an empty list. A project whose file is
-/// not valid MCP JSON returns an error.
-///
-/// # Errors
-///
-/// Returns a message when the project file cannot be read or parsed,
-/// is oversized, or a stdio command is a shell string.
-pub fn project_mcp_servers(project: &Path) -> Result<Vec<McpServerSettings>, String> {
-    read_mcp_file(&project.join(".mycode").join("mcp.json"), "project")
-}
 
 /// Reads the MCP servers magpie's Library writes at `~/.mycode/mcp.json`.
 ///
@@ -58,23 +44,25 @@ fn read_mcp_file(file: &Path, label: &str) -> Result<Vec<McpServerSettings>, Str
 
 #[cfg(test)]
 mod tests {
-    use super::project_mcp_servers;
+    use super::global_mcp_servers;
+    use crate::HomeLayout;
 
-    fn scratch(label: &str) -> std::path::PathBuf {
+    fn scratch(label: &str) -> (std::path::PathBuf, HomeLayout) {
         let root = std::env::temp_dir().join(format!(
-            "mycode-project-mcp-{label}-{}-{}",
+            "mycode-library-mcp-{label}-{}-{}",
             std::process::id(),
             crate::unix_now().as_nanos()
         ));
-        std::fs::create_dir_all(root.join(".mycode")).unwrap();
-        root
+        std::fs::create_dir_all(&root).unwrap();
+        let home = HomeLayout::from_root(&root).unwrap();
+        (root, home)
     }
 
     #[test]
     fn a_directory_in_place_of_the_config_errors() {
-        let root = scratch("unread");
-        std::fs::create_dir(root.join(".mycode").join("mcp.json")).unwrap();
-        let error = project_mcp_servers(&root).unwrap_err();
+        let (root, home) = scratch("unread");
+        std::fs::create_dir(root.join("mcp.json")).unwrap();
+        let error = global_mcp_servers(&home).unwrap_err();
         assert!(
             error.contains("not a file") || error.contains("unreadable"),
             "{error}"
@@ -83,14 +71,14 @@ mod tests {
     }
 
     #[test]
-    fn a_project_returns_its_servers() {
-        let root = scratch("servers");
+    fn the_library_returns_its_servers() {
+        let (root, home) = scratch("servers");
         std::fs::write(
-            root.join(".mycode").join("mcp.json"),
+            root.join("mcp.json"),
             r#"{"mcpServers":{"local":{"command":"local-tool"}}}"#,
         )
         .unwrap();
-        let servers = project_mcp_servers(&root).unwrap();
+        let servers = global_mcp_servers(&home).unwrap();
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].command.as_deref(), Some("local-tool"));
         let _ = std::fs::remove_dir_all(&root);
@@ -98,9 +86,9 @@ mod tests {
 
     #[test]
     fn invalid_json_errors() {
-        let root = scratch("bad");
-        std::fs::write(root.join(".mycode").join("mcp.json"), "{").unwrap();
-        assert!(project_mcp_servers(&root).is_err());
+        let (root, home) = scratch("bad");
+        std::fs::write(root.join("mcp.json"), "{").unwrap();
+        assert!(global_mcp_servers(&home).is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

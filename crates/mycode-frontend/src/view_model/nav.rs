@@ -4,7 +4,7 @@
 //! clamp their highlight the same way on every frontend, so the ordering
 //! lives here instead of beside one renderer.
 
-use super::settings::{McpSubview, ModelsSubview, SettingsSection};
+use super::settings::{ModelsSubview, SettingsSection};
 
 /// One floating layer Escape can dismiss.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,24 +45,17 @@ pub fn top_dismiss_layer(
 pub enum SettingsBack {
     /// Refreshing the model list returns to the Magpie page.
     ModelsList,
-    /// Catalog, JSON, or custom MCP back returns to the server list.
-    McpList,
     /// Back to desk.
     Desk,
 }
 
 /// The settings page Escape should open. Sub-pages step back once.
-pub fn settings_back_target(
-    section: SettingsSection,
-    models: ModelsSubview,
-    mcp: McpSubview,
-) -> SettingsBack {
+pub fn settings_back_target(section: SettingsSection, models: ModelsSubview) -> SettingsBack {
     match section {
         SettingsSection::Models => match models {
             ModelsSubview::Catalog => SettingsBack::ModelsList,
             ModelsSubview::List => SettingsBack::Desk,
         },
-        SettingsSection::Mcp if mcp != McpSubview::List => SettingsBack::McpList,
         _ => SettingsBack::Desk,
     }
 }
@@ -89,7 +82,7 @@ mod tests {
     use super::{
         DismissLayer, SettingsBack, highlight, moved, settings_back_target, top_dismiss_layer,
     };
-    use crate::view_model::{McpSubview, ModelsSubview, SettingsSection};
+    use crate::view_model::{ModelsSubview, SettingsSection};
 
     #[test]
     fn escape_closes_one_layer_topmost_first() {
@@ -114,24 +107,14 @@ mod tests {
 
     #[test]
     fn settings_escape_matches_the_visible_back_button() {
-        let desk = |section| settings_back_target(section, ModelsSubview::List, McpSubview::List);
+        let desk = |section| settings_back_target(section, ModelsSubview::List);
         assert_eq!(desk(SettingsSection::General), SettingsBack::Desk);
         assert_eq!(desk(SettingsSection::About), SettingsBack::Desk);
+        assert_eq!(desk(SettingsSection::Mcp), SettingsBack::Desk);
         assert_eq!(
-            settings_back_target(
-                SettingsSection::Models,
-                ModelsSubview::Catalog,
-                McpSubview::List,
-            ),
+            settings_back_target(SettingsSection::Models, ModelsSubview::Catalog),
             SettingsBack::ModelsList
         );
-        for subview in [McpSubview::Json, McpSubview::Custom] {
-            assert_eq!(
-                settings_back_target(SettingsSection::Mcp, ModelsSubview::List, subview),
-                SettingsBack::McpList,
-                "{subview:?}"
-            );
-        }
     }
 
     #[test]

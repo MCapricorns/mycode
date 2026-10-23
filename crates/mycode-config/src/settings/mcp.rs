@@ -1,14 +1,12 @@
-//! MCP-server settings family.
+//! MCP-server row shape shared by the magpie Library parser and the settings
+//! UI.
 //!
 //! Stdio servers spawn a local command, so the command-line splitter used by
-//! the settings form lives here next to its consumer.
+//! the import path lives here next to its consumer.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-
-use super::{AppSettings, MAX_FIELD_BYTES, bounded_text, is_https_url, is_portable_id};
-use crate::ConfigError;
 
 /// Maximum MCP server entries.
 pub const MAX_MCP_SERVERS: usize = 64;
@@ -162,131 +160,6 @@ pub fn split_command_line(line: &str) -> Vec<String> {
         words.push(current);
     }
     words
-}
-
-impl AppSettings {
-    /// Validates the MCP family: entry bounds, transport-specific fields,
-    /// environment-variable grammar, and duplicate ids.
-    pub(super) fn validate_mcp(&self) -> Result<(), ConfigError> {
-        let invalid =
-            |detail: &str| ConfigError::authority_rejection().with_detail(detail.to_owned());
-        if self.mcp_servers.len() > MAX_MCP_SERVERS {
-            return Err(invalid("mcpServers: too many entries"));
-        }
-        for (index, server) in self.mcp_servers.iter().enumerate() {
-            let field = format!("mcpServers[{index}]");
-            if !is_portable_id(&server.id) {
-                return Err(invalid(&format!(
-                    "{field}.id: must be 1-128 lowercase letters, digits, dash, dot, or underscore"
-                )));
-            }
-            if server.args.len() > MAX_MCP_ARGS {
-                return Err(invalid(&format!("{field}.args: too many entries")));
-            }
-            for (arg_index, arg) in server.args.iter().enumerate() {
-                bounded_text(arg, MAX_FIELD_BYTES).map_err(|_| {
-                    invalid(&format!(
-                        "{field}.args[{arg_index}]: too long or contains line breaks or NUL"
-                    ))
-                })?;
-            }
-            match server.transport.as_str() {
-                "stdio" => {
-                    let command = server.command.as_deref().unwrap_or_default().trim();
-                    if command.is_empty() {
-                        return Err(invalid(&format!(
-                            "{field}: stdio transport requires a command"
-                        )));
-                    }
-                    if server.endpoint.is_some()
-                        || server.key_header.is_some()
-                        || !server.headers.is_empty()
-                    {
-                        return Err(invalid(&format!(
-                            "{field}: stdio transport must not set endpoint, keyHeader, or headers"
-                        )));
-                    }
-                    bounded_text(command, MAX_FIELD_BYTES)
-                        .map_err(|_| invalid(&format!("{field}.command: too long")))?;
-                    if !is_mcp_executable(command) {
-                        return Err(invalid(&format!(
-                            "{field}.command: must be an executable path, not a shell string"
-                        )));
-                    }
-                    if server.env.len() > MAX_MCP_ENV_VARS {
-                        return Err(invalid(&format!("{field}.env: too many entries")));
-                    }
-                    for (key, value) in &server.env {
-                        if !is_env_var_name(key) {
-                            return Err(invalid(&format!(
-                                "{field}.env: variable names must be nonempty and free of '='"
-                            )));
-                        }
-                        bounded_text(value, MAX_FIELD_BYTES).map_err(|_| {
-                            invalid(&format!(
-                                "{field}.env.{key}: too long or contains line breaks or NUL"
-                            ))
-                        })?;
-                    }
-                }
-                "http" => {
-                    let endpoint_ok = server
-                        .endpoint
-                        .as_deref()
-                        .map(is_https_url)
-                        .unwrap_or(false);
-                    if !endpoint_ok {
-                        return Err(invalid(&format!(
-                            "{field}.endpoint: must be an https:// URL"
-                        )));
-                    }
-                    if server.command.is_some() || !server.args.is_empty() || !server.env.is_empty()
-                    {
-                        return Err(invalid(&format!(
-                            "{field}: http transport must not set command, args, or env"
-                        )));
-                    }
-                    if server
-                        .key_header
-                        .as_deref()
-                        .is_some_and(|header| !matches!(header, "bearer" | "x-api-key"))
-                    {
-                        return Err(invalid(&format!(
-                            "{field}.keyHeader: must be exactly \"bearer\" or \"x-api-key\" — keep the API key in the app key vault, not in this field"
-                        )));
-                    }
-                    if server.headers.len() > MAX_MCP_HEADERS {
-                        return Err(invalid(&format!(
-                            "{field}.headers: at most {MAX_MCP_HEADERS} entries"
-                        )));
-                    }
-                    for (name, value) in &server.headers {
-                        if !is_header_name(name) {
-                            return Err(invalid(&format!(
-                                "{field}.headers: {name:?} is not an HTTP header name"
-                            )));
-                        }
-                        bounded_text(value, MAX_FIELD_BYTES).map_err(|_| {
-                            invalid(&format!(
-                                "{field}.headers.{name}: too long or contains line breaks or NUL"
-                            ))
-                        })?;
-                    }
-                }
-                _ => {
-                    return Err(invalid(&format!(
-                        "{field}.transport: must be stdio or http"
-                    )));
-                }
-            }
-            if self.mcp_servers[..index].iter().any(|s| s.id == server.id) {
-                return Err(invalid(&format!(
-                    "{field}.id: duplicates an earlier server id"
-                )));
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

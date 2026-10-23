@@ -585,15 +585,10 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             let outcome = blocking(move || crate::export::export_to_file(&home, &path)).await;
             BridgeReply::Exported(outcome)
         }
-        BridgeCommand::ImportData {
-            path,
-            confirm_mcp_commands,
-        } => {
+        BridgeCommand::ImportData { path } => {
             let home = state.home.clone();
-            let outcome = blocking(move || {
-                crate::export::import_from_file(&home, &path, confirm_mcp_commands)
-            })
-            .await;
+            let outcome =
+                blocking(move || crate::export::import_from_file(&home, &path)).await;
             BridgeReply::Imported(outcome)
         }
         BridgeCommand::ListResources { session_id } => {

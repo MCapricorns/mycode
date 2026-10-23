@@ -7,7 +7,7 @@ use mycode_app::{
 };
 
 use super::chat::{ComposerMention, LiveJob};
-use super::settings::{McpSubview, ModelsSubview, SettingsSection, SettingsState, SkillEntry};
+use super::settings::{ModelsSubview, SettingsSection, SettingsState, SkillEntry};
 use super::usage::{CacheAlert, CacheBreak, CacheWatch, TurnStats};
 
 /// The main area view: chat or full-page settings.
@@ -241,10 +241,6 @@ pub struct WorkspaceState {
     pub language_menu_open: bool,
     /// The Models settings sub-page.
     pub models_subview: ModelsSubview,
-    /// The MCP settings sub-page.
-    pub mcp_subview: McpSubview,
-    /// Whether the custom MCP form's transport dropdown is open.
-    pub mcp_transport_menu_open: bool,
     /// Whether the global command palette is open.
     pub command_palette_open: bool,
 }
@@ -351,12 +347,6 @@ pub enum FrontendAction {
     SubagentMenuToggled(Option<(String, String)>),
     /// The General-page language dropdown opened or closed.
     LanguageMenuToggled(bool),
-    /// The settings editor added an MCP server.
-    SettingsMcpAdded(mycode_app::McpServerSettings),
-    /// The settings editor removed an MCP server.
-    SettingsMcpRemoved(usize),
-    /// The settings editor toggled an MCP server.
-    SettingsMcpToggled(usize, bool),
     /// A tools probe started for one MCP server (the row shows a spinner
     /// state until the listing or a failure arrives).
     McpProbeStarted(String),
@@ -621,10 +611,6 @@ pub enum FrontendAction {
     SettingsReasoningChanged(String),
     /// The Models settings sub-page changed.
     ShowModelsSubview(ModelsSubview),
-    /// The MCP settings sub-page changed.
-    ShowMcpSubview(McpSubview),
-    /// The custom MCP form's transport dropdown opened or closed.
-    McpTransportMenuToggled(bool),
     /// Self-update progress changed.
     UpdateStateChanged(UpdateState),
     /// The proxy connectivity check started, finished, or was invalidated.

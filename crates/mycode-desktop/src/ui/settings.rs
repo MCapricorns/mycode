@@ -14,8 +14,6 @@ mod shortcuts;
 mod skills;
 mod widgets;
 
-pub(crate) use mcp::McpForm;
-
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Input;
@@ -194,7 +192,7 @@ pub(super) fn render_settings_view(
                                             skills::render_skills_section(workspace, cx)
                                         }
                                         SettingsSection::Mcp => {
-                                            mcp::render_mcp_section(workspace, window, cx)
+                                            mcp::render_mcp_section(workspace, cx)
                                         }
                                         SettingsSection::Data => {
                                             data::render_data_section(workspace, cx)
@@ -219,11 +217,7 @@ fn settings_page_key(workspace: &Workspace) -> String {
             crate::view_model::ModelsSubview::List => "magpie-list".to_owned(),
             crate::view_model::ModelsSubview::Catalog => "magpie-models".to_owned(),
         },
-        SettingsSection::Mcp => match vm.mcp_subview {
-            crate::view_model::McpSubview::List => "mcp-list".to_owned(),
-            crate::view_model::McpSubview::Json => "mcp-json".to_owned(),
-            crate::view_model::McpSubview::Custom => "mcp-custom".to_owned(),
-        },
+        SettingsSection::Mcp => "mcp-list".to_owned(),
         other => other.id().to_owned(),
     }
 }
@@ -527,48 +521,6 @@ fn nav_row(
         .into_any_element()
 }
 
-/// A nested-page header. The label names the page this control returns to,
-/// and it is not the control that leaves settings for the desk.
-pub(super) fn subview_header(
-    back_label: &str,
-    title: &str,
-    hint: Option<&str>,
-    on_back: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
-    cx: &mut Context<Workspace>,
-) -> AnyElement {
-    let theme = cx.theme();
-    div()
-        .id("subview-header")
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_3()
-        .pb_1()
-        .child(
-            crate::ui::skin::glass_button("subview-back", false, theme)
-                .flex_shrink_0()
-                .on_click(cx.listener(move |workspace, _, _, cx| {
-                    on_back(workspace, cx);
-                }))
-                .child(Icon::new(IconName::ArrowLeft).with_size(px(14.)))
-                .child(div().text_sm().child(back_label.to_owned())),
-        )
-        .child(
-            div()
-                .text_sm()
-                .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                .child(title.to_owned()),
-        )
-        .when_some(hint, |this, hint| {
-            this.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(hint.to_owned()),
-            )
-        })
-        .into_any_element()
-}
 
 #[cfg(test)]
 mod tests {

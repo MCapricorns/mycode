@@ -12,7 +12,7 @@
 //! executor can schedule a drain. Events keep their own channel so a
 //! frontend can pace streamed deltas (the desktop's typewriter frames)
 //! while control messages are handled immediately.
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -333,8 +333,6 @@ pub struct FrontendDriver {
     /// opens.
     catalog_requested: bool,
     pending_catalog_refresh: bool,
-    /// MCP server ids whose enable switch waits on a successful tools probe.
-    pending_mcp_enable: HashSet<String>,
     /// The in-flight check was started by the user, so its result may toast.
     manual_update_check: bool,
     /// The staged payload's exit swap is already armed; staging the same
@@ -353,11 +351,8 @@ pub struct FrontendDriver {
     repairs_toasted: usize,
     /// A single toast for the untoasted repairs is already scheduled.
     repair_toast_armed: bool,
-    /// Bundle of the import in flight, kept so a refusal can be confirmed.
+    /// Bundle of the import in flight.
     import_request: Option<PathBuf>,
-    /// Bundle whose import changes MCP server commands and waits for the
-    /// user's explicit confirmation.
-    import_confirm: Option<PathBuf>,
     /// Roles resolved from built-ins, the home `agents` directory, and the
     /// open project's `.mycode/agents`. `None` until a surface asks for them.
     agent_roles: Option<Arc<mycode_app::RoleCatalog>>,
@@ -444,7 +439,6 @@ impl FrontendDriver {
             mention_generation: 0,
             catalog_requested: false,
             pending_catalog_refresh: false,
-            pending_mcp_enable: HashSet::new(),
             manual_update_check: false,
             update_armed: false,
             applied_update: None,
@@ -453,7 +447,6 @@ impl FrontendDriver {
             repairs_toasted: 0,
             repair_toast_armed: false,
             import_request: None,
-            import_confirm: None,
             agent_roles: None,
             agent_roles_project: None,
             agent_roles_stale: false,
@@ -585,11 +578,6 @@ impl FrontendDriver {
             out,
         );
         self.persist_ui_state();
-    }
-
-    /// The bundle waiting for the MCP-command confirmation, if any.
-    pub fn import_confirm(&self) -> Option<&Path> {
-        self.import_confirm.as_deref()
     }
 
     /// The question row the ask card is showing.
@@ -809,16 +797,6 @@ impl FrontendDriver {
             FrontendAction::ShowSettingsSection(crate::view_model::SettingsSection::Mcp)
         ) {
             self.reload_mcp_library(out);
-        }
-        if let FrontendAction::SettingsMcpRemoved(index) = &action
-            && let Some(id) = self
-                .vm
-                .settings
-                .as_ref()
-                .and_then(|settings| settings.mcp_servers.get(*index))
-                .map(|server| server.id.clone())
-        {
-            self.pending_mcp_enable.remove(&id);
         }
         reduce(&mut self.vm, action);
         if let Some(previous_project) = previous_project

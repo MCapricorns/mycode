@@ -637,16 +637,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                 settings.mcp_with_keys = mcp_keys;
             }
         }
-        FrontendAction::SettingsMcpAdded(server) => settings::mcp_added(state, server),
-        FrontendAction::SettingsMcpRemoved(index) => settings::mcp_removed(state, index),
-        FrontendAction::SettingsMcpToggled(index, enabled) => {
-            edit_settings(state, |settings| {
-                settings.mcp_servers.get_mut(index).is_some_and(|server| {
-                    server.enabled = enabled;
-                    true
-                })
-            });
-        }
         FrontendAction::McpProbeStarted(server_id) => {
             if !state.mcp_probing.contains(&server_id) {
                 state.mcp_probing.push(server_id);
@@ -661,6 +651,12 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             state.error = Some(message);
         }
         FrontendAction::McpLibraryLoaded { servers, error } => {
+            // The magpie Library file is the only MCP catalog: the settings
+            // projection mirrors it so the page, the nav count and the `/`
+            // menu read one list. It is read-only — never `dirty`.
+            if let Some(settings) = state.settings.as_mut() {
+                settings.mcp_servers = servers.clone();
+            }
             state.mcp_library = servers;
             state.mcp_library_error = error;
         }
@@ -828,11 +824,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         FrontendAction::ShowModelsSubview(view) => {
             state.models_subview = view;
         }
-        FrontendAction::ShowMcpSubview(view) => {
-            state.mcp_subview = view;
-            state.mcp_transport_menu_open = false;
-        }
-        FrontendAction::McpTransportMenuToggled(open) => state.mcp_transport_menu_open = open,
         FrontendAction::LanguageMenuToggled(open) => state.language_menu_open = open,
         FrontendAction::UpdateStateChanged(update) => state.update = update,
         FrontendAction::ProxyTestChanged(test) => state.proxy_test = test,
@@ -927,7 +918,6 @@ pub fn close_floating_menus(state: &mut WorkspaceState) -> bool {
         || state.model_menu_open
         || state.reasoning_menu_open
         || state.subagent_menu.is_some()
-        || state.mcp_transport_menu_open
         || state.language_menu_open
         || state.mention.is_some();
     state.project_menu_open = false;
@@ -936,7 +926,6 @@ pub fn close_floating_menus(state: &mut WorkspaceState) -> bool {
     state.picker_query.clear();
     state.reasoning_menu_open = false;
     state.subagent_menu = None;
-    state.mcp_transport_menu_open = false;
     state.language_menu_open = false;
     state.mention = None;
     was_open
