@@ -5,7 +5,7 @@
 //! calls or [`FrontendAction`]s, drains bridge traffic with
 //! [`FrontendDriver::poll`]/[`FrontendDriver::next_event`], and interprets the
 //! returned [`Effect`]s in its own idiom — GPUI turns them into toasts,
-//! scroll corrections, and `cx.notify()`; a TUI turns them into redraws.
+//! scroll corrections, and `cx.notify()`.
 //!
 //! Replies and internal timers arrive on a `std::sync::mpsc` inbox; each
 //! deposit calls the `wake` callback supplied at construction so a UI
@@ -515,12 +515,6 @@ impl FrontendDriver {
         ))
     }
 
-    /// Draft restored by edit-and-resend, applied by the frontend's next
-    /// composer paint.
-    pub fn take_composer_prefill(&mut self) -> Option<String> {
-        self.pending_composer_prefill.take()
-    }
-
     /// The frontend reports whether the conversation viewport sits at its
     /// tail. A frontend that cannot scroll leaves this `true`.
     pub fn set_conversation_at_tail(&mut self, at_tail: bool) {
@@ -562,13 +556,6 @@ impl FrontendDriver {
         self.schedule(UI_STATE_SAVE_DEBOUNCE, move || DriverMsg::UiStateSaveTick {
             generation,
         });
-    }
-
-    /// Whether the startup `LoadUiState` reply has been folded in. A
-    /// frontend that opens its own folder waits for this, or the remembered
-    /// project replaces it.
-    pub fn ui_state_loaded(&self) -> bool {
-        self.ui_state_loaded
     }
 
     /// Shows the one-time install notice when MCode has no magpie binding.
@@ -793,7 +780,13 @@ impl FrontendDriver {
             out.push(Effect::AskReset);
         }
         let previous_error = self.vm.error.clone();
-        let previous_project = self.vm.project_dir.clone();
+        // A streamed fragment is the per-token path and cannot move the open
+        // project, so the snapshot (a String copy) is skipped for it.
+        let previous_project = (!matches!(
+            action,
+            FrontendAction::ChatDelta(_) | FrontendAction::ChatThinkingDelta(_)
+        ))
+        .then(|| self.vm.project_dir.clone());
         let composer_changed = matches!(action, FrontendAction::ComposerChanged(_));
         let text_edit = matches!(
             action,
@@ -828,7 +821,9 @@ impl FrontendDriver {
             self.pending_mcp_enable.remove(&id);
         }
         reduce(&mut self.vm, action);
-        if self.vm.project_dir != previous_project {
+        if let Some(previous_project) = previous_project
+            && self.vm.project_dir != previous_project
+        {
             self.agent_roles_stale = true;
             self.rewatch_git();
         }

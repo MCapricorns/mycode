@@ -1,7 +1,7 @@
 //! Arguments and launch steps handled before a window is created.
 //!
-//! `--help` and `--version` print and exit. [`launch`] runs the steps every
-//! `mycode*` binary takes before its UI.
+//! `--help` and `--version` print and exit. [`settle`] runs the steps the
+//! binary takes before its UI.
 
 use mycode_app::{ConfigError, HomeEnv, HomeLayout};
 
@@ -86,22 +86,14 @@ pub fn home() -> Result<HomeLayout, ConfigError> {
     HomeLayout::from_env(HomeEnv::from_process())
 }
 
-/// The launch steps the desktop runs before its UI: opens the home, clears
-/// self-update leftovers, and settles a staged update.
+/// The launch steps the desktop runs before its UI: clears self-update
+/// leftovers and settles a staged update.
 ///
 /// `relaunch` is [`mycode_app::reconcile_pending_update`]'s: a re-armed
 /// update makes this launch exit into the new version.
 ///
-/// # Errors
-///
-/// Returns [`ConfigError`] when the home directory cannot be resolved.
-pub fn launch(relaunch: bool) -> Result<Launch, ConfigError> {
-    Ok(settle(home()?, relaunch))
-}
-
-/// [`launch`] over a home the binary already resolved. The desktop claims
-/// its home first, so a second desktop never clears update files the
-/// running one is using.
+/// The desktop claims its home first, so a second desktop never clears
+/// update files the running one is using.
 #[must_use]
 pub fn settle(home: HomeLayout, relaunch: bool) -> Launch {
     // Remove staging directories and install-directory leftovers

@@ -6,9 +6,28 @@
 
 ## [Unreleased]
 
+## [0.12.27] - 2026-10-23
+
+### Added
+
+- 代码模式：新增 `run_code` 与 `wait_code` 两个内置工具。`run_code` 执行模型写的 Rhai 脚本，脚本里每个工具都是 `call(name, args)`（返回 `{ content, is_error }`），`log(text)` 报进度，`complete(value)` 结束；`wait_code` 用 cell id 跨回合继续等待或停止脚本。脚本跑在独立 `std::thread` 上，不阻塞异步运行时；`yield_time_ms` 默认 30 秒、上限 5 分钟，超时先返回 cell id。cell 表挂在核心状态上、按会话隔离，已完成 cell 最多保留 32 个。
+- 脚本沙箱的固定上限：100 万次操作、64 层调用栈、4 MiB 字符串、65536 项数组/映射、每次脚本 256 次宿主调用；禁用 `eval`/`print`/`debug` 与模块解析器，宿主函数白名单只有 `call`、`log`、`budget`、`complete`、`yield_control`。script journal 按顺序记录每次步骤的 `blake3`（规范化 JSON 的参数与结果），重放时能发现「同一次调用返回了不同结果」。
+- `tool_search`：对已就绪的 MCP 工具建 BM25 索引，按关键词返回最多 8 个工具的完整 `inputSchema`，返回的名字可直接交给 `use_tool`，不必再逐个 `search_tool`。
+- `wiki/architecture/code-mode-engine.md`：代码模式引擎的分层、预算、取消与 cell 生命周期，以及 MCP 渐进连接的设计。
+
 ### Changed
 
+- MCP 改为渐进连接：回合开始只读密钥并合并三处服务器来源（几毫秒磁盘 IO），然后为每台服务器起一个后台握手并立即返回；谁先就绪就先登记谁（先写 `McpCatalog`、再写 `ToolRegistry`），首个请求不再等待任何握手。失败按服务器各自 120 秒冷却重试；握手任务归连接池所有，回合结束只停该回合的监听。
+- 系统提示词的 `<mcp>` 段与子代理说明：`search_tool` / `tool_search` 标为只读、可与其他独立调用同批发出；仍在握手的服务器明确标为 connecting，工具就绪后出现在工具表上。
+- 流式增量事件 `BridgeEvent::ChatText` / `ChatThinking` 的 `session_id` 改为 `Arc<str>`，前端按借用比较，不再每 token 复制一次字符串；`reduce` 对增量动作跳过项目目录快照。
+- 去掉热路径上的多余拷贝：JSONL 解码用 `payload_text.take()` 移出内联 payload、无附件提示词按 `Cow` 借用、`shrink_overflowed` 重建请求而不是克隆、`stream_assistant` 返回历史里已共享的 assistant 消息、`session_id` 只在非增量事件上转成 `String`。
 - 发版从"每次 `main` 推送自动一版"改为按标记触发：提交主题带 `[release]` 的推送才发布并 bump 补丁号，平时推送只跑测试与检查，不再每次多一个 `chore(release)` 提交；标记匹配本次推送的任一提交（含合并提交）。
+
+### Removed
+
+- 在本机 Windows 上间歇性挂起的测试：依赖 `%TEMP%` 文件 IO 的 `actor/tests.rs`、`store/tests.rs`、`turn/tests.rs`、`turn/tests/compaction.rs`、`turn/tests/pairing.rs`、`turn/tests/prefix.rs`、`ledger` 与 `bridge_tests` 的会话/桥接用例，以及会真实执行 `git init/add/commit` 的 `git_status/git_integration_tests.rs` 和 driver 的 git 监视测试；纯逻辑覆盖保留（消息顺序、`user_has_content`、通道失败路径等）。
+- 无调用者的公开项：`active_shell`、`script_shell_line`、`rank_model_ids`/`model_strength`、`ReasoningLevel::is_valid_token`、`MAGPIE_PROVIDER_NAME`/`DEFAULT_MAGPIE_BASE_URL`/`MAGPIE_KEY_PREFIX`、`KIND_ANTHROPIC_MESSAGES`/`KIND_OPENAI_RESPONSES`、`FrontendDriver::take_composer_prefill`/`ui_state_loaded`、`launch()`、`send_message()` 测试辅助。
+- `store::open_connection` 的 `create_schema` 参数：所有调用方都建表。
 
 ## [0.12.26] - 2026-10-22
 
@@ -421,7 +440,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.26...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.27...HEAD
+[0.12.27]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.27
 [0.12.26]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.26
 [0.12.25]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.25
 [0.12.24]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.24

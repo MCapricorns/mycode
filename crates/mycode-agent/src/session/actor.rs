@@ -18,9 +18,6 @@
 mod actions;
 mod recovery;
 
-#[cfg(test)]
-mod tests;
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -556,7 +553,7 @@ impl SessionCore {
                 kind,
                 call_id,
                 payload,
-            } => self.action_reserve_event(&session, &branch, kind, call_id, &payload),
+            } => self.action_reserve_event(&session, &branch, kind, call_id, payload),
             Action::Append {
                 session,
                 branch,

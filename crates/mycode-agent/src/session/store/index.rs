@@ -184,7 +184,7 @@ impl SessionStore {
     /// Opens or creates the index in WAL mode.
     pub(crate) fn open(home: &HomeLayout) -> Result<Self, StoreError> {
         let path = database_path(home).map_err(|_| StoreError::Unavailable)?;
-        let conn = open_connection(&path, true)?;
+        let conn = open_connection(&path)?;
         // Rows from before session ids carried their creation time can no
         // longer be opened or deleted by id; drop them (branches and events
         // cascade). Their old directories are left on disk untouched.

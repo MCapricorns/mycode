@@ -45,6 +45,9 @@ pub(crate) struct CoreState {
     token_scales: Mutex<HashMap<String, crate::compaction::TokenScale>>,
     /// Live MCP clients, reused until settings change or a connection dies.
     pub(crate) mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
+    /// Code-mode script cells; they outlive the turn that started them so
+    /// `wait_code` can collect them across turns.
+    pub(crate) code_cells: Arc<mycode_agent::CodeCells>,
     /// Documents reset before the UI asked for settings or UI state.
     startup_repairs: Mutex<Vec<DocumentRepair>>,
     /// Orders whole-document `ui.json` replacements. Each save runs on the
@@ -103,6 +106,7 @@ impl CoreState {
             steer_inboxes: Arc::new(Mutex::new(HashMap::new())),
             token_scales: Mutex::new(HashMap::new()),
             mcp_pool: Arc::new(tokio::sync::Mutex::new(None)),
+            code_cells: Arc::new(mycode_agent::CodeCells::new()),
             startup_repairs: Mutex::new(startup_repairs),
             ui_state_writes: tokio::sync::Mutex::new(()),
         }

@@ -15,9 +15,6 @@
 mod index;
 mod jsonl;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use index::{
     AppendRequest, AppendedLocation, BranchCommitRequest, ListedSession, SessionStore, StoreError,
     StoredEvent, decode_head, delete_indexed_session, list_sessions, rename_indexed_session,

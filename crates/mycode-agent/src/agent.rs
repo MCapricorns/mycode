@@ -245,6 +245,11 @@ async fn agent_loop(
                 }
                 Err(TurnFailure::Error(err)) => return Err(err),
             };
+        // The response cycle only ever appends an assistant message; reuse
+        // that shared message instead of copying it back out of history.
+        let Message::Assistant(assistant) = assistant.as_ref() else {
+            unreachable!("stream_assistant returns only assistant messages");
+        };
 
         let calls: Vec<&ToolCall> = assistant
             .blocks

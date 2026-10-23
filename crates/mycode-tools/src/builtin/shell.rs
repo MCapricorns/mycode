@@ -28,7 +28,7 @@ mod detect;
 mod prompt;
 mod sanitize;
 
-pub use detect::{DetectedShell, ShellKind, active_shell, detect_default_shell, resolved_shell};
+pub use detect::{DetectedShell, ShellKind, detect_default_shell, resolved_shell};
 pub use prompt::render_environment_block;
 pub(crate) use sanitize::sanitize_captured_shell_text;
 
@@ -90,21 +90,6 @@ const POWERSHELL_ARGUMENTS: &[&str] = &[
 /// run at all, `decode_captured_text` still falls back to BOM, BOM-less
 /// UTF-16LE, and OEM/ANSI code-page detection.
 const POWERSHELL_UTF8_PRELUDE: &str = "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }; try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }; try { [Console]::InputEncoding = [System.Text.Encoding]::UTF8 } catch { }";
-
-/// One-line name of the shell `script` mode would launch right now.
-///
-/// Includes the Windows `cmd.exe` runtime fallback. `None` is not returned
-/// after [`resolved_shell`]; the line is kept for callers that only need the
-/// interpreter label.
-#[must_use]
-pub fn script_shell_line() -> Option<String> {
-    let shell = resolved_shell();
-    Some(format!(
-        "{} ({})",
-        prompt::shell_label(shell.kind),
-        shell.program.display()
-    ))
-}
 
 /// The process-launch builtin. Its model-facing name follows the resolved shell.
 #[derive(Debug)]

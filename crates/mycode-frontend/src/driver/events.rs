@@ -8,29 +8,36 @@ use crate::view_model::{
 };
 
 impl FrontendDriver {
+    /// Whether `session_id` names the chat currently on screen. Borrowed,
+    /// not copied: streamed deltas route through here once per fragment.
+    fn is_open_session(&self, session_id: &str) -> bool {
+        self.vm
+            .active
+            .as_ref()
+            .is_some_and(|active| active.session_id == session_id)
+    }
+
     /// Folds one core event into the view-model state, emitting the effects
     /// the frontend must perform (toasts, update dialog, scroll hints).
     pub fn on_event(&mut self, event: BridgeEvent, out: &mut Vec<Effect>) {
-        let active_session = self.open_session_id();
-        let matches_active = |session_id: &str| active_session.as_deref() == Some(session_id);
         // A held interrupt belongs to one turn and ends with it, on screen
         // or not.
         let held = self.take_held_interrupt(&event);
         let action = match event {
             BridgeEvent::ChatText { session_id, delta } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 FrontendAction::ChatDelta(delta)
             }
             BridgeEvent::ChatThinking { session_id, delta } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 FrontendAction::ChatThinkingDelta(delta)
             }
             BridgeEvent::AssistantStep { session_id, entry } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 FrontendAction::AssistantStepCommitted(entry)
@@ -40,7 +47,7 @@ impl FrontendDriver {
                 head,
                 entry,
             } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     self.park_held_interrupt(held, &session_id, out);
                     return;
                 }
@@ -61,7 +68,7 @@ impl FrontendDriver {
                 head,
             } => {
                 let cancelled = message == CHAT_CANCELLED;
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     self.park_held_interrupt(held, &session_id, out);
                     return;
                 }
@@ -88,7 +95,7 @@ impl FrontendDriver {
                 head,
                 entry,
             } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 FrontendAction::SteerCommitted {
@@ -108,7 +115,7 @@ impl FrontendDriver {
                 requests,
                 elapsed_ms,
             } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 let previous = self.vm.cache_alert;
@@ -143,7 +150,7 @@ impl FrontendDriver {
                         .held_interrupt
                         .as_ref()
                         .is_some_and(|held| held.session_id == session_id);
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     if interrupt {
                         self.dispatch(BridgeCommand::CancelChat { session_id });
                     }
@@ -156,7 +163,7 @@ impl FrontendDriver {
                 return;
             }
             BridgeEvent::PromptCacheWatch { session_id, cause } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 let cause = match cause {
@@ -169,7 +176,7 @@ impl FrontendDriver {
                 session_id,
                 questions,
             } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 FrontendAction::AskRequested(questions)
@@ -180,7 +187,7 @@ impl FrontendDriver {
                 name,
                 target,
             } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 FrontendAction::ToolPreparing {
@@ -196,7 +203,7 @@ impl FrontendDriver {
                 name,
                 target,
             } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 FrontendAction::ToolStarted {
@@ -213,7 +220,7 @@ impl FrontendDriver {
                 name,
                 message,
             } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 FrontendAction::ToolProgress {
@@ -224,7 +231,7 @@ impl FrontendDriver {
                 }
             }
             BridgeEvent::ToolCompleted { session_id, entry } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 FrontendAction::ToolResultAppended(entry)
@@ -266,7 +273,7 @@ impl FrontendDriver {
                 return;
             }
             BridgeEvent::SummaryShown { session_id, entry } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 self.act(FrontendAction::SummaryShown(entry), out);
@@ -278,7 +285,7 @@ impl FrontendDriver {
                 ok,
                 head,
             } => {
-                if !matches_active(&session_id) {
+                if !self.is_open_session(&session_id) {
                     return;
                 }
                 self.act(FrontendAction::CompactFinished { ok, head }, out);

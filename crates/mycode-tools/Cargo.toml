@@ -26,6 +26,10 @@ aho-corasick.workspace = true
 memchr.workspace = true
 jsonschema.workspace = true
 blake3.workspace = true
+rhai.workspace = true
+# `catch_unwind` on the code-mode dispatcher future: a panicking tool must
+# still settle its cell rather than leave it Running forever.
+futures-util = { workspace = true, features = ["std"] }
 sha2.workspace = true
 uuid.workspace = true
 

@@ -146,22 +146,6 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::TestProxy { proxy });
     }
 
-    // ---- key vault ----
-
-    /// Saves one MCP server's API key after normalization. `target` is the
-    /// key-store id, `mcp-{id}`. `false` refuses a blank/`bearer` field so
-    /// the replace flow cannot delete a stored credential.
-    pub fn save_key(&mut self, target: String, raw_key: &str) -> bool {
-        let Some(api_key) = forms::normalized_key_input(raw_key) else {
-            return false;
-        };
-        self.dispatch(BridgeCommand::SaveProviderKey {
-            provider_id: target,
-            api_key,
-        });
-        true
-    }
-
     // ---- MCP servers ----
 
     /// The row's enable switch. Disabling is immediate; enabling first
@@ -366,29 +350,6 @@ impl FrontendDriver {
             );
         }
         true
-    }
-
-    /// Adds a catalog-listed server row (starts disabled; the key save arms
-    /// the enable probe so a pasted key ends in a verified enable).
-    pub fn add_builtin_mcp(
-        &mut self,
-        mut server: mycode_app::McpServerSettings,
-        api_key: &str,
-        out: &mut Vec<Effect>,
-    ) {
-        let server_id = server.id.clone();
-        // New rows start disabled: the enable probe is armed by the key
-        // save that follows, so a pasted key ends in a verified enable.
-        server.enabled = false;
-        self.act(FrontendAction::SettingsMcpAdded(server), out);
-        if !api_key.is_empty() {
-            self.pending_mcp_enable.insert(server_id.clone());
-            self.dispatch(BridgeCommand::SaveProviderKey {
-                provider_id: format!("mcp-{server_id}"),
-                api_key: api_key.to_owned(),
-            });
-        }
-        self.act(FrontendAction::ShowMcpSubview(McpSubview::List), out);
     }
 
     // ---- subagent routes ----

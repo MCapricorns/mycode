@@ -1,8 +1,7 @@
 //! Form parsing and validation shared by every frontend's settings UI.
 //!
 //! These helpers turn raw text-field contents into config rows — or refuse
-//! them — so a desktop form and a TUI form cannot drift into accepting
-//! different input.
+//! them — so no settings form drifts into accepting different input.
 use std::collections::BTreeMap;
 
 /// The URL the custom proxy mode starts from: Clash's mixed port.

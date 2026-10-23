@@ -110,7 +110,7 @@ impl SessionCore {
         branch: &BranchId,
         kind: EventKind,
         call_id: Option<SessionCallId>,
-        payload: &[u8],
+        payload: Vec<u8>,
     ) -> Result<SessionPull, OpFail> {
         let Some(_activity) = self.fence.enter() else {
             return Err(OpFail::Domain(SessionError::Unavailable));
@@ -125,7 +125,7 @@ impl SessionCore {
             .ok_or(OpFail::Domain(SessionError::NotFound))?;
         SessionLedger::check_ordering(branch_state, kind, call_id.as_ref())
             .map_err(OpFail::Domain)?;
-        let record_len = store::encoded_record_len(call_id.is_some(), payload)
+        let record_len = store::encoded_record_len(call_id.is_some(), &payload)
             .ok_or(OpFail::Domain(SessionError::Limit))?;
         let total = ledger
             .total_bytes
@@ -136,7 +136,7 @@ impl SessionCore {
         }
         let event_id =
             SessionEventId::generate().ok_or(OpFail::Domain(SessionError::Unavailable))?;
-        let digest_raw = payload_digest(payload);
+        let digest_raw = payload_digest(&payload);
         let view = EventReservationView {
             payload_digest: format_digest(&digest_raw),
             expected_head: branch_state.head.clone(),
@@ -151,7 +151,7 @@ impl SessionCore {
                 view: view.clone(),
                 kind,
                 call_id,
-                payload: payload.to_vec(),
+                payload,
                 seq,
             },
         );

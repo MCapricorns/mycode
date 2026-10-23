@@ -15,12 +15,6 @@ use crate::ConfigError;
 
 /// Provider id the gateway is exposed under in the model picker.
 pub const MAGPIE_PROVIDER_ID: &str = "magpie";
-/// Display name shown for the gateway provider.
-pub const MAGPIE_PROVIDER_NAME: &str = "Magpie";
-/// Gateway address used when the agent plugin did not write one.
-pub const DEFAULT_MAGPIE_BASE_URL: &str = "http://127.0.0.1:3425/v1";
-/// Key prefix magpie hands the app; any key is accepted on this machine.
-pub const MAGPIE_KEY_PREFIX: &str = "magpie-";
 
 /// The local magpie gateway binding.
 ///

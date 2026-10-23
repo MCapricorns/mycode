@@ -1,7 +1,7 @@
 //! Pinned HTTP: resolve a host, check every address, then connect only to
 //! those addresses. Redirects are followed manually and checked again.
 //!
-//! [`PinMode::PublicHttps`] is for web search and update downloads. Every hop
+//! [`PinMode::PublicHttps`] is for update downloads. Every hop
 //! must be https on port 443. A normal host must resolve to public addresses
 //! only. GitHub release hosts (`github.com`, `www.github.com`,
 //! `api.github.com`, `codeload.github.com`, `uploads.github.com`, and

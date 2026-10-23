@@ -33,7 +33,7 @@ pub use self::command_palette::{
 };
 pub use self::models::{
     effective_reasoning_level, model_context_window, model_display_name, provider_display_name,
-    rank_model_ids, selected_reasoning_level,
+    selected_reasoning_level,
 };
 pub use self::nav::{
     DismissLayer, SettingsBack, highlight, moved, settings_back_target, top_dismiss_layer,
