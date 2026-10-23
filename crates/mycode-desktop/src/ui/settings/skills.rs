@@ -32,9 +32,9 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
                 .text_color(muted)
                 .whitespace_normal()
                 .child(t(
-                    "No skills yet. Add SKILL.md under the project .agents/skills/ folder \
-                     or ~/.agents/skills/.",
-                    "还没有技能。在项目 .agents/skills/ 或 ~/.agents/skills/ 下添加 SKILL.md。",
+                    "No skills yet. magpie's Library installs SKILL.md folders under \
+                     ~/.mycode/skills/.",
+                    "还没有技能。magpie 的 Library 会把 SKILL.md 装到 ~/.mycode/skills/ 下。",
                 ))
                 .into_any_element(),
         ]
@@ -130,11 +130,11 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
             "skills-catalog",
             t("Slash commands", "斜杠命令"),
             Some(t(
-                "Type / in the composer to insert a skill. Workspace .agents/skills win \
-                 over the same slug in ~/.agents. A switched-off skill is left out of \
+                "Type / in the composer to insert a skill. Skills come from magpie's \
+                 Library (~/.mycode/skills/). A switched-off skill is left out of \
                  the / menu and the agent's skill list.",
-                "在输入框输入 / 即可插入技能。工作区 .agents/skills 中的同名技能优先于 \
-                 ~/.agents。关掉的技能不会出现在 / 菜单和智能体的技能列表里。",
+                "在输入框输入 / 即可插入技能。技能来自 magpie 的 Library（~/.mycode/skills/）。\
+                 关掉的技能不会出现在 / 菜单和智能体的技能列表里。",
             )),
             theme,
             rows,

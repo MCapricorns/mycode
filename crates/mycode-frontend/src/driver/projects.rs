@@ -73,24 +73,10 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::SearchProjectFiles { session_id, query });
     }
 
-    /// The roots skill discovery scans: the open project directory and the
-    /// user's OS home. Discovery appends `.agents` and `.agents/skills` to
-    /// each.
-    fn skill_roots(&self) -> (std::path::PathBuf, Option<std::path::PathBuf>) {
-        let workspace = self
-            .vm
-            .project_dir
-            .as_deref()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-        (workspace, mycode_app::os_user_home())
-    }
-
-    /// Re-scans the skill directories and folds the result into the state.
+    /// Re-scans magpie's Library skills and folds the result into the state.
     /// Also backs the Skills page's refresh affordance.
     pub fn refresh_skills(&mut self, out: &mut Vec<Effect>) {
-        let (workspace, user_home) = self.skill_roots();
-        let skills = mycode_app::discover_skills(&workspace, user_home.as_deref(), None)
+        let skills = mycode_app::discover_skills(Some(self.home.root()))
             .into_iter()
             .map(|skill| crate::view_model::SkillEntry {
                 slug: skill.slug,
@@ -180,8 +166,7 @@ impl FrontendDriver {
         {
             (cached.title.clone(), cached.path.clone())
         } else {
-            let (workspace, user_home) = self.skill_roots();
-            let Some(skill) = mycode_app::discover_skills(&workspace, user_home.as_deref(), None)
+            let Some(skill) = mycode_app::discover_skills(Some(self.home.root()))
                 .into_iter()
                 .find(|skill| skill.slug == slug)
             else {
