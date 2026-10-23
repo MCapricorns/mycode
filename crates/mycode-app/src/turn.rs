@@ -29,7 +29,7 @@ use self::compact::{DeferredSummaries, publish_visible_summary};
 use self::control::TurnControl;
 use self::prompt::session_system_prompt;
 pub(crate) use self::prompt::{
-    os_user_home, push_scratch_note, push_workspace_skills, split_scratch_root,
+    push_scratch_note, push_workspace_skills, split_scratch_root,
     workspace_extra_roots,
 };
 
@@ -298,6 +298,7 @@ async fn run_chat_turn_on(
                     session_id.to_owned(),
                     state.subagent_cancels.clone(),
                     state.mcp_pool.clone(),
+                    Arc::clone(&state.code_cells),
                 )
                 .with_context(
                     Arc::clone(&state.catalog),
@@ -322,6 +323,21 @@ async fn run_chat_turn_on(
         Arc::clone(&state.code_cells),
         session_id.to_owned(),
     )));
+    // Code-mode-only: the model's top-level list is the shell plus the two
+    // code-mode tools; every other registered tool (read/write/edit/grep/
+    // find/ask_user/agent and the MCP bridge) is reachable through `call`
+    // inside a script. The names list already holds the platform shell.
+    {
+        let names = registry.names();
+        let mut exposed = vec!["run_code", "wait_code"];
+        exposed.extend(
+            names
+                .iter()
+                .map(String::as_str)
+                .filter(|name| mycode_agent::ShellKind::is_tool_name(name)),
+        );
+        registry.expose_only(&exposed);
+    }
     // Progressive MCP: the meta tools exist from cycle 1, ready servers are
     // written catalog-first then registry, and the rest arrive through the
     // background drain. The drain task is aborted at the end of the turn —
@@ -387,8 +403,7 @@ async fn run_chat_turn_on(
     let session_id = session_id.to_owned();
 
     let context_window = model_context_window(state, &provider, model);
-    let user_home = os_user_home();
-    let read_roots = mycode_agent::skill_read_roots(user_home.as_deref(), Some(home.root()));
+    let read_roots = mycode_agent::skill_read_roots(Some(home.root()));
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
     let mcp_note = mcp_catalog
         .as_ref()
@@ -399,7 +414,6 @@ async fn run_chat_turn_on(
         let cwd = cwd.clone();
         let registry = Arc::clone(&registry);
         let extra_roots = extra_roots.clone();
-        let user_home = user_home.clone();
         let skill_settings = settings.skills.clone();
         tokio::task::spawn_blocking(move || {
             session_system_prompt(
@@ -409,7 +423,6 @@ async fn run_chat_turn_on(
                 mcp_note.as_deref(),
                 &extra_roots,
                 &directive,
-                user_home.as_deref(),
                 &skill_settings,
             )
         })

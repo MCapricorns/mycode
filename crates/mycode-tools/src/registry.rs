@@ -6,7 +6,7 @@
 //! deterministically.
 
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use mycode_providers::tool::ToolSpec;
@@ -18,6 +18,11 @@ struct RegistryInner {
     /// Built under the same lock as `tools`, so a registration cannot
     /// publish a spec list that no longer matches the map.
     specs: Option<Arc<[ToolSpec]>>,
+    /// Names the model may call directly. `None` exposes every registered
+    /// tool; `Some` restricts `specs`/`prompt_entries`/`names`/`is_exposed`
+    /// to the listed names — the rest stay callable only through
+    /// `run_code`'s `call(name, args)`, which reads `tools` unfiltered.
+    exposed: Option<BTreeSet<String>>,
 }
 
 /// Thread-safe registry of tools, keyed by name.
@@ -31,6 +36,7 @@ impl ToolRegistry {
             inner: RwLock::new(RegistryInner {
                 tools: BTreeMap::new(),
                 specs: None,
+                exposed: None,
             }),
         }
     }
@@ -45,12 +51,39 @@ impl ToolRegistry {
         inner.specs = None;
     }
 
+    /// Restrict the model-facing surface to `names`: `Request.tools`, the
+    /// system-prompt list, and top-level dispatch see only those. Everything
+    /// registered keeps dispatching through `run_code`'s `call(name, args)`.
+    pub fn expose_only(&self, names: &[&str]) {
+        let mut inner = self.write();
+        inner.exposed = Some(names.iter().map(|name| (*name).to_owned()).collect());
+        inner.specs = None;
+    }
+
+    /// Whether a top-level model call may name this tool.
+    pub fn is_exposed(&self, name: &str) -> bool {
+        self.read()
+            .exposed
+            .as_ref()
+            .is_none_or(|exposed| exposed.contains(name))
+    }
+
+    /// The names a top-level call may use, sorted: the exposed set when one
+    /// is configured, otherwise every registered tool.
+    pub fn exposed_names(&self) -> Vec<String> {
+        let inner = self.read();
+        match &inner.exposed {
+            Some(exposed) => exposed.iter().cloned().collect(),
+            None => inner.tools.keys().cloned().collect(),
+        }
+    }
+
     pub fn get(&self, name: &str) -> Option<Arc<dyn ToolDyn>> {
         self.read().tools.get(name).cloned()
     }
 
-    /// Specs of all registered tools, sorted by tool name for stable
-    /// provider serialization.
+    /// Specs of the exposed tools, sorted by tool name for stable provider
+    /// serialization. Registered-but-hidden tools are left out.
     pub fn specs(&self) -> Arc<[ToolSpec]> {
         if let Some(cached) = self.read().specs.clone() {
             return cached;
@@ -59,16 +92,33 @@ impl ToolRegistry {
         if let Some(cached) = inner.specs.clone() {
             return cached;
         }
-        let built: Arc<[ToolSpec]> = inner.tools.values().map(|tool| tool.spec()).collect();
+        let built: Arc<[ToolSpec]> = inner
+            .tools
+            .iter()
+            .filter(|(name, _)| {
+                inner
+                    .exposed
+                    .as_ref()
+                    .is_none_or(|exposed| exposed.contains(*name))
+            })
+            .map(|(_, tool)| tool.spec())
+            .collect();
         inner.specs = Some(Arc::clone(&built));
         built
     }
 
-    /// Names and optional prompt snippets of all registered tools, sorted by name.
+    /// Names and optional prompt snippets of the exposed tools, sorted by name.
     pub fn prompt_entries(&self) -> Vec<(String, Option<String>)> {
-        self.read()
+        let inner = self.read();
+        inner
             .tools
             .iter()
+            .filter(|(name, _)| {
+                inner
+                    .exposed
+                    .as_ref()
+                    .is_none_or(|exposed| exposed.contains(*name))
+            })
             .map(|(name, tool)| {
                 (
                     name.clone(),
@@ -78,7 +128,8 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Names of all registered tools, sorted.
+    /// Names of all registered tools, sorted — including ones only `call()`
+    /// reaches. Used for the unknown-tool hint and the MCP native snapshot.
     pub fn names(&self) -> Vec<String> {
         self.read().tools.keys().cloned().collect()
     }

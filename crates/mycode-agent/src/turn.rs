@@ -486,11 +486,19 @@ pub(crate) async fn run_tool_call(
     );
 
     let tool_name = canonical_tool_name(&call.name);
-    let Some(tool) = env.tools.get(tool_name) else {
+    // A tool the registry hides is answered like an unknown one: the model
+    // may call only what `Request.tools` advertised, and `run_code` reaches
+    // the rest through `call(name, args)`.
+    let tool = if env.tools.is_exposed(tool_name) {
+        env.tools.get(tool_name)
+    } else {
+        None
+    };
+    let Some(tool) = tool else {
         // Naming the real tools lets the model correct a guessed name in
         // one retry instead of guessing again.
         const LISTED: usize = 40;
-        let names = env.tools.names();
+        let names = env.tools.exposed_names();
         let mut available = names
             .iter()
             .take(LISTED)
