@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.28] - 2026-10-23
+
 ### Changed
 
 - 技能与 MCP 全部收敛到 magpie Library：技能只读 `~/.mycode/skills`，MCP 只读 `~/.mycode/mcp.json`；`.agents` 技能树、`~/.agents/AGENTS.md`、项目 `.mycode/mcp.json`、settings.json 的 `mcpServers` 行，以及导入 JSON / 添加自定义服务器的设置页入口全部移除。
@@ -453,7 +455,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.27...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.28...HEAD
+[0.12.28]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.28
 [0.12.27]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.27
 [0.12.26]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.26
 [0.12.25]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.25
