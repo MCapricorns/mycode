@@ -36,6 +36,7 @@ mod state;
 mod subagent;
 mod title;
 mod tool_hosts;
+mod tool_search;
 mod turn;
 mod updates;
 mod user_agent;
@@ -316,15 +317,17 @@ pub enum CacheDisruption {
 pub enum BridgeEvent {
     /// Incremental assistant text.
     ChatText {
-        /// Session identity spelling.
-        session_id: String,
+        /// Session identity spelling. Shared: this event arrives once per
+        /// streamed fragment, and routing it must not allocate.
+        session_id: Arc<str>,
         /// Text fragment.
         delta: String,
     },
     /// Incremental assistant reasoning.
     ChatThinking {
-        /// Session identity spelling.
-        session_id: String,
+        /// Session identity spelling. Shared for the same per-fragment reason
+        /// as [`BridgeEvent::ChatText`].
+        session_id: Arc<str>,
         /// Reasoning fragment.
         delta: String,
     },

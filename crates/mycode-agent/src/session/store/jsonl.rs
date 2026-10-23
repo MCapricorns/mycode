@@ -200,7 +200,7 @@ pub(crate) fn decode_line(bytes: &[u8]) -> Result<DecodedLine, ()> {
     if body.contains(&b'\n') || body.contains(&b'\r') {
         return Err(());
     }
-    let line: LineOwned = serde_json::from_slice(body).map_err(|_| ())?;
+    let mut line: LineOwned = serde_json::from_slice(body).map_err(|_| ())?;
     let kind = kind_from_label(&line.kind).ok_or(())?;
     if SessionEventId::parse(&line.id).is_none() {
         return Err(());
@@ -215,8 +215,14 @@ pub(crate) fn decode_line(bytes: &[u8]) -> Result<DecodedLine, ()> {
         return Err(());
     }
     let _ = line.ts;
-    let payload = match (&line.payload_text, &line.payload, &line.payload_file) {
-        (Some(text), None, None) => text.clone().into_bytes(),
+    // The decoded line owns its payload string; move it out instead of
+    // copying an inline payload that can approach the externalization bound.
+    let payload = match (
+        line.payload_text.take(),
+        line.payload.as_ref(),
+        line.payload_file.as_ref(),
+    ) {
+        (Some(text), None, None) => text.into_bytes(),
         (None, Some(inline), None) => STANDARD.decode(inline).map_err(|_| ())?,
         (None, None, Some(_)) => Vec::new(),
         _ => return Err(()),

@@ -413,9 +413,12 @@ impl BridgeAgentHost {
             .map_err(|error| fail(format!("HTTP transport unavailable: {error}")))?;
         let wire = WireProvider::new(resolved, Arc::new(transport));
         let allowed = role.resolve_tools(PARENT_TOOL_NAMES);
-        // Stdio servers are spawned kill-on-drop, so a stop may abandon a
-        // slow handshake.
-        let (mcp_tools, mcp_warning) = tokio::select! {
+        // Progressive MCP: `connect_mcp_tools` returns as soon as the
+        // handshakes are spawned. A child never waits for them; it registers
+        // whatever is already ready and drains the rest while it runs. The
+        // handshakes belong to the shared pool, so a stopped child only
+        // stops its own drain listener.
+        let mcp_connect = tokio::select! {
             biased;
             () = child_cancel.cancelled() => return Err(cancelled()),
             connected = crate::mcp_tools::connect_mcp_tools(
@@ -425,20 +428,76 @@ impl BridgeAgentHost {
                 Some(&self.cwd),
             ) => connected,
         };
-        let mcp_tools = if role.is_write_capable() {
-            mcp_tools
-        } else {
-            mcp_tools
+        // The read-only filter sits on the drained `Vec<Arc<DynamicMcpTool>>`
+        // output, not inside registration: a role that cannot write may only
+        // inherit tools that declare `readOnlyHint`.
+        let write_capable = role.is_write_capable();
+        let any_mcp = !mcp_connect.is_empty();
+        let ready: Vec<(Arc<crate::mcp_tools::McpServerInfo>, Vec<Arc<crate::mcp_tools::DynamicMcpTool>>)> =
+            mcp_connect
+                .ready
                 .into_iter()
-                .filter(|tool| tool.read_only())
-                .collect()
-        };
+                .map(|(server, tools)| (server, filter_mcp_tools(tools, write_capable)))
+                .collect();
         let shell = mycode_agent::resolved_shell();
-        let registry =
-            child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
-        let mcp_note = crate::mcp_tools::register_mcp_tools(&registry, mcp_tools, mcp_warning)
-            .map(|catalog| child_mcp_note(&catalog.prompt_note(), role.is_write_capable()));
-        let registry = Arc::new(registry);
+        let registry = Arc::new(child_registry_with(
+            &allowed,
+            mycode_agent::ShellTool::forcing(shell.clone()),
+        ));
+        let mut mcp_drain: Option<ChildDrain> = None;
+        let mcp_note = if !any_mcp && ready.is_empty() {
+            None
+        } else {
+            let native: std::collections::BTreeSet<String> = registry
+                .names()
+                .into_iter()
+                .map(|name| name.to_ascii_lowercase())
+                .collect();
+            let catalog = crate::mcp_tools::McpCatalog::new(
+                mcp_connect.warning.clone(),
+                native,
+                mcp_connect.connecting.clone(),
+            );
+            let index = crate::tool_search::ToolSearchIndex::new();
+            crate::mcp_tools::register_meta_tools(&registry, &catalog, Arc::clone(&index));
+            let mut seen_failed = std::collections::HashSet::new();
+            for (id, reason) in &mcp_connect.failed {
+                catalog.mark_failed(
+                    Arc::new(crate::mcp_tools::McpServerInfo::new(id, None)),
+                    reason,
+                );
+                seen_failed.insert(id.clone());
+            }
+            let mut seen = std::collections::HashSet::new();
+            for (server, tools) in ready {
+                seen.insert(server.id().to_owned());
+                crate::mcp_tools::register_ready_server(&registry, &catalog, &index, server, tools);
+            }
+            let drain_registry = Arc::clone(&registry);
+            let drain_catalog = Arc::clone(&catalog);
+            let failed_catalog = Arc::clone(&catalog);
+            mcp_drain = Some(ChildDrain(tokio::spawn(crate::mcp_tools::drain_mcp_ready(
+                Arc::clone(&self.mcp_pool),
+                seen,
+                seen_failed,
+                // A child cancel stops the listener only; the handshakes
+                // belong to the shared pool.
+                Some(child_cancel.clone()),
+                move |server, tools| {
+                    let tools = filter_mcp_tools(tools, write_capable);
+                    crate::mcp_tools::register_ready_server(
+                        &drain_registry,
+                        &drain_catalog,
+                        &index,
+                        server,
+                        tools,
+                    );
+                },
+                move |server, reason| failed_catalog.mark_failed(server, reason),
+            ))));
+            Some(child_mcp_note(&catalog.prompt_note(), write_capable))
+        };
+        let _mcp_drain = mcp_drain;
         // The same compaction the parent turn runs, on this child's history
         // only: no checkpoint slot, so the parent's file is never touched.
         let (child_model, context_window) = self.child_window(&role.name);
@@ -838,16 +897,48 @@ struct ChildWorkspace {
 }
 
 /// The parent's MCP note, plus the read-only filter a role without write
-/// tools runs under, so both prompts describe `search_tool` the same way.
+/// tools runs under, so both prompts describe the meta tools the same way.
 fn child_mcp_note(catalog_note: &str, write_capable: bool) -> String {
     let mut note = catalog_note.to_owned();
     note.push_str(
-        "`search_tool` is a read: emit it in the same response as other independent calls.",
+        "`search_tool` and `tool_search` are reads: emit them in the same response as other \
+         independent calls.",
+    );
+    note.push_str(
+        " A server still connecting is named as such; its tools appear once its handshake \
+         finishes, and until then `use_tool` reports it as connecting.",
     );
     if !write_capable {
         note.push_str(" This role receives only MCP tools that declare readOnlyHint.");
     }
     note
+}
+
+/// Filters one drained server's tools for a role that cannot write.
+///
+/// The filter runs on the drain output, before registration: a read-only
+/// role never sees a schema it may not call.
+fn filter_mcp_tools(
+    tools: Vec<Arc<crate::mcp_tools::DynamicMcpTool>>,
+    write_capable: bool,
+) -> Vec<Arc<crate::mcp_tools::DynamicMcpTool>> {
+    if write_capable {
+        tools
+    } else {
+        tools
+            .into_iter()
+            .filter(|tool| tool.read_only())
+            .collect()
+    }
+}
+
+/// Aborts a child's MCP drain listener when the child run ends.
+struct ChildDrain(tokio::task::JoinHandle<()>);
+
+impl Drop for ChildDrain {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 fn render_os_block(os: &str, arch: &str, cwd: &Path) -> String {
@@ -879,5 +970,4 @@ fn child_registry_with(allowed: &[String], shell: mycode_agent::ShellTool) -> To
 }
 
 #[cfg(test)]
-#[allow(unused_variables)]
 mod tests;

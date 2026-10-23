@@ -8,12 +8,8 @@ pub mod magpie;
 
 use serde::{Deserialize, Serialize};
 
-/// Wire protocol: Anthropic Messages.
-pub const KIND_ANTHROPIC_MESSAGES: &str = "anthropic-messages";
 /// Wire protocol: OpenAI Chat Completions.
 pub const KIND_OPENAI_COMPLETIONS: &str = "openai-completions";
-/// Wire protocol: OpenAI Responses.
-pub const KIND_OPENAI_RESPONSES: &str = "openai-responses";
 
 /// Upper bound for model entries in one provider.
 pub const MAX_MODELS_PER_PROVIDER: usize = 512;

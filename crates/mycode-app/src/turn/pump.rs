@@ -23,7 +23,9 @@ use super::compact::{DeferredSummaries, watch_prompt_cache};
 pub(super) struct LedgerPump {
     pub(super) events: crate::BridgeEventTx,
     pub(super) writer: HeadWriter,
-    pub(super) session_id: String,
+    /// Session identity spelling. Shared so the per-fragment events
+    /// (`ChatText`/`ChatThinking`) route without a String copy per token.
+    pub(super) session_id: Arc<str>,
     /// Summaries the request hook produced mid-turn; published after the
     /// closing reply so a card cannot split a tool call from its result.
     pub(super) deferred: DeferredSummaries,
@@ -73,13 +75,13 @@ impl LedgerPump {
             match event {
                 AgentEvent::MessageDelta(MessageDelta::TextDelta(delta)) => {
                     self.send(BridgeEvent::ChatText {
-                        session_id: self.session_id.clone(),
+                        session_id: Arc::clone(&self.session_id),
                         delta,
                     });
                 }
                 AgentEvent::MessageDelta(MessageDelta::ThinkingDelta(delta)) => {
                     self.send(BridgeEvent::ChatThinking {
-                        session_id: self.session_id.clone(),
+                        session_id: Arc::clone(&self.session_id),
                         delta,
                     });
                 }
@@ -113,7 +115,7 @@ impl LedgerPump {
                         Err(error) => return self.fail(render_error(error)).await,
                     };
                     self.send(BridgeEvent::ToolStarted {
-                        session_id: self.session_id.clone(),
+                        session_id: self.session_id.to_string(),
                         call_id: identity.as_str().to_owned(),
                         provider_call_id,
                         name,
@@ -131,7 +133,7 @@ impl LedgerPump {
                         continue;
                     };
                     self.send(BridgeEvent::ToolProgress {
-                        session_id: self.session_id.clone(),
+                        session_id: self.session_id.to_string(),
                         call_id: identity,
                         provider_call_id,
                         name: String::new(),
@@ -153,7 +155,7 @@ impl LedgerPump {
                             // replayed rows do.
                             entry.call_id = Some(identity);
                             self.send(BridgeEvent::ToolCompleted {
-                                session_id: self.session_id.clone(),
+                                session_id: self.session_id.to_string(),
                                 entry,
                             });
                         }
@@ -200,7 +202,7 @@ impl LedgerPump {
                             Ok(entry) => {
                                 last_step = Some(entry.clone());
                                 self.send(BridgeEvent::AssistantStep {
-                                    session_id: self.session_id.clone(),
+                                    session_id: self.session_id.to_string(),
                                     entry,
                                 });
                             }
@@ -218,7 +220,7 @@ impl LedgerPump {
                 }
                 AgentEvent::Compacting(active) => {
                     self.send(BridgeEvent::ContextCompacting {
-                        session_id: self.session_id.clone(),
+                        session_id: self.session_id.to_string(),
                         active,
                     });
                 }
@@ -279,7 +281,7 @@ impl LedgerPump {
 
     fn send_preparing(&self, provider_call_id: String, name: String, target: String) {
         self.send(BridgeEvent::ToolPreparing {
-            session_id: self.session_id.clone(),
+            session_id: self.session_id.to_string(),
             provider_call_id,
             name,
             target,
@@ -293,7 +295,7 @@ impl LedgerPump {
     async fn fail(&self, message: impl Into<String>) -> BridgeEvent {
         self.cancel.cancel();
         BridgeEvent::ChatFailed {
-            session_id: self.session_id.clone(),
+            session_id: self.session_id.to_string(),
             message: message.into(),
             head: self.writer.head().await,
         }
@@ -307,7 +309,7 @@ impl LedgerPump {
 
     fn send_usage(&self, usage: &TurnUsage) {
         self.send(BridgeEvent::UsageSnapshot {
-            session_id: self.session_id.clone(),
+            session_id: self.session_id.to_string(),
             model: self.usage_model.clone(),
             input: usage.input,
             context: usage.latest_input,
@@ -344,7 +346,7 @@ impl LedgerPump {
         };
         let entry = self.commit_assistant(assistant).await?;
         self.send(BridgeEvent::AssistantStep {
-            session_id: self.session_id.clone(),
+            session_id: self.session_id.to_string(),
             entry,
         });
         Ok(())
@@ -361,7 +363,7 @@ impl LedgerPump {
             .await
             .map_err(render_error)?;
         self.send(BridgeEvent::SteerCommitted {
-            session_id: self.session_id.clone(),
+            session_id: self.session_id.to_string(),
             head: self.writer.head().await,
             entry: ConversationEntry {
                 event_id,
@@ -388,7 +390,7 @@ impl LedgerPump {
     async fn finish(&self, entry: ConversationEntry) -> BridgeEvent {
         self.publish_deferred().await;
         BridgeEvent::ChatDone {
-            session_id: self.session_id.clone(),
+            session_id: self.session_id.to_string(),
             head: self.writer.head().await,
             entry,
         }

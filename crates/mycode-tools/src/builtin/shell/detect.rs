@@ -259,29 +259,11 @@ pub fn detect_default_shell() -> Option<DetectedShell> {
     }
 }
 
-struct CachedShell {
-    detected: Option<DetectedShell>,
-    resolved: DetectedShell,
-}
+static CACHED_SHELL: OnceLock<DetectedShell> = OnceLock::new();
 
-static CACHED_SHELL: OnceLock<CachedShell> = OnceLock::new();
-
-fn cached_shell() -> &'static CachedShell {
+fn cached_shell() -> &'static DetectedShell {
     note_ignored_mycode_shell();
-    CACHED_SHELL.get_or_init(|| {
-        let detected = detect_default_shell();
-        let resolved = detected.clone().unwrap_or_else(fallback_shell);
-        CachedShell { detected, resolved }
-    })
-}
-
-/// Shell discovered on this host, without the Windows `cmd.exe` fallback.
-///
-/// The value is computed once per process so the tool spec and later launches
-/// stay on the same interpreter.
-#[must_use]
-pub fn active_shell() -> Option<DetectedShell> {
-    cached_shell().detected.clone()
+    CACHED_SHELL.get_or_init(|| detect_default_shell().unwrap_or_else(fallback_shell))
 }
 
 /// Shell the tool and the system prompt agree on for this process.
@@ -290,7 +272,7 @@ pub fn active_shell() -> Option<DetectedShell> {
 /// `cmd.exe` and the model sees the `cmd` tool.
 #[must_use]
 pub fn resolved_shell() -> DetectedShell {
-    cached_shell().resolved.clone()
+    cached_shell().clone()
 }
 
 fn note_ignored_mycode_shell() {

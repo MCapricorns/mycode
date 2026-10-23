@@ -17,10 +17,7 @@ mod proxy;
 mod skills;
 mod subagent_roles;
 
-pub use magpie::{
-    DEFAULT_MAGPIE_BASE_URL, MAGPIE_KEY_PREFIX, MAGPIE_PROVIDER_ID, MAGPIE_PROVIDER_NAME,
-    MagpieSettings,
-};
+pub use magpie::{MAGPIE_PROVIDER_ID, MagpieSettings};
 pub(crate) use mcp::{MAX_MCP_ARGS, MAX_MCP_HEADERS, is_env_var_name, is_header_name};
 pub use mcp::{
     MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, is_mcp_executable, split_command_line,

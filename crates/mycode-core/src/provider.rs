@@ -85,16 +85,6 @@ impl ReasoningLevel {
             Self::Max => Some("max"),
         }
     }
-
-    /// Returns whether `token` is a syntactically valid effort token (`1..=32`
-    /// ASCII alphanumeric, `-`, or `_` bytes).
-    #[must_use]
-    pub fn is_valid_token(token: &str) -> bool {
-        (1..=32).contains(&token.len())
-            && token
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-    }
 }
 
 /// Failure modes for [`check_encoded_json_bound`].

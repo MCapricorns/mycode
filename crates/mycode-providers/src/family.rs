@@ -540,8 +540,7 @@ fn apply_kimi_chat(body: &mut Value, model_id: &str, level: ReasoningLevel) {
     // `max` (default max). Off has no disable switch, so the field is omitted
     // rather than sending `{type:"disabled"}`, which this model 400s.
     // https://platform.kimi.com/docs/guide/use-reasoning-effort.md
-    // A published models.dev list still gates the token. An id the active
-    // catalog and the bundled baseline both omit keeps the id-based token so
+    // The token is id-based, with no published list in the way, so
     // coding-plan ids such as `k3` and `k3-256k` keep working.
     if is_k3_model(model_id) {
         if let Some(token) = kimi_effort_token(level) {

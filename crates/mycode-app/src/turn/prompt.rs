@@ -163,8 +163,9 @@ pub(crate) fn session_system_prompt(
         system_prompt.push_str(note);
         system_prompt.push_str(
             // The note already says how to reach the servers' tools.
-            "`search_tool` is a read: emit it in the same response as other independent \
-calls, `agent` included, instead of waiting for them.\n</mcp>",
+            "`search_tool` and `tool_search` are reads: emit them in the same response as other \
+independent calls, `agent` included, instead of waiting for them. A server named as \
+connecting is still handshaking; its tools appear on the tool list once it is ready.\n</mcp>",
         );
     }
     let (mut roots, scratch) = split_scratch_root(extra_roots);

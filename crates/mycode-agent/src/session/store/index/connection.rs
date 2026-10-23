@@ -64,7 +64,7 @@ pub(super) fn open_reader(path: &Path) -> Result<Connection, StoreError> {
     Ok(conn)
 }
 
-pub(super) fn open_connection(path: &Path, create_schema: bool) -> Result<Connection, StoreError> {
+pub(super) fn open_connection(path: &Path) -> Result<Connection, StoreError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|_| StoreError::Storage)?;
     }
@@ -77,10 +77,8 @@ pub(super) fn open_connection(path: &Path, create_schema: bool) -> Result<Connec
          PRAGMA foreign_keys=ON;",
     )
     .map_err(|_| StoreError::Storage)?;
-    if create_schema {
-        conn.execute_batch(SCHEMA)
-            .map_err(|_| StoreError::Storage)?;
-    }
+    conn.execute_batch(SCHEMA)
+        .map_err(|_| StoreError::Storage)?;
     Ok(conn)
 }
 

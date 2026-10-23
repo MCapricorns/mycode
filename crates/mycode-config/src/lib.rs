@@ -73,10 +73,10 @@ pub(crate) fn write_owned_test_bytes(
 }
 #[doc(inline)]
 pub use settings::{
-    AppSettings, AppearanceSettings, DEFAULT_MAGPIE_BASE_URL, MAGPIE_KEY_PREFIX,
-    MAGPIE_PROVIDER_ID, MAGPIE_PROVIDER_NAME, MAX_AUTHORITY_DOCUMENT_BYTES, MAX_DISABLED_SKILLS,
-    MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, MAX_MODELS_PER_PROVIDER,
-    MagpieSettings, McpServerSettings, PROXY_SCHEMES, ProviderSettings, ProxyPreference,
+    AppSettings, AppearanceSettings, MAGPIE_PROVIDER_ID, MAX_AUTHORITY_DOCUMENT_BYTES,
+    MAX_DISABLED_SKILLS, MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS,
+    MAX_MODELS_PER_PROVIDER, MagpieSettings, McpServerSettings, PROXY_SCHEMES, ProviderSettings,
+    ProxyPreference,
     SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SUBAGENT_CONCURRENCY, SkillsSettings,
     SubagentRoleSettings, SubagentSettings, VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES,
     is_mcp_executable, read_app_settings, read_app_settings_with_repair, replace_app_settings,

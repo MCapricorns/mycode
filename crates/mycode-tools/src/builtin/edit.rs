@@ -330,7 +330,7 @@ use engine::*;
 
 #[cfg(test)]
 mod compat_tests {
-    use super::{EditArgs, EditTool};
+    use super::EditTool;
     use crate::stream::ToolStream;
     use crate::tool::{ToolDyn, ToolResult};
     use serde_json::Value;
@@ -417,20 +417,6 @@ mod compat_tests {
             "alpha\nBETA\ngamma\n"
         );
         let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// The execute path is the one the agent uses; keep the typed args
-    /// constructing cleanly after the compat changes.
-    #[allow(dead_code)]
-    fn _typed_args(path: String) -> EditArgs {
-        EditArgs {
-            path,
-            expected_revision: None,
-            old_string: None,
-            new_string: None,
-            replace_all: false,
-            operations: None,
-        }
     }
 }
 

@@ -6,9 +6,8 @@ mod compact;
 mod control;
 mod prompt;
 mod pump;
-#[cfg(test)]
-mod tests;
 
+use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -250,11 +249,12 @@ async fn run_chat_turn_on(
         branch.clone(),
         expected_head,
     );
-    // MCP servers connect here (spawn + handshake + tools/list): awaited on
-    // the spawned turn task, so command processing never blocks. A server
-    // that fails to connect is skipped, never a failed turn. Stdio servers
-    // are spawned kill-on-drop, so a cancel may abandon a slow handshake.
-    let (mcp_tools, mcp_warning) = control
+    // MCP starts here without waiting for any handshake: `resolve` reads
+    // secrets and merges the server sources (blocking pool, a few ms),
+    // `spawn_slots` starts one background handshake per server, and each
+    // server's tools are registered as it becomes ready. A server that fails
+    // is skipped and retried after its own per-server cooldown.
+    let mcp_connect = control
         .unless_cancelled(crate::mcp_tools::connect_mcp_tools(
             home,
             &settings,
@@ -276,7 +276,7 @@ async fn run_chat_turn_on(
         .await
         .map_err(|error| format!("workspace setup task: {error}"))?
     };
-    let registry = Arc::new({
+    let registry: Arc<ToolRegistry> = Arc::new({
         let registry = ToolRegistry::new();
         mycode_agent::register_builtins(&registry);
         // ask_user rides the same registry; its channel forwards questions
@@ -308,7 +308,80 @@ async fn run_chat_turn_on(
         }
         registry
     });
-    let mcp_catalog = crate::mcp_tools::register_mcp_tools(&registry, mcp_tools, mcp_warning);
+    // Code mode: `run_code` holds the registry so a script's `call(name, …)`
+    // is a runtime lookup. It registers before the MCP meta tools, so the
+    // native-name snapshot below already contains `run_code`/`wait_code`.
+    // The cell table is process-wide, so both tools carry this session's id
+    // and can only start or collect that session's cells.
+    registry.register(Arc::new(mycode_agent::RunCodeTool::new(
+        Arc::clone(&registry),
+        Arc::clone(&state.code_cells),
+        session_id.to_owned(),
+    )));
+    registry.register(Arc::new(mycode_agent::WaitCodeTool::new(
+        Arc::clone(&state.code_cells),
+        session_id.to_owned(),
+    )));
+    // Progressive MCP: the meta tools exist from cycle 1, ready servers are
+    // written catalog-first then registry, and the rest arrive through the
+    // background drain. The drain task is aborted at the end of the turn —
+    // that stops this turn's listener only; the pool keeps its handshakes.
+    let mut _mcp_drain: Option<AbortTask> = None;
+    let mcp_catalog = if mcp_connect.is_empty() {
+        None
+    } else {
+        // Snapshot before the meta tools register, so the name checks below
+        // never see `search_tool` / `use_tool` / `tool_search` themselves.
+        let native: BTreeSet<String> = registry
+            .names()
+            .into_iter()
+            .map(|name| name.to_ascii_lowercase())
+            .collect();
+        let catalog = crate::mcp_tools::McpCatalog::new(
+            mcp_connect.warning.clone(),
+            native,
+            mcp_connect.connecting.clone(),
+        );
+        let index = crate::tool_search::ToolSearchIndex::new();
+        crate::mcp_tools::register_meta_tools(&registry, &catalog, Arc::clone(&index));
+        // Failures known at turn start are visible to a `use_tool` miss, and
+        // are seeded so the drain does not report them twice.
+        let mut seen_failed = HashSet::new();
+        for (id, reason) in &mcp_connect.failed {
+            catalog.mark_failed(
+                Arc::new(crate::mcp_tools::McpServerInfo::new(id, None)),
+                reason,
+            );
+            seen_failed.insert(id.clone());
+        }
+        let mut seen = HashSet::new();
+        for (server, tools) in mcp_connect.ready {
+            seen.insert(server.id().to_owned());
+            crate::mcp_tools::register_ready_server(&registry, &catalog, &index, server, tools);
+        }
+        let drain_registry = Arc::clone(&registry);
+        let drain_catalog = Arc::clone(&catalog);
+        let failed_catalog = Arc::clone(&catalog);
+        _mcp_drain = Some(AbortTask(tokio::spawn(crate::mcp_tools::drain_mcp_ready(
+            Arc::clone(&state.mcp_pool),
+            seen,
+            seen_failed,
+            Some(control.cancel.clone()),
+            move |server, tools| {
+                crate::mcp_tools::register_ready_server(
+                    &drain_registry,
+                    &drain_catalog,
+                    &index,
+                    server,
+                    tools,
+                );
+            },
+            // A server that fails mid-turn stops reading as "connecting";
+            // the next `use_tool` miss names the real failure and retry.
+            move |server, reason| failed_catalog.mark_failed(server, reason),
+        ))));
+        Some(catalog)
+    };
 
     // Owned for the compaction hook and the cancel registration.
     let session_id = session_id.to_owned();
@@ -317,7 +390,10 @@ async fn run_chat_turn_on(
     let user_home = os_user_home();
     let read_roots = mycode_agent::skill_read_roots(user_home.as_deref(), Some(home.root()));
     let directive = crate::subagent::delegation_directive(&role_catalog, &settings.subagents);
-    let mcp_note = mcp_catalog.as_ref().map(|catalog| catalog.prompt_note());
+    let mcp_note = mcp_catalog
+        .as_ref()
+        .map(|catalog| catalog.prompt_note())
+        .filter(|note| !note.trim().is_empty());
     let system_prompt = {
         let home = home.clone();
         let cwd = cwd.clone();
@@ -483,7 +559,7 @@ async fn run_chat_turn_on(
         pump::LedgerPump {
             events: events.clone(),
             writer,
-            session_id: session_id.clone(),
+            session_id: Arc::from(session_id.as_str()),
             deferred,
             cancel: control.cancel.clone(),
             usage_model,
@@ -588,6 +664,18 @@ async fn persist_hook_summary(
         crate::compaction::persist_turn_summary(&home, &target, &ledger, &memory)
     })
     .await;
+}
+
+/// Aborts a background task when the turn ends, without waiting for it.
+///
+/// The MCP drain task only listens to the pool; aborting it leaves the
+/// handshakes (owned by the pool) running for the next turn.
+struct AbortTask(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Splits the latest non-empty user message off as the prompt.

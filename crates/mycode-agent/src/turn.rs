@@ -61,6 +61,10 @@ pub(crate) fn push_shared(env: &TurnEnv<'_>, state: &mut AgentState, msg: Shared
 /// [`AgentEvent::MessageDelta`], and keep the fully assembled
 /// [`AssistantMessage`] from the terminal `Done` event.
 ///
+/// Returns the shared message that was appended to the history, so the
+/// caller does not copy the assembled text, thinking, and tool arguments a
+/// second time.
+///
 /// Cancellation surfaces as [`TurnFailure::Aborted`] — either via the
 /// stream's own `Error(Cancelled)` termination or a boundary check.
 pub(crate) async fn stream_assistant(
@@ -70,7 +74,7 @@ pub(crate) async fn stream_assistant(
     state: &mut AgentState,
     started: &mut bool,
     pending_user: &mut Option<Arc<Message>>,
-) -> Result<AssistantMessage, TurnFailure> {
+) -> Result<SharedMessage, TurnFailure> {
     let system_prompt = if config.system_prompt.is_empty() {
         Arc::from([build_system_prompt(env.tools)])
     } else {
@@ -188,10 +192,10 @@ pub(crate) async fn stream_assistant(
                 }
                 StreamEvent::Done { message } => {
                     let message = merge_draft(message, &draft_thinking, &draft_text);
-                    let shared = Arc::new(Message::Assistant(message.clone()));
+                    let shared: SharedMessage = Arc::new(Message::Assistant(message));
                     state.messages.push(Arc::clone(&shared));
-                    emit(env, AgentEvent::MessageAdded(shared));
-                    return Ok(message);
+                    emit(env, AgentEvent::MessageAdded(Arc::clone(&shared)));
+                    return Ok(shared);
                 }
                 StreamEvent::Error(error) => {
                     if error.is_cancelled() {
@@ -254,8 +258,18 @@ async fn shrink_overflowed(
     state: &mut AgentState,
     refused: &Request,
 ) -> Result<Option<Request>, TurnFailure> {
-    let mut retry = refused.clone();
-    retry.messages = state.messages.clone();
+    // The refused request is rebuilt rather than cloned: its message list is
+    // replaced by the history the hook expects, so cloning it would copy the
+    // old list only to drop it.
+    let retry = Request {
+        system_prompt: Arc::clone(&refused.system_prompt),
+        messages: state.messages.clone(),
+        tools: Arc::clone(&refused.tools),
+        reasoning: refused.reasoning,
+        max_output_tokens: refused.max_output_tokens,
+        reasoning_token: refused.reasoning_token.clone(),
+        prompt_cache_key: refused.prompt_cache_key.clone(),
+    };
     let smaller = env.hooks.shrink_overflowed(retry).await;
     if token.is_cancelled() {
         return Err(TurnFailure::Aborted);
@@ -302,7 +316,7 @@ fn commit_interrupted(
     thinking: String,
     mut text: String,
     detail: &str,
-) -> AssistantMessage {
+) -> SharedMessage {
     let note = mycode_tools::interrupted_response_text(detail);
     if !text.contains(note.as_str()) {
         if !text.is_empty() && !text.ends_with('\n') {
@@ -322,10 +336,10 @@ fn commit_interrupted(
         usage: None,
         stop_reason: mycode_tools::StopReason::Error,
     };
-    let shared = Arc::new(Message::Assistant(message.clone()));
+    let shared: SharedMessage = Arc::new(Message::Assistant(message));
     state.messages.push(Arc::clone(&shared));
-    emit(env, AgentEvent::MessageAdded(shared));
-    message
+    emit(env, AgentEvent::MessageAdded(Arc::clone(&shared)));
+    shared
 }
 
 /// Fills thinking or text the reducer omitted when the draft already has it.
