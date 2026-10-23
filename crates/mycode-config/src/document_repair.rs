@@ -506,7 +506,7 @@ mod tests {
             r#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"magpie":{"#,
             r#""enabled":true,"baseUrl":"http://127.0.0.1:3425/v1","#,
             r#""apiKey":"magpie-mycode","model":"opendesign/deepseek-v4.1-flash"},"#,
-            r#""mcpServers":[],"appearance":{"theme":"dark","language":"auto","fontSize":"m"}}"#
+            r#""appearance":{"theme":"dark","language":"auto","fontSize":"m"}}"#
         );
         let path = home.root().join("settings.json");
         std::fs::write(&path, document).unwrap();

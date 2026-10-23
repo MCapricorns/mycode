@@ -27,7 +27,7 @@ pub struct SettingsState {
     pub magpie: mycode_app::MagpieSettings,
     /// The one provider row the picker reads: magpie's gateway.
     pub providers: Vec<mycode_app::ProviderSettings>,
-    /// MCP servers.
+    /// MCP servers — the magpie Library catalog, read-only in the editor.
     pub mcp_servers: Vec<mycode_app::McpServerSettings>,
     /// Appearance theme: `dark` or `light`.
     pub theme: String,
@@ -76,7 +76,9 @@ impl SettingsState {
             proxy: settings.proxy.clone(),
             magpie: settings.magpie.clone(),
             providers,
-            mcp_servers: settings.mcp_servers.clone(),
+            // The page shows magpie's Library file, not the settings
+            // document — `settings.json` no longer carries MCP rows.
+            mcp_servers: Vec::new(),
             theme: settings.effective_theme().to_owned(),
             language: settings.appearance.language.clone(),
             font_size: settings.effective_font_size().to_owned(),
@@ -97,7 +99,6 @@ impl SettingsState {
         mycode_app::AppSettings {
             proxy: self.proxy.clone(),
             magpie: self.magpie.clone(),
-            mcp_servers: self.mcp_servers.clone(),
             appearance: mycode_app::AppearanceSettings {
                 theme: self.theme.clone(),
                 language: self.language.clone(),
@@ -120,18 +121,6 @@ pub enum ModelsSubview {
     Catalog,
 }
 
-/// The MCP settings sub-page.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum McpSubview {
-    /// Configured servers plus the add buttons.
-    #[default]
-    List,
-    /// Paste a Claude Desktop / Cursor mcp.json.
-    Json,
-    /// The custom stdio or HTTP server form.
-    Custom,
-}
-
 /// One settings navigation section (the secondary menu).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SettingsSection {
@@ -144,7 +133,7 @@ pub enum SettingsSection {
     Models,
     /// Subagent roles and per-role model routes.
     Agents,
-    /// Slash-command skills from magpie's Library and `.agents`.
+    /// Slash-command skills from magpie's Library.
     Skills,
     /// MCP servers.
     Mcp,

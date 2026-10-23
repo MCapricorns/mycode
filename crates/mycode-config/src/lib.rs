@@ -44,10 +44,10 @@ pub use home::{
     new_session_dir, project_dir_key,
 };
 pub use mcp_import::{normalize_api_key, parse_mcp_import, parse_mcp_library};
-pub use project_mcp::{global_mcp_servers, project_mcp_servers};
+pub use project_mcp::global_mcp_servers;
 #[doc(inline)]
 pub use resources::{
-    MAX_SKILLS, ResourceFile, SkillFile, discover_resources, discover_skills, os_user_home,
+    MAX_SKILLS, ResourceFile, SkillFile, discover_resources, discover_skills,
     render_resource_prompt, render_skill_catalog, skill_read_roots,
 };
 pub use secrets::{

@@ -108,8 +108,6 @@ pub struct AppSettings {
     /// The local magpie gateway, written by magpie's agent plugin.
     #[serde(default, skip_serializing_if = "MagpieSettings::is_default")]
     pub magpie: MagpieSettings,
-    /// MCP servers.
-    pub mcp_servers: Vec<McpServerSettings>,
     /// Appearance.
     pub appearance: AppearanceSettings,
     /// Requested reasoning effort; absent keeps the provider default.
@@ -163,7 +161,6 @@ impl AppSettings {
             ));
         }
         self.validate_magpie()?;
-        self.validate_mcp()?;
         if !VALID_THEMES.contains(&self.appearance.theme.as_str()) {
             return Err(invalid("appearance.theme: must be dark or light"));
         }
@@ -394,17 +391,6 @@ pub fn salvage_app_settings(document: &serde_json::Value) -> Option<AppSettings>
             probe.magpie = magpie;
         });
     }
-    for server in crate::document_repair::salvage_list::<McpServerSettings>(object, "mcpServers") {
-        if settings.mcp_servers.len() >= MAX_MCP_SERVERS {
-            break;
-        }
-        if settings.mcp_servers.iter().any(|held| held.id == server.id) {
-            continue;
-        }
-        crate::document_repair::salvage_adopt(&mut settings, valid, |probe| {
-            probe.mcp_servers.push(server);
-        });
-    }
     // Role routes name configured provider ids, so subagents salvage only
     // against the providers already adopted above.
     if let Some(subagents) = object
@@ -439,9 +425,6 @@ pub(crate) fn bounded_text(value: &str, max: usize) -> Result<(), ConfigError> {
     }
 }
 
-fn is_portable_id(value: &str) -> bool {
-    crate::home::is_valid_portable_id(value)
-}
 
 pub(crate) fn is_https_url(value: &str) -> bool {
     if bounded_text(value, MAX_URL_BYTES).is_err() {

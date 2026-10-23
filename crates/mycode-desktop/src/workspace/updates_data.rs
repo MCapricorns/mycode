@@ -164,16 +164,9 @@ impl Workspace {
         if !dismissed && self.vm().view == MainView::Settings {
             // One level, matching the control on screen: a sub-page's own
             // back button, or Back to desk when that is the only back control.
-            match settings_back_target(
-                self.vm().settings_section,
-                self.vm().models_subview,
-                self.vm().mcp_subview,
-            ) {
+            match settings_back_target(self.vm().settings_section, self.vm().models_subview) {
                 SettingsBack::ModelsList => {
                     self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
-                }
-                SettingsBack::McpList => {
-                    self.on_show_mcp_subview(crate::view_model::McpSubview::List, cx);
                 }
                 SettingsBack::Desk => {
                     self.apply_action(FrontendAction::ShowMainView(MainView::Chat), cx);
@@ -235,29 +228,6 @@ impl Workspace {
             });
         })
         .detach();
-    }
-
-    /// The bundle waiting for the MCP-command confirmation, if any.
-    pub(crate) fn import_confirm(&self) -> Option<&std::path::Path> {
-        self.driver.import_confirm()
-    }
-
-    /// Re-sends an import the user confirmed after it was refused for
-    /// changing MCP server commands.
-    pub(crate) fn on_confirm_import(&mut self, cx: &mut Context<Self>) {
-        self.driver.confirm_import();
-        cx.notify();
-    }
-
-    /// Drops a refused import without applying it.
-    pub(crate) fn on_cancel_import(&mut self, cx: &mut Context<Self>) {
-        self.driver.cancel_import();
-        cx.notify();
-    }
-
-    /// The MCP row's enable switch (probe-gated enable lives in the driver).
-    pub(crate) fn on_mcp_toggled(&mut self, index: usize, enabled: bool, cx: &mut Context<Self>) {
-        self.driver_do(|d, fx| d.toggle_mcp_server(index, enabled, fx), cx);
     }
 
     /// Probes one MCP server for its tool list.

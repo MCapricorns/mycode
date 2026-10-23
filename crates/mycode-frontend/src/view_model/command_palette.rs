@@ -364,7 +364,7 @@ mod tests {
     }
 
     fn populated() -> WorkspaceState {
-        let mut document = mycode_app::AppSettings {
+        let document = mycode_app::AppSettings {
             magpie: mycode_app::MagpieSettings {
                 enabled: true,
                 base_url: "http://127.0.0.1:3425/v1".to_owned(),
@@ -374,7 +374,10 @@ mod tests {
             },
             ..mycode_app::AppSettings::default()
         };
-        document.mcp_servers.push(mycode_app::McpServerSettings {
+        let mut settings = SettingsState::from_settings(&document, 1);
+        // `settings.mcp_servers` mirrors magpie's Library catalog; a test
+        // fills the mirror the way `McpLibraryLoaded` does at runtime.
+        settings.mcp_servers.push(mycode_app::McpServerSettings {
             id: "docs".to_owned(),
             enabled: true,
             transport: "stdio".to_owned(),
@@ -386,7 +389,7 @@ mod tests {
             key_header: None,
         });
         WorkspaceState {
-            settings: Some(SettingsState::from_settings(&document, 1)),
+            settings: Some(settings),
             sessions: vec![
                 session("ses-live", "Fix the parser", false),
                 session("ses-bad", "Broken", true),

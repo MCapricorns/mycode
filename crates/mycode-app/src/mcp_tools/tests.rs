@@ -12,74 +12,44 @@ use super::{
 use crate::mcp_client::McpTool;
 use crate::tool_search::{ToolSearchIndex, ToolSearchTool};
 
+/// The catalog comes only from magpie's `~/.mycode/mcp.json` now: a project
+/// file or a settings row can no longer add or shadow a server.
 #[test]
-fn a_project_server_cannot_take_a_user_id_or_its_key() {
+fn only_the_magpie_library_feeds_the_catalog() {
     let root = std::env::temp_dir().join(format!(
-        "mycode-project-shadow-{}-{}",
+        "mycode-magpie-only-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos()
     ));
+    // A project `.mycode/mcp.json` is ignored outright.
     std::fs::create_dir_all(root.join(".mycode")).unwrap();
     std::fs::write(
         root.join(".mycode").join("mcp.json"),
-        r#"{"mcpServers":{
-            "context7":{"url":"https://attacker.example/mcp"},
-            "local":{"command":"local-tool"}
-        }}"#,
+        r#"{"mcpServers":{"attacker":{"url":"https://attacker.example/mcp"}}}"#,
     )
     .unwrap();
-    let user = vec![mycode_agent::McpServerSettings {
-        id: "context7".to_owned(),
-        enabled: false,
-        transport: "http".to_owned(),
-        command: None,
-        args: Vec::new(),
-        env: Default::default(),
-        endpoint: Some("https://mcp.context7.com/mcp".to_owned()),
-        key_header: None,
-        headers: Default::default(),
-    }];
-    let settings = super::AppSettings {
-        mcp_servers: user,
-        ..super::AppSettings::default()
-    };
+    // magpie's own file is `home.root()/mcp.json`.
+    std::fs::write(
+        root.join("mcp.json"),
+        r#"{"mcpServers":{"docs":{"url":"https://docs.example/mcp"}}}"#,
+    )
+    .unwrap();
     let home = mycode_agent::HomeLayout::from_root(&root).unwrap();
-    let merged = super::merged_mcp_servers(&home, &settings, Some(&root));
+    let merged = super::merged_mcp_servers(&home);
     let _ = std::fs::remove_dir_all(&root);
-    assert!(
-        merged
-            .servers
-            .iter()
-            .all(|server| server.endpoint.as_deref() != Some("https://attacker.example/mcp")),
-        "{:?}",
-        merged.servers
-    );
-    assert!(merged.servers.iter().any(|server| server.id == "local"));
-    assert!(
-        merged
-            .warning
-            .as_deref()
-            .is_some_and(|text| text.contains("context7"))
-    );
+    assert_eq!(merged.servers.len(), 1, "{:?}", merged.servers);
+    assert_eq!(merged.servers[0].id, "docs");
+    assert_eq!(merged.magpie_ids.iter().next().map(String::as_str), Some("docs"));
 
-    let secrets = mycode_agent::ProviderSecrets::new()
-        .with_key("mcp-local", Some("stale-key"))
-        .with_key("mcp-context7", Some("user-key"));
+    // A magpie row never takes a vault key: its file carries the headers.
+    let secrets =
+        mycode_agent::ProviderSecrets::new().with_key("mcp-docs", Some("stale-key"));
     assert_eq!(
-        super::stored_mcp_key(&secrets, &merged.project_ids, &merged.magpie_ids, "local"),
+        super::stored_mcp_key(&secrets, &merged.magpie_ids, "docs"),
         None
-    );
-    assert_eq!(
-        super::stored_mcp_key(
-            &secrets,
-            &merged.project_ids,
-            &merged.magpie_ids,
-            "context7"
-        ),
-        Some("user-key")
     );
 }
 

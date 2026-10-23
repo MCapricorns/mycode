@@ -13,7 +13,6 @@ use mycode_frontend::HomeLayout;
 use mycode_frontend::driver::{Effect, FrontendDriver};
 use mycode_frontend::stream;
 
-use crate::ui::McpForm;
 use crate::view_model::{FrontendAction, MainView, WorkspaceState};
 
 mod appearance;
@@ -134,9 +133,6 @@ pub struct Workspace {
     proxy_input: Option<Entity<InputState>>,
     /// The proxy field shows the stored URL on its next render.
     proxy_sync_pending: bool,
-    mcp_form: Option<Entity<McpForm>>,
-
-    mcp_json_input: Option<Entity<TextareaState>>,
     /// Search box inside the model step of the shared picker.
     model_picker_input: Option<Entity<InputState>>,
     /// Top-bar filter for the settings navigation.
@@ -235,9 +231,6 @@ impl Workspace {
             composer_busy: false,
             proxy_input: None,
             proxy_sync_pending: false,
-            mcp_form: None,
-
-            mcp_json_input: None,
             model_picker_input: None,
             settings_search_input: None,
             session_filter_input: None,
@@ -647,27 +640,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.apply_action(FrontendAction::ShowModelsSubview(view), cx);
-    }
-
-    /// Switches the MCP settings sub-page.
-    pub(crate) fn on_show_mcp_subview(
-        &mut self,
-        view: crate::view_model::McpSubview,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_action(FrontendAction::ShowMcpSubview(view), cx);
-    }
-
-    pub(crate) fn on_toggle_mcp_transport_menu(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.apply_action(FrontendAction::McpTransportMenuToggled(open), cx);
-    }
-
-    /// Picks the custom MCP form's transport.
-    pub(crate) fn on_select_mcp_transport(&mut self, transport: &str, cx: &mut Context<Self>) {
-        if let Some(form) = self.mcp_form.clone() {
-            form.update(cx, |form, _| form.transport = transport.to_owned());
-        }
-        self.apply_action(FrontendAction::McpTransportMenuToggled(false), cx);
     }
 
     pub(crate) fn on_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {

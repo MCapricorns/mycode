@@ -1,11 +1,10 @@
 //! The settings editor half of the workspace: form entities, MCP forms,
 //! subagent routes, and the save pipeline they all feed.
-use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{AppContext as _, Context, Entity, Window};
 
 use mycode_frontend::forms::DEFAULT_PROXY_URL;
 
-use crate::ui::McpForm;
 use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
 
@@ -71,80 +70,6 @@ impl Workspace {
     /// proxy value on screen.
     pub(crate) fn on_test_proxy(&mut self, cx: &mut Context<Self>) {
         self.driver_do(|d, fx| d.test_proxy(fx), cx);
-    }
-
-    // ---- MCP servers ----
-
-    pub(crate) fn mcp_form(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<McpForm> {
-        self.mcp_form
-            .get_or_insert_with(|| McpForm::new(window, cx))
-            .clone()
-    }
-
-    /// Adds the server the custom form currently describes: the frontend's
-    /// `forms::build_mcp_server` validates the fields, this method dispatches.
-    pub(crate) fn on_add_mcp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = self.mcp_form.clone() else {
-            return;
-        };
-        let (id, transport, endpoint, command, env_line, api_key) = {
-            let read = form.read(cx);
-            (
-                read.id.read(cx).value().trim().to_string(),
-                read.transport.clone(),
-                read.endpoint.read(cx).value().trim().to_string(),
-                read.command.read(cx).value().trim().to_string(),
-                read.env.read(cx).value().trim().to_string(),
-                read.api_key.read(cx).value().to_string(),
-            )
-        };
-        let mut added = false;
-        self.driver_do(
-            |d, fx| {
-                added = d.add_custom_mcp(
-                    &id, &transport, &endpoint, &command, &env_line, &api_key, fx,
-                );
-            },
-            cx,
-        );
-        if added {
-            form.update(cx, |form, cx| form.clear(window, cx));
-        }
-    }
-
-    pub(crate) fn mcp_json_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<TextareaState> {
-        self.mcp_json_input
-            .get_or_insert_with(|| {
-                cx.new(|cx| {
-                    TextareaState::new(window, cx)
-                        .placeholder(crate::i18n::t(
-                            "Paste mcp.json or a Claude Desktop / Cursor config…",
-                            "粘贴 mcp.json，或 Claude Desktop / Cursor 配置…",
-                        ))
-                        .auto_grow(4, 16)
-                })
-            })
-            .clone()
-    }
-
-    pub(crate) fn on_import_mcp_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(input) = self.mcp_json_input.clone() else {
-            return;
-        };
-        let raw = input.read(cx).value().to_string();
-        let mut parsed = false;
-        self.driver_do(|d, fx| parsed = d.import_mcp_json(&raw, fx), cx);
-        if parsed {
-            input.update(cx, |state, cx| state.set_value("", window, cx));
-        }
     }
 
     // ---- skills ----

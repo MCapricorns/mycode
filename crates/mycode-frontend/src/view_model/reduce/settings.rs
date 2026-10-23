@@ -73,30 +73,6 @@ pub(super) fn settings_saved(state: &mut WorkspaceState, revision: u64, edit_epo
     }
 }
 
-pub(super) fn mcp_added(state: &mut WorkspaceState, server: mycode_app::McpServerSettings) {
-    edit_settings(state, |settings| {
-        if settings.mcp_servers.len() < mycode_app::MAX_MCP_SERVERS {
-            settings.mcp_servers.push(server);
-            true
-        } else {
-            false
-        }
-    });
-}
-
-pub(super) fn mcp_removed(state: &mut WorkspaceState, index: usize) {
-    if let Some(settings) = state.settings.as_mut()
-        && index < settings.mcp_servers.len()
-    {
-        let removed = settings.mcp_servers.remove(index);
-        mark_settings_dirty(settings);
-        // A stale listing for a deleted row must not resurface if a server
-        // with the same id is added again later.
-        state.mcp_tools.retain(|(id, _)| *id != removed.id);
-        state.mcp_probing.retain(|id| *id != removed.id);
-    }
-}
-
 pub(super) fn mcp_tools_listed(state: &mut WorkspaceState, server_id: String, tools: Vec<String>) {
     state.mcp_probing.retain(|id| *id != server_id);
     if let Some(entry) = state.mcp_tools.iter_mut().find(|(id, _)| *id == server_id) {

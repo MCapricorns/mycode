@@ -221,13 +221,6 @@ impl FrontendDriver {
                     out,
                 );
             }
-            BridgeReply::Imported(Err(message))
-                if message == mycode_app::IMPORT_NEEDS_MCP_CONFIRM =>
-            {
-                // Not a failure: the Data card asks before MCP commands that
-                // start programs on this computer are added or replaced.
-                self.import_confirm = self.import_request.take();
-            }
             BridgeReply::Imported(Ok(summary)) => {
                 self.import_request = None;
                 // Reload everything the bundle replaced: settings, key
@@ -296,16 +289,7 @@ impl FrontendDriver {
                 // Refresh the key markers in place: reloading settings here
                 // would race the concurrently running settings save and wipe
                 // any other unsaved edits.
-                let stored = mcp_keys.clone();
                 self.act(FrontendAction::ProviderKeySaved { mcp_keys }, out);
-                // An enable that waited on this key save may probe now.
-                for server_id in stored {
-                    if self.pending_mcp_enable.contains(&server_id)
-                        && !self.vm.mcp_probing.contains(&server_id)
-                    {
-                        self.probe_mcp_for_enable(&server_id, out);
-                    }
-                }
             }
             BridgeReply::ChatStarted(Ok(())) => {}
             // The turn unwinds over the event channel; the reply itself
@@ -350,23 +334,11 @@ impl FrontendDriver {
                     },
                     out,
                 );
-                // A probe that gated an enable switch lands it now.
-                if self.pending_mcp_enable.remove(&server_id)
-                    && let Some(index) = self.vm.settings.as_ref().and_then(|settings| {
-                        settings
-                            .mcp_servers
-                            .iter()
-                            .position(|server| server.id == server_id)
-                    })
-                {
-                    self.act(FrontendAction::SettingsMcpToggled(index, true), out);
-                }
             }
             BridgeReply::McpTools {
                 server_id,
                 outcome: Err(message),
             } => {
-                self.pending_mcp_enable.remove(&server_id);
                 self.act(FrontendAction::McpProbeFailed { server_id, message }, out);
             }
             BridgeReply::Catalog(Ok(info)) => {
@@ -602,10 +574,6 @@ impl FrontendDriver {
                 self.act(failed_start(message), out);
             }
             BridgeReply::ProviderKeySaved(Err(message)) => {
-                // Pending enables that waited on this key save can never
-                // probe now; entries already probing keep their gate.
-                let probing = &self.vm.mcp_probing;
-                self.pending_mcp_enable.retain(|id| probing.contains(id));
                 self.act(FrontendAction::Failed(message), out);
             }
             BridgeReply::Sessions(Err(message))

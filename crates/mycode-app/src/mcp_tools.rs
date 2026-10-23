@@ -418,23 +418,21 @@ impl McpConnect {
     }
 }
 
-/// Reads secrets and merges the three server sources.
+/// Reads secrets and magpie's Library servers.
 ///
 /// This is the only step that must finish before the first request (the
 /// turn cannot spawn slots for servers it does not know), and it is disk
 /// I/O on the blocking pool, not a handshake.
 pub(crate) async fn resolve(
     home: &mycode_agent::HomeLayout,
-    settings: &AppSettings,
-    project: Option<&std::path::Path>,
+    _settings: &AppSettings,
+    _project: Option<&std::path::Path>,
 ) -> ResolvedMcp {
     let read_home = home.clone();
-    let read_settings = settings.clone();
-    let read_project = project.map(std::path::Path::to_path_buf);
     let Ok((Ok(secrets), merged)) = tokio::task::spawn_blocking(move || {
         (
             mycode_agent::read_provider_secrets(&read_home),
-            merged_mcp_servers(&read_home, &read_settings, read_project.as_deref()),
+            merged_mcp_servers(&read_home),
         )
     })
     .await
@@ -447,12 +445,11 @@ pub(crate) async fn resolve(
     };
     let MergedServers {
         servers,
-        project_ids,
         magpie_ids,
         warning,
     } = merged;
     let stored_key = |server: &mycode_agent::McpServerSettings| {
-        stored_mcp_key(&secrets, &project_ids, &magpie_ids, &server.id).map(str::to_owned)
+        stored_mcp_key(&secrets, &magpie_ids, &server.id).map(str::to_owned)
     };
     let fingerprint = mcp_fingerprint(&servers, &stored_key);
     let enabled: Vec<ResolvedServer> = servers
@@ -709,36 +706,18 @@ async fn handshake(
     Ok((info, tools, broken))
 }
 
-/// User servers, magpie's Library servers, and the project's own, with the
-/// ids that came from each managed source.
+/// magpie's Library servers, plus the ids that came from that managed source.
 #[derive(Debug, Default)]
 struct MergedServers {
     servers: Vec<mycode_agent::McpServerSettings>,
-    project_ids: HashSet<String>,
     magpie_ids: HashSet<String>,
     warning: Option<String>,
 }
 
-/// A project's `.mycode/mcp.json` ships with the repository, and magpie's
-/// `~/.mycode/mcp.json` is its own file; both add servers but never replace
-/// one the user configured, enabled or not. A managed row reusing a user id
-/// would otherwise inherit that server's stored key and could send it to an
-/// endpoint the row chose.
-fn merged_mcp_servers(
-    home: &mycode_agent::HomeLayout,
-    settings: &AppSettings,
-    project: Option<&std::path::Path>,
-) -> MergedServers {
-    let mut merged = MergedServers {
-        servers: settings
-            .mcp_servers
-            .iter()
-            .filter(|server| server.enabled)
-            .cloned()
-            .collect(),
-        ..MergedServers::default()
-    };
-    let mut shadowed = Vec::new();
+/// magpie's `~/.mycode/mcp.json` is the only MCP source: the Library owns the
+/// file and keeps the servers' vendor headers on the rows.
+fn merged_mcp_servers(home: &mycode_agent::HomeLayout) -> MergedServers {
+    let mut merged = MergedServers::default();
     let magpie = match mycode_agent::global_mcp_servers(home) {
         Ok(servers) => servers,
         Err(error) => {
@@ -747,45 +726,8 @@ fn merged_mcp_servers(
         }
     };
     for server in magpie.into_iter().filter(|server| server.enabled) {
-        let taken = settings
-            .mcp_servers
-            .iter()
-            .any(|existing| existing.id == server.id);
-        if taken {
-            shadowed.push(server.id);
-            continue;
-        }
         merged.magpie_ids.insert(server.id.clone());
         merged.servers.push(server);
-    }
-    if let Some(project) = project {
-        let extra = match mycode_agent::project_mcp_servers(project) {
-            Ok(extra) => extra,
-            Err(error) => {
-                merged.warning = Some(error);
-                return merged;
-            }
-        };
-        for server in extra.into_iter().filter(|server| server.enabled) {
-            let taken = settings
-                .mcp_servers
-                .iter()
-                .any(|existing| existing.id == server.id)
-                || merged.magpie_ids.contains(&server.id)
-                || merged.project_ids.contains(&server.id);
-            if taken {
-                shadowed.push(server.id);
-                continue;
-            }
-            merged.project_ids.insert(server.id.clone());
-            merged.servers.push(server);
-        }
-    }
-    if !shadowed.is_empty() {
-        merged.warning = Some(format!(
-            "servers {} reuse a configured id and were skipped",
-            shadowed.join(", ")
-        ));
     }
     merged
 }
@@ -794,11 +736,10 @@ fn merged_mcp_servers(
 /// carries the headers they need.
 fn stored_mcp_key<'a>(
     secrets: &'a mycode_agent::ProviderSecrets,
-    project_ids: &HashSet<String>,
     magpie_ids: &HashSet<String>,
     id: &str,
 ) -> Option<&'a str> {
-    if project_ids.contains(id) || magpie_ids.contains(id) {
+    if magpie_ids.contains(id) {
         return None;
     }
     secrets.key(&format!("mcp-{id}"))

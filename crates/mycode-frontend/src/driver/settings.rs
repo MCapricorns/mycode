@@ -5,9 +5,9 @@
 use mycode_app::BridgeCommand;
 use mycode_app::{AuthorityRevision, ProxyPreference};
 
-use super::{DriverMsg, Effect, FrontendDriver, SETTINGS_TEXT_SAVE_DEBOUNCE, ToastKind};
+use super::{DriverMsg, Effect, FrontendDriver, SETTINGS_TEXT_SAVE_DEBOUNCE};
 use crate::forms;
-use crate::view_model::{FrontendAction, McpSubview, ProxyTestState};
+use crate::view_model::{FrontendAction, ProxyTestState};
 
 impl FrontendDriver {
     // ---- the save pipeline ----
@@ -148,61 +148,9 @@ impl FrontendDriver {
 
     // ---- MCP servers ----
 
-    /// The row's enable switch. Disabling is immediate; enabling first
-    /// verifies the stored key (for HTTP rows that declare auth) and a live
-    /// tools probe, landing `on` only when the probe returns tools.
-    pub fn toggle_mcp_server(&mut self, index: usize, enabled: bool, out: &mut Vec<Effect>) {
-        let Some(server) = self
-            .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.mcp_servers.get(index))
-            .cloned()
-        else {
-            return;
-        };
-        if !enabled {
-            self.pending_mcp_enable.remove(&server.id);
-            self.act(FrontendAction::SettingsMcpToggled(index, false), out);
-            return;
-        }
-        if self.pending_mcp_enable.contains(&server.id) || self.vm.mcp_probing.contains(&server.id)
-        {
-            return;
-        }
-        // A row that declares a credential header needs its `mcp-<id>` key
-        // before the probe can mean anything.
-        let needs_key = server.transport == "http" && server.key_header.is_some();
-        let keyed = self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.mcp_with_keys.iter().any(|id| id == &server.id));
-        if needs_key && !keyed {
-            self.toast(
-                crate::i18n::t(
-                    "Store an API key for this server first",
-                    "请先为该服务器保存 API 密钥",
-                ),
-                ToastKind::Error,
-                out,
-            );
-            return;
-        }
-        self.pending_mcp_enable.insert(server.id.clone());
-        self.probe_mcp_for_enable(&server.id, out);
-    }
-
-    /// Dispatches the tools probe that gates an enable switch: the row is
-    /// marked connecting until the reply lands `enabled` or the error.
-    pub fn probe_mcp_for_enable(&mut self, server_id: &str, out: &mut Vec<Effect>) {
-        if !self.dispatch_mcp_probe(server_id, out) {
-            self.pending_mcp_enable.remove(server_id);
-        }
-    }
-
-    /// Probes one MCP server as the editor currently shows it (saved or
-    /// not) and marks the row as connecting until the reply lands.
+    /// Probes one magpie Library server and marks the row as connecting
+    /// until the reply lands. The catalog is read-only: enabling and
+    /// editing happen in magpie, not here.
     pub fn list_mcp_tools(&mut self, server_id: &str, out: &mut Vec<Effect>) {
         self.dispatch_mcp_probe(server_id, out);
     }
@@ -223,132 +171,6 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::McpListTools {
             server: Box::new(server),
         });
-        true
-    }
-
-    /// Adds the server the custom form describes from its raw field values:
-    /// validation lives in [`forms::build_mcp_server`], this decides.
-    /// `true` when the row was added, so the frontend can clear its form.
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_custom_mcp(
-        &mut self,
-        id: &str,
-        transport: &str,
-        endpoint: &str,
-        command: &str,
-        env_line: &str,
-        api_key: &str,
-        out: &mut Vec<Effect>,
-    ) -> bool {
-        let id = id.trim();
-        if id.is_empty() {
-            self.act(
-                FrontendAction::Failed(
-                    crate::i18n::t("Fill in the server id.", "请填写服务器 ID。").to_owned(),
-                ),
-                out,
-            );
-            return false;
-        }
-        if self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.mcp_servers.iter().any(|server| server.id == id))
-        {
-            self.act(
-                FrontendAction::Failed(format!(
-                    "{} '{id}'",
-                    crate::i18n::t(
-                        "An MCP server already uses the id",
-                        "已有 MCP 服务器使用此 ID："
-                    )
-                )),
-                out,
-            );
-            return false;
-        }
-        let server = match forms::build_mcp_server(id, transport, endpoint, command, env_line) {
-            Ok(server) => server,
-            Err(message) => {
-                self.act(FrontendAction::Failed(message), out);
-                return false;
-            }
-        };
-        self.act(FrontendAction::SettingsMcpAdded(server), out);
-        if transport == "http"
-            && let Some(api_key) = forms::normalized_key_input(api_key)
-        {
-            self.dispatch(BridgeCommand::SaveProviderKey {
-                provider_id: format!("mcp-{id}"),
-                api_key,
-            });
-        }
-        self.act(FrontendAction::ShowMcpSubview(McpSubview::List), out);
-        true
-    }
-
-    /// Imports every server a pasted `mcp.json`-style document describes:
-    /// skips ids already configured, saves each row's key, and reports one
-    /// aggregated duplicate message instead of overwriting per-row errors.
-    /// `true` once the document parsed (even if every row was a duplicate),
-    /// so the frontend can clear the paste box.
-    pub fn import_mcp_json(&mut self, raw: &str, out: &mut Vec<Effect>) -> bool {
-        let mut added = 0usize;
-        let imported = match mycode_app::parse_mcp_import(raw) {
-            Ok(imported) => imported,
-            Err(message) => {
-                self.act(FrontendAction::Failed(message), out);
-                return false;
-            }
-        };
-        let mut existing: Vec<String> = self
-            .vm
-            .settings
-            .as_ref()
-            .map(|settings| {
-                settings
-                    .mcp_servers
-                    .iter()
-                    .map(|server| server.id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mut duplicates: Vec<String> = Vec::new();
-        for row in imported {
-            if existing.contains(&row.server.id) {
-                duplicates.push(row.server.id.clone());
-                continue;
-            }
-            let server_id = row.server.id.clone();
-            existing.push(server_id.clone());
-            self.act(FrontendAction::SettingsMcpAdded(row.server), out);
-            added += 1;
-            if let Some(api_key) = row
-                .api_key
-                .and_then(|key| forms::normalized_key_input(&key))
-            {
-                self.dispatch(BridgeCommand::SaveProviderKey {
-                    provider_id: format!("mcp-{server_id}"),
-                    api_key,
-                });
-            }
-        }
-        if added > 0 {
-            self.act(FrontendAction::ShowMcpSubview(McpSubview::List), out);
-        }
-        if !duplicates.is_empty() {
-            // One aggregated message: per-row failures overwrote each other,
-            // so only the last duplicate name was ever reported.
-            self.act(
-                FrontendAction::Failed(format!(
-                    "{} {}",
-                    crate::i18n::t("MCP servers already exist:", "MCP 服务器已存在："),
-                    duplicates.join(", ")
-                )),
-                out,
-            );
-        }
         true
     }
 

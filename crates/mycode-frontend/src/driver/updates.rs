@@ -252,30 +252,7 @@ impl FrontendDriver {
     /// Applies one export bundle chosen in an open dialog: settings, UI
     /// state, and provider keys. Conversations are never imported.
     pub fn import_data(&mut self, path: PathBuf) {
-        self.import_confirm = None;
         self.import_request = Some(path.clone());
-        self.dispatch(BridgeCommand::ImportData {
-            path,
-            confirm_mcp_commands: false,
-        });
-    }
-
-    /// Re-sends an import the user confirmed after it was refused for
-    /// changing MCP server commands.
-    pub fn confirm_import(&mut self) {
-        let Some(path) = self.import_confirm.take() else {
-            return;
-        };
-        self.import_request = Some(path.clone());
-        self.dispatch(BridgeCommand::ImportData {
-            path,
-            confirm_mcp_commands: true,
-        });
-    }
-
-    /// Drops a refused import without applying it.
-    pub fn cancel_import(&mut self) {
-        self.import_confirm = None;
-        self.import_request = None;
+        self.dispatch(BridgeCommand::ImportData { path });
     }
 }
