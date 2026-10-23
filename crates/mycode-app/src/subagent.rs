@@ -49,6 +49,9 @@ pub(crate) struct BridgeAgentHost {
     /// Child cancel tokens keyed by `session_id:call_id`.
     cancels: Arc<parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
     mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
+    /// Cross-turn code cells shared with the parent turn; a child's
+    /// `run_code` starts cells under its own `session_id:role` scope.
+    code_cells: Arc<mycode_agent::CodeCells>,
     /// Model catalog plus the parent turn's provider and model, so a child
     /// learns its own context window and compacts like the parent does.
     context: Option<ChildContext>,
@@ -72,6 +75,7 @@ impl BridgeAgentHost {
         session_id: String,
         cancels: Arc<parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
         mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
+        code_cells: Arc<mycode_agent::CodeCells>,
     ) -> Self {
         let slots = mycode_agent::SUBAGENT_CONCURRENCY as usize;
         Self {
@@ -83,6 +87,7 @@ impl BridgeAgentHost {
             session_id,
             cancels,
             mcp_pool,
+            code_cells,
             context: None,
         }
     }
@@ -444,6 +449,31 @@ impl BridgeAgentHost {
             &allowed,
             mycode_agent::ShellTool::forcing(shell.clone()),
         ));
+        // Code mode for the child too: the same file/edit/grep/find tools a
+        // role inherits stay registered (its `call(name, args)` sees them);
+        // the top-level list is the shell plus `run_code`/`wait_code`.
+        // Cells start under `session_id:role` so a child's scripts never
+        // touch the parent's cell table.
+        registry.register(Arc::new(mycode_agent::RunCodeTool::new(
+            Arc::clone(&registry),
+            Arc::clone(&self.code_cells),
+            format!("{}:{}", self.session_id, role.name),
+        )));
+        registry.register(Arc::new(mycode_agent::WaitCodeTool::new(
+            Arc::clone(&self.code_cells),
+            format!("{}:{}", self.session_id, role.name),
+        )));
+        {
+            let names = registry.names();
+            let mut exposed = vec!["run_code", "wait_code"];
+            exposed.extend(
+                names
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|name| mycode_agent::ShellKind::is_tool_name(name)),
+            );
+            registry.expose_only(&exposed);
+        }
         let mut mcp_drain: Option<ChildDrain> = None;
         let mcp_note = if !any_mcp && ready.is_empty() {
             None
@@ -627,10 +657,7 @@ impl BridgeAgentHost {
             .await
             .map_err(|error| fail(format!("subagent prompt task: {error}")))?
         };
-        let read_roots = mycode_agent::skill_read_roots(
-            crate::turn::os_user_home().as_deref(),
-            Some(self.home.root()),
-        );
+        let read_roots = mycode_agent::skill_read_roots(Some(self.home.root()));
         let mut config = AgentConfig::new()
             .with_system_prompt(system)
             .with_prompt_cache_key(Some(self.session_id.clone()));
@@ -869,9 +896,6 @@ path inside a `{shell_tool}` script (`mode` `script`). `{shell_tool}` starts in 
     }
     crate::turn::push_workspace_skills(
         &mut system,
-        run_dir,
-        extra_roots,
-        crate::turn::os_user_home().as_deref(),
         workspace.mycode_home.as_deref(),
         &workspace.skills,
     );

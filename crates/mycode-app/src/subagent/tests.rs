@@ -383,7 +383,9 @@ fn scout_prompt_lists_workspace_skills() {
         std::process::id(),
         crate::unix_now().as_nanos()
     ));
-    let skill = root.join(".agents").join("skills").join("aaa-scout");
+    // magpie's Library writes `home.root()/skills`; that is the only catalog
+    // a child prompt lists now.
+    let skill = root.join("skills").join("aaa-scout");
     std::fs::create_dir_all(&skill).unwrap();
     std::fs::write(skill.join("SKILL.md"), "# Aaa Scout\nMap the crate.\n").unwrap();
     let scout = builtin_roles().role("scout").expect("scout").clone();
@@ -399,6 +401,10 @@ fn scout_prompt_lists_workspace_skills() {
     };
     let registry =
         super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
+    let workspace = super::ChildWorkspace {
+        mycode_home: Some(root.clone()),
+        ..Default::default()
+    };
     let prompt = super::subagent_system_prompt(
         &scout,
         &registry,
@@ -407,7 +413,7 @@ fn scout_prompt_lists_workspace_skills() {
         "macos",
         "aarch64",
         &shell,
-        &Default::default(),
+        &workspace,
     );
     assert!(prompt.contains("/aaa-scout"), "{prompt}");
     assert!(prompt.contains("read the matching SKILL.md"), "{prompt}");
@@ -557,7 +563,7 @@ fn artisan_gets_the_same_tool_guidance_as_the_parent() {
     );
     assert!(prompt.contains("<tool_calling>"), "{prompt}");
     assert!(
-        prompt.contains("Change files with `write` and `edit`"),
+        prompt.contains("Change files by `call(\"write\""),
         "{prompt}"
     );
     assert!(
@@ -812,6 +818,7 @@ fn a_child_sizes_its_window_from_its_own_model() {
             "session".to_owned(),
             Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             Arc::new(tokio::sync::Mutex::new(None)),
+            Arc::new(mycode_agent::CodeCells::new()),
         )
     };
     let sized = host().with_context(

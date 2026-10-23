@@ -32,17 +32,22 @@ fn edit_hint(shell_tool: &str) -> &'static str {
     }
 }
 
+/// The tool rules when every non-shell tool goes through `run_code`. Only
+/// three names are ever directly callable; `call(name, args)` reaches the
+/// rest inside a script.
 fn tool_calling(shell_tool: &str) -> String {
     let hint = edit_hint(shell_tool);
     format!(
         "<tool_calling>\n\
-- Put independent reads in one response: `read`, `grep`, `find`, and MCP lookups emitted together run at the same time. Edits and `{shell_tool}` calls run one at a time, in the order you emit them.\n\
-- Use the dedicated tools first: `find` lists and locates files and directories (pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n\
+- Only `{shell_tool}`, `run_code`, and `wait_code` are directly callable. Every other tool — `read`, `write`, `edit`, `grep`, `find`, `ask_user`, `agent`, and the MCP bridge (`search_tool`, `use_tool`, `tool_search`) — is invoked inside a `run_code` script as `call(\"name\", args)`.\n\
+- Batch inside one script instead of emitting many calls: a `call` in `run_code` returns `{{ content, is_error }}`, so one script can read, grep, and edit in order and `complete` with the summary.\n\
+- Use the dedicated tools first through `call`: `find` lists and locates files and directories (pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n\
 - Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, git, package managers, and running programs. Never use it to list directories, read files, or search text.\n\
 - A `{shell_tool}` call waits for its command to exit. Do not start one that waits for input or never exits (a dev server, a watcher, an interactive prompt): it holds the turn until the timeout. Pass non-interactive flags instead.\n\
-- Read existing content before changing it. Change files with `write` and `edit`. {hint}\n\
+- Read existing content before changing it. Change files by `call(\"write\", …)` and `call(\"edit\", …)`. {hint}\n\
 - `{shell_tool}` `mode` `program` runs one executable with an explicit `args` vector and no shell parsing. Prefer it when a command string would need fragile quoting.\n\
 - Never use `{shell_tool}` to talk to the user.\n\
+- A `run_code` script cannot call `run_code` or `wait_code` itself.\n\
 - Editing or recalling a chat message does not restore or delete workspace files.\n\
 </tool_calling>"
     )
@@ -137,8 +142,8 @@ mod tests {
         assert!(prompt.contains("`bash`"), "{prompt}");
         assert!(prompt.contains("quoted heredoc"), "{prompt}");
         assert!(
-            prompt.contains("Change files with `write` and `edit`"),
-            "write and edit are the file-change tools, got:\n{prompt}"
+            prompt.contains("Change files by `call(\"write\""),
+            "write and edit are the file-change tools reached through call, got:\n{prompt}"
         );
         assert!(
             prompt.contains("Use `bash` only for what the dedicated tools cannot do"),
