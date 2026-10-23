@@ -14,6 +14,7 @@
 ### Fixed
 
 - 设置页技能列表空白：前端给 `discover_skills` 传了空的 `mycode_home`，现在传真实 home，`~/.mycode/skills` 的库技能正常显示。
+- Windows 上 magpie 插件整文件替换 `settings.json` 后文件回落为目录继承 ACL（多出 `BUILTIN\Administrators:(F)`），原先严格校验把它当作外部写者、隔离并重置配置导致「已重置无法读取的配置」反复弹窗；现在把 Administrators 与 SYSTEM 一样视为环境主体，直接原地静默修复 DACL，其他外部主体的写权限仍然拒绝修复。
 
 ### Removed
 

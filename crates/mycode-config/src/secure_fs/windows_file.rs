@@ -765,6 +765,43 @@ mod tests {
         );
     }
 
+    /// magpie's agent plugin replaces `settings.json` wholesale: the file it
+    /// creates under the same user's token carries the default DACL, which
+    /// includes a full-access `BUILTIN\Administrators` ACE. Administrators
+    /// already hold write access by privilege, so the drift is repaired in
+    /// place like the logon-session ACE instead of resetting the document.
+    #[test]
+    fn an_administrators_write_ace_is_repaired_without_discarding_the_document() {
+        let tree = TempTree::new("dacl-admins");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).expect("home");
+        let home = HomeLayout::from_root(&root).expect("layout");
+        let path = root.join("settings.json");
+        fs::write(
+            &path,
+            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark"}}"#,
+        )
+        .expect("write");
+        let sid = super::windows_acl::current_user_sid_string().expect("sid");
+        let sddl = format!("O:{sid}D:(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)");
+        set_dacl(
+            &path,
+            &super::windows_acl::descriptor_for_tests(&sddl).expect("descriptor"),
+        );
+
+        let settings = read_app_settings(&home).expect("admin ACE is repaired on read");
+        assert_eq!(settings.appearance.theme, "dark");
+        let reopened = fs::File::open(&path).expect("republished file");
+        super::windows_acl::verify_fixed_descriptor(&reopened).expect("protected DACL");
+        assert!(
+            !fs::read_dir(&root)
+                .expect("home")
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains(".broken-")),
+            "a repaired ACL must not be reported as a damaged document"
+        );
+    }
+
     /// When another principal holds write access, the bytes could have been
     /// changed by someone else: the strict read still refuses them.
     #[test]

@@ -32,6 +32,12 @@ use crate::{ConfigError, ConfigErrorKind};
 const SDDL_REVISION_1: u32 = 1;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const SYSTEM_SID: &str = "S-1-5-18";
+/// `BUILTIN\Administrators`. Members hold write access to every file by
+/// privilege (take-ownership, backup) regardless of its DACL, so an ACE for
+/// them grants nothing an attacker would not already have: every file a
+/// same-user tool creates under its own token inherits this ACE from the
+/// token's default DACL. It is ambient, not a foreign writer.
+const BUILTIN_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
 
 /// Owner and DACL facts extracted from one opened object.
 #[derive(Debug)]
@@ -249,8 +255,8 @@ pub(super) fn verify_fixed_descriptor(file: &File) -> Result<(), ConfigError> {
 /// an inherited read-only logon-session ACE and drops `SE_DACL_PROTECTED`.
 /// Treating that as document damage made every such write reset the settings
 /// and report a repair. The repair is refused when a principal other than the
-/// owner or SYSTEM holds write access, so bytes someone else could have
-/// changed still fail the strict read.
+/// owner, SYSTEM, or the machine's administrators holds write access, so
+/// bytes someone else could have changed still fail the strict read.
 pub(super) fn repair_drifted_descriptor(file: &File) -> Result<(), ConfigError> {
     let current_sid = current_user_sid_string()?;
     let evidence = inspect_handle_with_sid(file, &current_sid)?;
@@ -429,8 +435,10 @@ fn inspect_aces(dacl: *mut ACL, current_sid: &str) -> AceEvidence {
         let foreign = sid != current_sid && sid != SYSTEM_SID;
         // Inherited ACEs have non-zero flags; they still decide whether another
         // principal could change the bytes, so check the mask before the exact
-        // shape is judged.
-        if foreign && allowed.Mask & WRITE_LIKE_ACCESS != 0 {
+        // shape is judged. Administrators are exempt: the ambient ACE rides
+        // every file a same-user writer creates, and counting it reset each
+        // such file on the next read.
+        if foreign && sid != BUILTIN_ADMINISTRATORS_SID && allowed.Mask & WRITE_LIKE_ACCESS != 0 {
             foreign_write = foreign_write.saturating_add(1);
         }
         if header.AceFlags != 0 || allowed.Mask != FILE_ALL_ACCESS {
