@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 技能与 MCP 全部收敛到 magpie Library：技能只读 `~/.mycode/skills`，MCP 只读 `~/.mycode/mcp.json`；`.agents` 技能树、`~/.agents/AGENTS.md`、项目 `.mycode/mcp.json`、settings.json 的 `mcpServers` 行，以及导入 JSON / 添加自定义服务器的设置页入口全部移除。
+- 顶层工具面收窄为 code-mode-only：模型只能直接调 `shell`、`run_code`、`wait_code`，`read`/`write`/`edit`/`grep`/`find`/`ask_user`/`agent`/MCP 元工具改为在 `run_code` 脚本里经 `call("name", args)` 调用；子代理同样。
+
+### Fixed
+
+- 设置页技能列表空白：前端给 `discover_skills` 传了空的 `mycode_home`，现在传真实 home，`~/.mycode/skills` 的库技能正常显示。
+
+### Removed
+
+- `McpSubview`/`ShowMcpSubview`/`McpTransportMenuToggled`、`mcp_transport_menu_open`、`SettingsBack::McpList`、`pending_mcp_enable`、`import_confirm`、`IMPORT_NEEDS_MCP_CONFIRM`、数据导入的 MCP 确认门，以及 `AppSettings.mcp_servers` 和 `validate_mcp`。
+
 ## [0.12.27] - 2026-10-23
 
 ### Added
