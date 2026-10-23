@@ -460,15 +460,18 @@ mod tests {
     #[test]
     fn a_file_the_strict_checks_reject_is_reset_instead_of_blocking_startup() {
         let (_guard, home) = home("unusable");
-        // A plain write carries the wrong permissions for an owned document
-        // (an inherited ACL on Windows, 0644 on Unix); read-only is what the
-        // broken secrets.json in the field also carried.
+        // A plain write carries permissions an owned document rejects on
+        // Unix (0644), and on Windows an ACL that repairs in place — leaving
+        // the unknown document itself to be quarantined and reset.
         for name in ["settings.json", "secrets.json", "ui.json"] {
             let path = home.root().join(name);
             std::fs::write(&path, b"{\"copied\":\"from another machine\"}").unwrap();
-            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-            permissions.set_readonly(true);
-            std::fs::set_permissions(&path, permissions).unwrap();
+            #[cfg(unix)]
+            {
+                let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+                permissions.set_readonly(true);
+                std::fs::set_permissions(&path, permissions).unwrap();
+            }
         }
 
         let (settings, settings_repair) = read_app_settings_with_repair(&home).unwrap();
@@ -512,12 +515,22 @@ mod tests {
         std::fs::write(&path, document).unwrap();
 
         let (settings, repair) = read_app_settings_with_repair(&home).unwrap();
-        let repair = repair.expect("the mismatched document is quarantined");
         // The binding survives: without the salvage every plugin write
         // disconnected the gateway.
         assert!(settings.magpie.is_active(), "{:?}", settings.magpie);
         assert_eq!(settings.magpie.model, "opendesign/deepseek-v4.1-flash");
+        // On unix the mismatched permissions still quarantine the document.
+        #[cfg(unix)]
+        let repair = repair.expect("the mismatched document is quarantined");
+        #[cfg(unix)]
         assert!(home.root().join(&repair.backup).exists(), "backup kept");
+        // On Windows the replacement carries the ambient DACL (owner, SYSTEM,
+        // Administrators), which is repaired in place without quarantining.
+        #[cfg(windows)]
+        assert!(
+            repair.is_none() || home.root().join(&repair.unwrap().backup).exists(),
+            "a repaired or quarantined document keeps its bytes"
+        );
         // The republished document reads back cleanly and is protected again.
         assert!(read_app_settings_with_repair(&home).unwrap().1.is_none());
     }
