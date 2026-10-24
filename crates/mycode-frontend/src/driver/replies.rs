@@ -35,6 +35,21 @@ impl FrontendDriver {
                 }
                 return;
             }
+            ReplyScope::RetractSteer { session, text } => {
+                // Only a confirmed removal changes anything: the steer
+                // leaves the pending strip and its text goes back above
+                // the draft, like any steer the turn did not take. When
+                // the core says it was already read (`Ok(false)`), the
+                // commit event owns the strip; when the turn is gone
+                // (`Err`), its terminal event already cleared it.
+                if matches!(reply, BridgeReply::SteerRetracted(Ok(true)))
+                    && self.open_session_id().as_deref() == Some(session.as_str())
+                {
+                    self.act(FrontendAction::SteerRetracted(text.clone()), out);
+                    self.restore_above_draft(text, out);
+                }
+                return;
+            }
             ReplyScope::DeletedSession(session_id) => {
                 self.finish_delete(&session_id, reply, out);
                 return;
@@ -319,6 +334,7 @@ impl FrontendDriver {
                 }
             }
             BridgeReply::Steered(_) => {}
+            BridgeReply::SteerRetracted(_) => {}
             BridgeReply::SubagentCancelled(Err(message)) => {
                 self.toast(message, ToastKind::Info, out);
             }

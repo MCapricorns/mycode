@@ -131,6 +131,12 @@ pub(crate) enum ReplyScope {
         session: String,
         text: String,
     },
+    /// A steer retraction: on success the text leaves that chat's pending
+    /// strip and goes back to its composer.
+    RetractSteer {
+        session: String,
+        text: String,
+    },
 }
 
 /// The rewind a `LoadOlder` reply is resolving. The page walk chains until
@@ -183,6 +189,10 @@ impl ReplyScope {
                 session: session_id.clone(),
                 text: text.clone(),
             },
+            BridgeCommand::RetractSteer { session_id, text } => Self::RetractSteer {
+                session: session_id.clone(),
+                text: text.clone(),
+            },
             _ => Self::Global,
         }
     }
@@ -207,7 +217,7 @@ impl ReplyScope {
             }
             // Delete, recall, and steer replies carry their own staleness
             // checks.
-            Self::DeletedSession(_) | Self::Recall(_) | Self::Steer { .. } => true,
+            Self::DeletedSession(_) | Self::Recall(_) | Self::Steer { .. } | Self::RetractSteer { .. } => true,
         }
     }
 }
