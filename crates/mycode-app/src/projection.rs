@@ -114,6 +114,58 @@ pub(crate) fn project_replayed_entry_with_meter(
     }
 }
 
+/// Appends the code-mode inner-call breakdown from tool details.
+///
+/// A `run_code` result's text is only the script's own output; without
+/// this, the transcript has nothing that names the tools the script
+/// called, and every code-mode call renders as one generic `run_code`
+/// row. Each summary becomes one `tool_label` line under
+/// [`crate::protocol::CODE_CALLS_HEADING`], so a frontend can dispatch
+/// each line to the renderer of the tool it names. The model-facing
+/// content stays unchanged — this is display text, like the UI diff.
+fn attach_inner_calls(mut text: String, details: Option<&serde_json::Value>) -> String {
+    let Some(calls) = details
+        .and_then(|details| details.get("inner_calls"))
+        .and_then(serde_json::Value::as_array)
+        .filter(|calls| !calls.is_empty())
+    else {
+        return text;
+    };
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(crate::protocol::CODE_CALLS_HEADING);
+    for call in calls {
+        let name = call
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("tool");
+        let target = call
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        text.push('\n');
+        text.push_str(&mycode_agent::tool_label(name, target));
+        if call
+            .get("is_error")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            text.push_str(" (failed)");
+        }
+        if let Some(diff) = call
+            .get("diff")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|diff| !diff.is_empty())
+        {
+            text.push('\n');
+            text.push_str(diff);
+        }
+    }
+    text
+}
+
 /// Appends the UI-only diff from tool details. The model-facing content
 /// stays unchanged; this text is what the transcript renders.
 fn attach_ui_diff(mut text: String, details: Option<&serde_json::Value>) -> String {
@@ -155,7 +207,8 @@ pub(crate) fn project_tool_result_message(
             text.push_str(&block.text);
         }
     }
-    let mut text = attach_ui_diff(text, result.details.as_ref());
+    let text = attach_ui_diff(text, result.details.as_ref());
+    let mut text = attach_inner_calls(text, result.details.as_ref());
     if result.is_error {
         text.insert_str(0, "failed: ");
     }
@@ -218,6 +271,38 @@ mod tests {
             kind,
             call_id: None,
         }
+    }
+
+    #[test]
+    fn a_run_code_result_names_the_tools_its_script_called() {
+        let result = mycode_agent::ToolResultMessage {
+            tool_call_id: "c1".to_owned(),
+            content: vec![mycode_agent::ContentBlock::Text(
+                mycode_agent::TextBlock::new("script output"),
+            )],
+            is_error: false,
+            details: Some(serde_json::json!({
+                "inner_calls": [
+                    {"seq": 0, "name": "read", "target": "src/lib.rs", "is_error": false},
+                    {"seq": 1, "name": "edit", "target": "src/main.rs", "is_error": true,
+                     "diff": "+ new\n- old"},
+                ],
+            })),
+        };
+        let entry = super::project_tool_result_message("evt-x", &result);
+        let text = entry.text.as_ref();
+        assert!(text.starts_with("script output"), "{text}");
+        assert!(text.contains(crate::protocol::CODE_CALLS_HEADING), "{text}");
+        assert!(text.contains("read  src/lib.rs"), "{text}");
+        assert!(text.contains("edit  src/main.rs (failed)"), "{text}");
+        assert!(text.contains("+ new\n- old"), "{text}");
+        // A result without inner calls gains no heading.
+        let plain = mycode_agent::ToolResultMessage {
+            details: None,
+            ..result
+        };
+        let entry = super::project_tool_result_message("evt-y", &plain);
+        assert!(!entry.text.contains(crate::protocol::CODE_CALLS_HEADING));
     }
 
     #[test]

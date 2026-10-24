@@ -52,6 +52,11 @@ pub enum EntryKind {
     ToolResult,
 }
 
+/// Heading line of the code-mode inner-call breakdown a projected
+/// `run_code` result carries after its script output. Frontends split on
+/// this line to render each inner call with its own tool's renderer.
+pub const CODE_CALLS_HEADING: &str = "[code calls]";
+
 /// One entry of a conversation transcript.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationEntry {

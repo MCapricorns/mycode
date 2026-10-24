@@ -42,9 +42,9 @@ mod user_agent;
 
 pub use mycode_agent::{ProxyTestReport, ProxyTestRoute};
 pub use protocol::{
-    ActiveConversation, AskPrompt, BranchId, CHAT_CANCELLED, ConversationEntry, EntryKind,
-    HeadStamp, INTERRUPTED_RESPONSE_PREFIX, MAX_STREAMING_CHARS, OlderTranscript, SessionEventId,
-    SessionId, SessionSummary, StreamingReply, tool_label,
+    ActiveConversation, AskPrompt, BranchId, CHAT_CANCELLED, CODE_CALLS_HEADING, ConversationEntry,
+    EntryKind, HeadStamp, INTERRUPTED_RESPONSE_PREFIX, MAX_STREAMING_CHARS, OlderTranscript,
+    SessionEventId, SessionId, SessionSummary, StreamingReply, tool_label,
 };
 pub use updates::apply::{parse_apply_update_args, run_apply_update_helper};
 pub use updates::{PendingUpdate, PreparedUpdate, UpdateOffer};
