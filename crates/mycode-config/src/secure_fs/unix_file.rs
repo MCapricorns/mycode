@@ -358,7 +358,7 @@ fn read_bounded(mut file: File, maximum_bytes: usize) -> Result<Zeroizing<Vec<u8
 }
 
 fn sync_file(file: &File) -> Result<(), ConfigError> {
-    rfs::fcntl_fullfsync(file.as_fd()).map_err(|error| unix::map_errno(error, ConfigErrorKind::Io))
+    unix::sync_fd(file.as_fd())
 }
 
 fn io_error(error: io::Error) -> ConfigError {
