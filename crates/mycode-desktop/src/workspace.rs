@@ -130,6 +130,11 @@ pub struct Workspace {
     composer: Entity<TextareaState>,
     /// Whether the composer placeholder is the in-turn queue hint.
     pub(crate) composer_busy: bool,
+    /// Whether the busy-turn send choice (steer or interrupt & send) is
+    /// open above the composer. Enter on a running turn opens it instead
+    /// of steering at once; it closes on a pick, on Escape, or when the
+    /// draft is emptied.
+    pub(crate) send_choice_open: bool,
     proxy_input: Option<Entity<InputState>>,
     /// The proxy field shows the stored URL on its next render.
     proxy_sync_pending: bool,
@@ -229,6 +234,7 @@ impl Workspace {
             focus_handle,
             composer,
             composer_busy: false,
+            send_choice_open: false,
             proxy_input: None,
             proxy_sync_pending: false,
             model_picker_input: None,
@@ -483,6 +489,10 @@ impl Workspace {
         match event {
             InputEvent::Change => {
                 let text = self.composer.read(cx).value().to_string();
+                // An emptied draft leaves nothing to choose for.
+                if self.send_choice_open && text.trim().is_empty() {
+                    self.send_choice_open = false;
+                }
                 self.apply_action(FrontendAction::ComposerChanged(text), cx);
             }
             InputEvent::PressEnter {
@@ -496,6 +506,18 @@ impl Workspace {
                 // Ctrl+Enter on a busy turn stops it and sends right after;
                 // a plain Enter steers it into the running turn (`submit`).
                 let sending = self.vm().sending || self.vm().compacting;
+                // With the send choice open, the next Enter confirms it:
+                // plain Enter steers, Ctrl+Enter interrupts. The draft is
+                // still in the field; both picks read it themselves.
+                if self.send_choice_open {
+                    self.send_choice_open = false;
+                    if *secondary {
+                        self.on_interrupt_send(cx);
+                    } else {
+                        self.on_steer_send(cx);
+                    }
+                    return;
+                }
                 if *secondary && sending {
                     if !self.attachments.is_empty() {
                         // A send-now is text only; the chips wait for the
@@ -509,7 +531,17 @@ impl Workspace {
                             cx,
                         );
                     }
-                    self.driver_do(|d, fx| d.interrupt_send(&draft, fx), cx);
+                    self.on_interrupt_send(cx);
+                } else if crate::ui::busy_enter_opens_choice(
+                    sending,
+                    &draft,
+                    !self.attachments.is_empty(),
+                ) {
+                    // Enter on a busy turn no longer steers at once: the
+                    // choice above the composer asks steer or interrupt
+                    // first, and the draft waits in the field meanwhile.
+                    self.send_choice_open = true;
+                    cx.notify();
                 } else {
                     // Enter takes the same path as the send arrow so the
                     // waiting attachments ride this message.

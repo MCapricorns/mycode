@@ -20,9 +20,23 @@ fn composer_placeholder_asks_the_agent_without_a_product_name() {
     assert!(!COMPOSER_PLACEHOLDER.1.contains("对话"));
     assert_eq!(
         STEER_PLACEHOLDER.0,
-        "Enter steers the running turn; Ctrl+Enter interrupts"
+        "Enter chooses: steer or interrupt and send"
     );
-    assert_eq!(STEER_PLACEHOLDER.1, "回车引导 · Ctrl+Enter 打断发送");
+    assert_eq!(STEER_PLACEHOLDER.1, "回车选择：引导或打断并发送");
+}
+
+#[test]
+fn busy_enter_opens_choice_only_for_a_text_draft_on_a_busy_turn() {
+    use super::busy_enter_opens_choice;
+    // Busy turn with a text draft: the choice opens.
+    assert!(busy_enter_opens_choice(true, "steer me", false));
+    // Idle turn: Enter submits as before.
+    assert!(!busy_enter_opens_choice(false, "hello", false));
+    // Blank draft: nothing to choose for.
+    assert!(!busy_enter_opens_choice(true, "  ", false));
+    assert!(!busy_enter_opens_choice(true, "", false));
+    // Attachments cannot steer: their submit keeps the waiting path.
+    assert!(!busy_enter_opens_choice(true, "with files", true));
 }
 
 /// 200k of a 1M window is 20% used, so the ring must fill about a fifth.
