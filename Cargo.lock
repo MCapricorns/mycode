@@ -4592,7 +4592,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "mycode-agent"
-version = "0.12.29"
+version = "0.12.30"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -4611,7 +4611,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-app"
-version = "0.12.29"
+version = "0.12.30"
 dependencies = [
  "bm25",
  "bytes",
@@ -4635,7 +4635,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-config"
-version = "0.12.29"
+version = "0.12.30"
 dependencies = [
  "mycode-core",
  "rustix",
@@ -4648,7 +4648,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-core"
-version = "0.12.29"
+version = "0.12.30"
 dependencies = [
  "mimalloc",
  "serde",
@@ -4661,7 +4661,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-desktop"
-version = "0.12.29"
+version = "0.12.30"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -4677,7 +4677,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-frontend"
-version = "0.12.29"
+version = "0.12.30"
 dependencies = [
  "mycode-app",
  "notify",
@@ -4687,7 +4687,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-providers"
-version = "0.12.29"
+version = "0.12.30"
 dependencies = [
  "bytes",
  "http",
@@ -4703,7 +4703,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-tools"
-version = "0.12.29"
+version = "0.12.30"
 dependencies = [
  "aho-corasick",
  "base64 0.23.1",
