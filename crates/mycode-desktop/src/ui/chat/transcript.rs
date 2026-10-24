@@ -280,6 +280,10 @@ fn assistant_block(
     let thinking_id: SharedString = format!("thinking-{}", entry.event_id).into();
     let has_text = !entry.text.trim().is_empty();
     let has_thinking = show_reasoning && !entry.thinking.is_empty();
+    // The reply sits in its own card, framed like the summary card, so an
+    // assistant turn reads as one block apart from user bubbles, tool runs,
+    // and the thinking card nested inside it. An entry with nothing to show
+    // (reasoning hidden, no text) stays unframed and invisible.
     div()
         .flex()
         .flex_col()
@@ -288,6 +292,14 @@ fn assistant_block(
         .min_w_0()
         .h_auto()
         .flex_none()
+        .when(has_text || has_thinking, |this| {
+            this.rounded(px(14.))
+                .border_1()
+                .border_color(theme.border.opacity(0.65))
+                .bg(theme.muted.opacity(0.35))
+                .px(skin::space(3))
+                .py(skin::space(2))
+        })
         .when(show_speaker && (has_text || has_thinking), |this| {
             this.child(markdown::prose_measure(speaker_row(
                 format!("agent-status-{}", entry.event_id),
@@ -490,12 +502,12 @@ fn thinking_latest(text: &str) -> String {
     format!("\u{2026}{tail}")
 }
 
-/// Thinking trace. Distinct from the answer: a single quiet header row toggles
-/// the body. Collapsed, the header stays and the reply (a sibling) does not
-/// fold with it.
-///
-/// The box is content-sized. `overflow_hidden` here lets the scroller treat
-/// the row as a zero-minimum flex item and clip it down to a bar.
+/// Thinking trace, in its own card so it reads as a separate kind of content
+/// from the reply: a faint lavender wash from the thinking token, a strong
+/// header row, and the trace itself in the regular UI font at body size in a
+/// neutral ink — the hue lives in the frame and the label, not in small
+/// purple body text. The header toggles the body; collapsed, the header
+/// stays and the reply (a sibling) does not fold with it.
 fn thinking_box(
     id: SharedString,
     text: &str,
@@ -515,7 +527,11 @@ fn thinking_box(
         .flex_none()
         .flex()
         .flex_col()
-        .gap(skin::space(1))
+        .rounded(px(14.))
+        .border_1()
+        .border_color(theme.border.opacity(0.65))
+        .bg(Desk::of(theme).thinking.opacity(0.07))
+        .overflow_hidden()
         .child(
             div()
                 .id(SharedString::from(format!("thinking-toggle-{toggle_id}")))
@@ -526,10 +542,9 @@ fn thinking_box(
                 .min_w_0()
                 .h_auto()
                 .flex_none()
-                .min_h(px(24.))
-                .px(skin::space(1))
+                .min_h(px(30.))
+                .px(skin::space(3))
                 .cursor_pointer()
-                .rounded(px(6.))
                 .hover(|row| row.bg(theme.secondary_hover.opacity(0.35)))
                 .on_click(on_toggle)
                 .child(thinking_line(&toggle_id, headline, streaming, theme))
@@ -539,16 +554,19 @@ fn thinking_box(
             this.child(
                 div()
                     .id(body_id)
-                    .w_full()
+                    .mx(skin::space(3))
+                    .mb(skin::space(2))
+                    .pt(skin::space(2))
+                    .border_t_1()
+                    .border_color(theme.border.opacity(0.40))
+                    .w_auto()
                     .min_w_0()
                     .h_auto()
                     .flex_none()
-                    .pl(skin::space(3))
-                    .border_l_1()
-                    .border_color(theme.border.opacity(0.55))
                     .whitespace_normal()
-                    .text_xs()
-                    .text_color(Desk::of(theme).thinking)
+                    .text_sm()
+                    .line_height(relative(1.5))
+                    .text_color(theme.muted_foreground)
                     .child(text.to_owned())
                     .test_support(),
             )
@@ -567,9 +585,9 @@ fn thinking_line(
         .h_auto()
         .flex_none()
         .text_xs()
+        .font_weight(skin::WEIGHT_STRONG)
         .whitespace_nowrap()
-        .italic()
-        .text_color(theme.magenta)
+        .text_color(Desk::of(theme).thinking)
         .test_support();
     if streaming {
         label.child(
