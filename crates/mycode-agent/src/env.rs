@@ -44,6 +44,21 @@ impl SteerInbox {
     pub fn drain(&self) -> Vec<String> {
         std::mem::take(&mut *self.pending.lock())
     }
+
+    /// Removes the first queued steer equal to `text`, so a steer the user
+    /// retracted before the loop's next boundary is never read. Returns
+    /// whether one was still pending: `false` means the turn already took
+    /// it (or it was never queued), so the retraction changed nothing.
+    pub fn remove(&self, text: &str) -> bool {
+        let mut pending = self.pending.lock();
+        match pending.iter().position(|queued| queued == text) {
+            Some(position) => {
+                pending.remove(position);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// Everything one turn needs: the model provider, tools, hooks,
@@ -155,5 +170,18 @@ mod tests {
         inbox.push("   ");
         assert_eq!(inbox.drain(), vec!["before".to_owned(), "after".to_owned()]);
         assert!(inbox.drain().is_empty());
+    }
+
+    #[test]
+    fn steer_inbox_remove_takes_one_pending_copy_only() {
+        let inbox = SteerInbox::new();
+        inbox.push("keep");
+        inbox.push("drop");
+        inbox.push("drop");
+        assert!(inbox.remove("drop"));
+        assert_eq!(inbox.drain(), vec!["keep".to_owned(), "drop".to_owned()]);
+        // Nothing left to take: a late retraction reports it changed nothing.
+        assert!(!inbox.remove("drop"));
+        assert!(!inbox.remove("never queued"));
     }
 }

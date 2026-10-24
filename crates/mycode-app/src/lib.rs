@@ -166,6 +166,18 @@ pub enum BridgeCommand {
         /// Composer text. Blank text is ignored by the inbox.
         text: String,
     },
+    /// Take back one steer the running turn has not read yet.
+    ///
+    /// The core removes the first matching text from that session's steer
+    /// inbox and replies whether it was still pending. A steer the turn
+    /// already drained stays sent; the reply's `false` says so, and the
+    /// desktop leaves its pending strip to the commit event.
+    RetractSteer {
+        /// Session identity spelling.
+        session_id: String,
+        /// The exact steer text to remove.
+        text: String,
+    },
     /// Abort the in-flight turn of one session (Escape in the chat).
     CancelChat {
         /// Session identity spelling.
@@ -587,6 +599,10 @@ pub enum BridgeReply {
     ChatCancelled(Result<(), String>),
     /// Steer acceptance. `Err` means no live inbox (the turn already ended).
     Steered(Result<(), String>),
+    /// Steer retraction outcome. `Ok(true)` means the steer was still
+    /// pending and is removed; `Ok(false)` means the turn already took it.
+    /// `Err` means no live inbox (the turn already ended).
+    SteerRetracted(Result<bool, String>),
     /// One subagent cancel was delivered. The parent turn keeps running.
     SubagentCancelled(Result<(), String>),
     /// File matches for the composer's `@` mention.
