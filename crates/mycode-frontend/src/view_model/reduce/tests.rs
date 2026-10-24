@@ -541,4 +541,20 @@ fn a_steer_shows_until_it_commits_and_a_returned_one_leaves_the_strip() {
     assert!(state.pending_steers.is_empty());
 }
 
+#[test]
+fn a_retracted_steer_leaves_the_strip_and_an_unknown_one_changes_nothing() {
+    let mut state = open(Vec::new(), None);
+    state.pending_steers = vec!["first".to_owned(), "second".to_owned()];
+    reduce(
+        &mut state,
+        FrontendAction::SteerRetracted("first".to_owned()),
+    );
+    assert_eq!(state.pending_steers, ["second"]);
+    reduce(
+        &mut state,
+        FrontendAction::SteerRetracted("not pending".to_owned()),
+    );
+    assert_eq!(state.pending_steers, ["second"]);
+}
+
 mod turns;
