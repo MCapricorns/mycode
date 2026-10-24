@@ -28,6 +28,7 @@ use crate::view_model::{MainView, SettingsSection};
 use crate::workspace::{ToastKind, Workspace};
 
 pub(crate) use chat::composer_placeholder;
+pub(crate) use chat::busy_enter_opens_choice;
 pub(crate) use command_palette::ToggleCommandPalette;
 
 /// Renders the whole window chrome and content.

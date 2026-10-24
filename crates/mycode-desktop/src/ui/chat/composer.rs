@@ -3,12 +3,17 @@
 //! Model, reasoning, and folder sit as pill chips inside the bar, alongside a
 //! `⌘K` / `Ctrl+K` hint; typing `@` references a project file. While a turn
 //! is running the round action is Stop: it ends the whole turn, every
-//! subagent, and any tool still running. A draft sent with Enter (or Ctrl+G)
-//! steers the running turn: it reaches the model before its next step
-//! without stopping anything, and waits in a strip above the composer until
-//! the agent reads it. The arrow beside Stop steers too, and Ctrl+Enter
-//! stops the turn and sends the draft right after. Each running scout or
-//! artisan is cancelled from its own `agent` row in the transcript.
+//! subagent, and any tool still running. Enter on a busy turn no longer
+//! sends at once: a small choice floats above the composer — steer the
+//! running turn (it reads the draft before its next step, without stopping
+//! anything) or interrupt and send (the turn stops, the draft goes out
+//! right after). Enter confirms the steer, Ctrl+Enter the interrupt, and
+//! Escape closes the choice with the draft untouched. Ctrl+G and the arrow
+//! beside Stop steer directly, without the choice. Steers wait in a strip
+//! above the composer until the agent reads them; each one carries an Undo
+//! that takes it back into the composer while it is still unread. Each
+//! running scout or artisan is cancelled from its own `agent` row in the
+//! transcript.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
@@ -31,12 +36,13 @@ use crate::workspace::Workspace;
 /// Resting composer hint. The product name does not belong in the field.
 const COMPOSER_PLACEHOLDER: (&str, &str) = ("Ask the agent", "向代理提问");
 const STEER_PLACEHOLDER: (&str, &str) = (
-    "Enter steers the running turn; Ctrl+Enter interrupts",
-    "回车引导 · Ctrl+Enter 打断发送",
+    "Enter chooses: steer or interrupt and send",
+    "回车选择：引导或打断并发送",
 );
 
-/// Placeholder for the composer. While a turn is running, typed text steers
-/// (Enter or Ctrl+G); Ctrl+Enter stops the turn and sends it right after.
+/// Placeholder for the composer. While a turn is running, Enter opens the
+/// steer-or-interrupt choice above the composer; Ctrl+G steers directly
+/// and Ctrl+Enter interrupts without asking.
 #[must_use]
 pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
     let (english, chinese) = if sending {
@@ -45,6 +51,15 @@ pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
         COMPOSER_PLACEHOLDER
     };
     t(english, chinese)
+}
+
+/// Whether a plain Enter on the composer opens the steer-or-interrupt
+/// choice instead of submitting at once: only on a busy turn, only with a
+/// text draft, and never with attachments (they cannot steer, so their
+/// submit keeps the old path and its waiting toast).
+#[must_use]
+pub(crate) fn busy_enter_opens_choice(sending: bool, draft: &str, has_attachments: bool) -> bool {
+    sending && !draft.trim().is_empty() && !has_attachments
 }
 
 /// Centered composer measure. Narrower than the chat pane; prose and tool
@@ -85,6 +100,12 @@ pub(super) fn render_composer(
     let can_send = has_draft || has_attachments;
     let steer_panel = (!workspace.vm().pending_steers.is_empty())
         .then(|| render_pending_steers(&workspace.vm().pending_steers, cx).into_any_element());
+    // The steer-or-interrupt choice for the draft still sitting in the
+    // field. It paints only while the turn runs; a turn that ends with it
+    // open leaves a stale flag the next busy Enter reuses harmlessly,
+    // because both picks re-read the live draft and state.
+    let send_choice = (workspace.send_choice_open && sending)
+        .then(|| render_send_choice(cx).into_any_element());
     let compacting = workspace.vm().compacting;
     let has_pending_ask = workspace.vm().pending_ask.is_some();
     if workspace.composer_busy != sending {
@@ -223,6 +244,7 @@ pub(super) fn render_composer(
                 .when_some(steer_panel, |this, steers| this.child(steers))
                 .when_some(compact_card, |this, card| this.child(card))
                 .when_some(ask_card, |this, card| this.child(card))
+                .when_some(send_choice, |this, choice| this.child(choice))
                 .child(
                     div()
                         .id("composer-card")
@@ -500,8 +522,130 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
         .child(shortcut_label())
 }
 
+/// The choice Enter opens on a busy turn: steer the draft in, or stop the
+/// turn and send it. Two rows in the same frosted panel family as the
+/// steer strip and the ask card; the key hints name the keys that confirm
+/// each row while the choice is open.
+fn render_send_choice(cx: &Context<Workspace>) -> impl IntoElement {
+    let theme = cx.theme();
+    skin::popover_panel("composer-send-choice", theme)
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w_full()
+        .p_2()
+        .child(send_choice_row(
+            "composer-send-choice-steer",
+            IconName::ArrowUp,
+            t("Steer this turn", "引导本轮"),
+            t(
+                "The agent reads it before its next step; nothing stops.",
+                "代理在下一步之前读取，当前回合不中断。",
+            ),
+            "Enter",
+            cx,
+            |workspace, cx| workspace.on_send_choice_steer(cx),
+        ))
+        .child(send_choice_row(
+            "composer-send-choice-interrupt",
+            IconName::Zap,
+            t("Interrupt and send", "打断并发送"),
+            t(
+                "Stops this turn and every subagent, then sends at once.",
+                "停止本轮和所有子代理，立即发送这条。",
+            ),
+            "Ctrl+Enter",
+            cx,
+            |workspace, cx| workspace.on_send_choice_interrupt(cx),
+        ))
+        .child(
+            div()
+                .px_3()
+                .pt_1()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(t("Esc closes and keeps the draft.", "Esc 关闭，草稿保留。")),
+        )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_choice_row(
+    id: &'static str,
+    icon: IconName,
+    title: &'static str,
+    detail: &'static str,
+    keys: &'static str,
+    cx: &Context<Workspace>,
+    pick: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .w_full()
+        .px_3()
+        .py_2()
+        .rounded(skin::radius_md())
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.secondary_hover))
+        .on_click(cx.listener(move |workspace, _, _, cx| pick(workspace, cx)))
+        .child(
+            div()
+                .flex_shrink_0()
+                .size(px(28.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme.secondary)
+                .text_color(theme.foreground)
+                .child(Icon::new(icon).small()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(skin::WEIGHT_STRONG)
+                        .text_color(theme.foreground)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(detail),
+                ),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .px(px(7.))
+                .h(px(22.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(skin::glass_border(theme))
+                .flex()
+                .items_center()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(keys),
+        )
+}
+
 /// Steers the running turn has not read yet. The agent takes them before
 /// its next step; one the turn ends without reading moves to the queue.
+/// While a steer waits here its row carries an Undo: the core drops it
+/// from the steer inbox and the text returns to the composer.
 fn render_pending_steers(items: &[String], cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     let desk = Desk::of(theme);
@@ -545,13 +689,34 @@ fn render_pending_steers(items: &[String], cx: &Context<Workspace>) -> impl Into
             div()
                 .id(SharedString::from(format!("steer-{index}")))
                 .min_w_0()
-                .h(px(24.))
+                .h(px(26.))
                 .pl(px(15.))
                 .flex()
+                .flex_row()
                 .items_center()
+                .gap_2()
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(div().min_w_0().flex_1().truncate().child(preview))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("steer-retract-{index}")))
+                        .flex_shrink_0()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(4.))
+                        .h(px(20.))
+                        .px(px(7.))
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme.secondary_hover).text_color(theme.foreground))
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_retract_steer(index, cx);
+                        }))
+                        .child(Icon::new(IconName::Undo2).xsmall())
+                        .child(t("Undo", "撤销")),
+                )
         }))
 }
 

@@ -11,6 +11,7 @@ mod transcript;
 mod welcome;
 
 pub(crate) use composer::composer_placeholder;
+pub(crate) use composer::busy_enter_opens_choice;
 pub(crate) use menus::reasoning_row_label;
 pub(crate) use tools::parse_diff_hunk_header;
 pub(crate) use welcome::new_task_label;
