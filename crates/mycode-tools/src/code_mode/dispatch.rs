@@ -18,7 +18,7 @@ use crate::stream::{ToolStream, ToolStreamItem};
 use crate::tool::{ToolDyn, ToolError, ToolResult};
 use crate::{ToolCtx, prepare_tool_ctx};
 
-use super::cell::{ScriptCell, ScriptOutcome};
+use super::cell::{InnerCallSummary, ScriptCell, ScriptOutcome};
 use super::journal::ScriptEventKind;
 
 /// One request from the script thread.
@@ -171,6 +171,29 @@ async fn handle(
             } else {
                 run_tool(cell, registry, base, progress, &name, &args, seq).await
             };
+            // The UI summary rides beside the journal entry: the journal
+            // hashes the call, this names it, so a frontend can render the
+            // real tool instead of only the outer `run_code`.
+            let (is_error, diff) = match &outcome {
+                Ok(result) => (
+                    result.is_error,
+                    result
+                        .details
+                        .as_ref()
+                        .and_then(|details| details.get("diff"))
+                        .and_then(Value::as_str)
+                        .filter(|diff| !diff.trim().is_empty())
+                        .map(str::to_owned),
+                ),
+                Err(_) => (true, None),
+            };
+            cell.record_inner_call(InnerCallSummary {
+                seq,
+                target: crate::tool_target(&name, &args),
+                name: name.clone(),
+                is_error,
+                diff,
+            });
             let response = match outcome {
                 Ok(result) => json!({
                     "content": serde_json::to_value(&result.content).unwrap_or(Value::Null),
@@ -252,7 +275,23 @@ async fn execute_with_progress(
             }
             item = inner_rx.recv(), if inner_open => match item {
                 Some(ToolStreamItem::Progress(update)) => {
-                    let _ = progress.send(format!("{name}: {}", update.message));
+                    // Subagent progress is a protocol line
+                    // (`agent|role|phase|detail`) whose readers match the
+                    // first field exactly; prefixing it with the tool name
+                    // corrupted the line, so a subagent spawned inside a
+                    // script never registered as a live job in the UI.
+                    // Protocol lines cross verbatim; anything else keeps
+                    // its tool-name context.
+                    let message = if update
+                        .message
+                        .split_once('|')
+                        .is_some_and(|(prefix, _)| prefix == crate::builtin::AGENT_PROGRESS_PREFIX)
+                    {
+                        update.message
+                    } else {
+                        format!("{name}: {}", update.message)
+                    };
+                    let _ = progress.send(message);
                 }
                 Some(ToolStreamItem::Terminal(_)) => {}
                 None => inner_open = false,

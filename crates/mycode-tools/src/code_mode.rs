@@ -26,7 +26,7 @@ use crate::tool::{INTERRUPTED_NOTE, Tool, ToolError, ToolResult};
 
 pub use cell::{
     CellPhase, CellSnapshot, CodeCellState, CodeCells, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_YIELD_MS,
-    MAX_HOST_CALLS, MAX_YIELD_MS, ScriptCell, ScriptEvent, ScriptOutcome,
+    InnerCallSummary, MAX_HOST_CALLS, MAX_YIELD_MS, ScriptCell, ScriptEvent, ScriptOutcome,
 };
 pub use journal::{JournalEntry, ScriptEventKind, ScriptJournal};
 
@@ -373,8 +373,11 @@ impl Tool for WaitCodeTool {
     }
 }
 
-/// Renders one cell snapshot as a tool result, with the journal in the
-/// UI-only details.
+/// Renders one cell snapshot as a tool result, with the journal and the
+/// inner-call summaries in the UI-only details.
+///
+/// The summaries are what let a frontend name the real tools a script
+/// called: the journal beside them holds only hashes, by design.
 fn result_for(cell: &ScriptCell) -> ToolResult {
     let snapshot = cell.snapshot();
     let details = json!({
@@ -382,6 +385,7 @@ fn result_for(cell: &ScriptCell) -> ToolResult {
         "phase": snapshot.phase,
         "calls": snapshot.calls,
         "journal": snapshot.journal.entries(),
+        "inner_calls": snapshot.inner_calls,
     });
     let text = snapshot.render();
     match snapshot.phase {

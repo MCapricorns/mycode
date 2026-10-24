@@ -72,11 +72,35 @@ pub enum ScriptOutcome {
     Terminated,
 }
 
+/// One inner `call(name, args)` a script made, in UI terms.
+///
+/// The journal records only hashes (it is a determinism record), so it
+/// cannot tell the UI what a script actually did. This summary is the
+/// UI-facing counterpart: the real tool name, its one-line target, and
+/// whether it failed — enough to render each inner call with the
+/// dedicated renderer its tool name deserves instead of one generic
+/// `run_code` row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InnerCallSummary {
+    /// Journal sequence of the call.
+    pub seq: u64,
+    /// Registry tool name the script called.
+    pub name: String,
+    /// One-line target (`tool_target` of the call's arguments).
+    pub target: String,
+    /// Whether the call failed or was refused.
+    pub is_error: bool,
+    /// The call's UI-only diff (edits and writes), when it made one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+}
+
 struct CellInner {
     phase: CellPhase,
     output: String,
     truncated: bool,
     journal: ScriptJournal,
+    inner_calls: Vec<InnerCallSummary>,
     next_seq: u64,
     calls: u64,
     operations: u64,
@@ -119,6 +143,7 @@ impl ScriptCell {
                 output: String::new(),
                 truncated: false,
                 journal: ScriptJournal::new(),
+                inner_calls: Vec::new(),
                 next_seq: 0,
                 calls: 0,
                 operations: 0,
@@ -218,6 +243,17 @@ impl ScriptCell {
     #[must_use]
     pub fn journal(&self) -> ScriptJournal {
         self.inner.read().journal.clone()
+    }
+
+    /// Records one inner call for the UI, beside its journal entry.
+    pub fn record_inner_call(&self, summary: InnerCallSummary) {
+        self.inner.write().inner_calls.push(summary);
+    }
+
+    /// The inner calls so far, in the order the script made them.
+    #[must_use]
+    pub fn inner_calls(&self) -> Vec<InnerCallSummary> {
+        self.inner.read().inner_calls.clone()
     }
 
     /// Marks the cell yielded: the script asked for control back, or the
@@ -333,6 +369,7 @@ impl ScriptCell {
             calls: inner.calls,
             operations: inner.operations,
             journal: inner.journal.clone(),
+            inner_calls: inner.inner_calls.clone(),
         }
     }
 }
@@ -352,6 +389,8 @@ pub struct CellSnapshot {
     pub operations: u64,
     /// Journal so far.
     pub journal: ScriptJournal,
+    /// UI summaries of the inner calls so far.
+    pub inner_calls: Vec<InnerCallSummary>,
 }
 
 impl CellSnapshot {
