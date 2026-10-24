@@ -2,7 +2,7 @@
 //! and interrupt paths that reach a running turn.
 use mycode_app::{BranchId, BridgeCommand, SessionId};
 
-use super::{Effect, FrontendDriver, HeldInterrupt, ToastKind};
+use super::{Effect, FrontendDriver, HeldInterrupt, ReplyScope, ToastKind};
 use crate::view_model::{EntryKind, FrontendAction};
 
 fn failed_start(message: String) -> FrontendAction {
@@ -388,6 +388,32 @@ impl FrontendDriver {
             focus: false,
         });
         self.dispatch(BridgeCommand::Steer { session_id, text });
+    }
+
+    /// Takes back one pending steer before the running turn reads it. The
+    /// core removes it from the session's steer inbox; only on its
+    /// confirmation does the reply path drop it from the pending strip and
+    /// put the text back in the composer (see `replies.rs`). A steer the
+    /// turn already read cannot be taken back and stays sent.
+    pub fn retract_steer(&mut self, text: &str, out: &mut Vec<Effect>) {
+        let _ = out;
+        let Some(session_id) = self.open_session_id() else {
+            return;
+        };
+        if text.trim().is_empty() {
+            return;
+        }
+        let text = text.to_owned();
+        self.dispatch_scoped(
+            BridgeCommand::RetractSteer {
+                session_id: session_id.clone(),
+                text: text.clone(),
+            },
+            ReplyScope::RetractSteer {
+                session: session_id,
+                text,
+            },
+        );
     }
 
     /// Steers a turn did not take go back to the composer, above the draft
