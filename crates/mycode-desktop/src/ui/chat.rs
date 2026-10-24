@@ -474,7 +474,6 @@ fn render_tool_run(
         return div().into_any_element();
     }
     let theme = cx.theme();
-    let rail = theme.border.opacity(0.65);
     if tools.len() >= 2 {
         let id = tools[0].call.event_id.clone();
         let labels: Vec<&str> = tools.iter().map(|tool| tool.call.text.as_ref()).collect();
@@ -490,12 +489,17 @@ fn render_tool_run(
             || tools
                 .iter()
                 .any(|tool| tool_cancellable(tool, workspace, turn_running));
+        // A run of tool calls sits in one framed card, like the other
+        // transcript blocks, instead of hanging off a bare left rail.
         let mut column = div()
             .w_full()
             .min_w_0()
-            .pl(super::skin::space(2))
-            .border_l_1()
-            .border_color(rail)
+            .rounded(px(14.))
+            .border_1()
+            .border_color(theme.border.opacity(0.65))
+            .bg(theme.muted.opacity(0.35))
+            .px_3()
+            .py_2()
             .flex()
             .flex_col()
             .gap(px(2.))
@@ -523,9 +527,12 @@ fn render_tool_run(
     div()
         .w_full()
         .min_w_0()
-        .pl(super::skin::space(2))
-        .border_l_1()
-        .border_color(rail)
+        .rounded(px(14.))
+        .border_1()
+        .border_color(theme.border.opacity(0.65))
+        .bg(theme.muted.opacity(0.35))
+        .px_3()
+        .py_2()
         .flex()
         .flex_col()
         .child(render_one_tool(
