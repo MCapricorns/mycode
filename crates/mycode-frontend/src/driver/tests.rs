@@ -590,6 +590,55 @@ fn steers_returned_to_a_chat_off_screen_are_parked() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A retracted steer leaves the strip and returns to the composer only
+/// when the core confirms it was still pending; one the turn already read
+/// stays sent.
+#[test]
+fn a_retracted_steer_returns_only_when_the_core_confirms_it() {
+    use mycode_app::{BranchId, BridgeReply, SessionId};
+
+    let (mut driver, root) = scratch_driver("steer-retract");
+    let session = SessionId::generate().expect("session").as_str().to_owned();
+    let branch = BranchId::generate().expect("branch").as_str().to_owned();
+    driver.vm.active = Some(conversation(&session, &branch));
+    let mut out = Vec::new();
+    driver.act(FrontendAction::TurnArmed, &mut out);
+    driver.steer_send("check a.rs", &mut out);
+    driver.steer_send("check b.rs", &mut out);
+    assert_eq!(driver.vm.pending_steers, ["check a.rs", "check b.rs"]);
+    // Already read by the turn: the retraction changes nothing.
+    driver.on_reply(
+        ReplyScope::RetractSteer {
+            session: session.clone(),
+            text: "check a.rs".to_owned(),
+        },
+        BridgeReply::SteerRetracted(Ok(false)),
+        &mut out,
+    );
+    assert_eq!(driver.vm.pending_steers, ["check a.rs", "check b.rs"]);
+    // Still pending: it leaves the strip and its text is back in the
+    // composer as a `ComposerSet` effect.
+    out.clear();
+    driver.on_reply(
+        ReplyScope::RetractSteer {
+            session: session.clone(),
+            text: "check a.rs".to_owned(),
+        },
+        BridgeReply::SteerRetracted(Ok(true)),
+        &mut out,
+    );
+    assert_eq!(driver.vm.pending_steers, ["check b.rs"]);
+    assert!(
+        out.iter().any(|effect| matches!(
+            effect,
+            super::Effect::ComposerSet { text, .. } if text == "check a.rs"
+        )),
+        "the retracted steer is back in the composer"
+    );
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 fn code_attachment() -> mycode_app::Attachments {
     let mut attachments = mycode_app::Attachments::default();
     attachments
