@@ -53,6 +53,38 @@ impl Workspace {
         self.driver_do(|d, fx| d.steer_send(&draft, fx), cx);
     }
 
+    /// Interrupt-send (Ctrl+Enter on a busy turn, or the send choice's
+    /// interrupt row): stops the running turn and sends the draft right
+    /// after it. Attachments never ride it; the Enter path warns about
+    /// them before calling this.
+    pub(crate) fn on_interrupt_send(&mut self, cx: &mut Context<Self>) {
+        let draft = self.composer.read(cx).value().to_string();
+        self.driver_do(|d, fx| d.interrupt_send(&draft, fx), cx);
+    }
+
+    /// The send choice's steer row: close the choice and steer the draft
+    /// in, exactly like Ctrl+G.
+    pub(crate) fn on_send_choice_steer(&mut self, cx: &mut Context<Self>) {
+        self.send_choice_open = false;
+        self.on_steer_send(cx);
+    }
+
+    /// The send choice's interrupt row: close the choice and interrupt.
+    pub(crate) fn on_send_choice_interrupt(&mut self, cx: &mut Context<Self>) {
+        self.send_choice_open = false;
+        self.on_interrupt_send(cx);
+    }
+
+    /// Takes back the pending steer at `index` in the strip above the
+    /// composer. The strip drops it only when the core confirms the turn
+    /// had not read it yet; the text then returns to the composer.
+    pub(crate) fn on_retract_steer(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(text) = self.vm().pending_steers.get(index).cloned() else {
+            return;
+        };
+        self.driver_do(|d, fx| d.retract_steer(&text, fx), cx);
+    }
+
     /// Opens or closes the detail card for one running subagent.
     pub(crate) fn on_open_subagent(&mut self, call_id: &str, cx: &mut Context<Self>) {
         let next = if call_id.is_empty() || self.vm().subagent_window.as_deref() == Some(call_id) {
