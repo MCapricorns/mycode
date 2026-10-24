@@ -290,7 +290,7 @@ fn signal_descendants(root: libc::pid_t) -> std::io::Result<()> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn list_descendants(root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
     let mut out = Vec::new();
     let mut stack = vec![root];
@@ -305,6 +305,51 @@ fn list_descendants(root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
         }
     }
     Ok(out)
+}
+
+/// The walk above is unix-generic but only ever had the macOS child
+/// listing, so `signal_descendants` never compiled on Linux.
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn list_descendants(_root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "listing descendant processes is not implemented on this platform",
+    ))
+}
+
+/// Children from procfs: each `/proc/<pid>/stat` names its parent. The
+/// `comm` field is parenthesized and may itself contain spaces or
+/// parentheses, so the parent pid is read after the final `)`.
+#[cfg(target_os = "linux")]
+fn direct_children(parent: libc::pid_t) -> Vec<libc::pid_t> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|text| text.parse::<libc::pid_t>().ok())
+        else {
+            continue;
+        };
+        if pid <= 1 {
+            continue;
+        }
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        let Some((_, fields)) = stat.rsplit_once(')') else {
+            continue;
+        };
+        let mut fields = fields.split_whitespace();
+        let _state = fields.next();
+        if fields.next().and_then(|ppid| ppid.parse::<libc::pid_t>().ok()) == Some(parent) {
+            out.push(pid);
+        }
+    }
+    out
 }
 
 #[cfg(target_os = "macos")]

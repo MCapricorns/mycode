@@ -675,15 +675,28 @@ pub(super) fn publish_create_only(
 /// Synchronizes `file` to stable storage.
 ///
 /// On macOS this is `fcntl(F_FULLFSYNC)`. That call is required for durability
-/// on APFS/HFS; a bare `fsync` only flushes to the drive cache. Failure is
-/// returned rather than silently falling back, so callers must not claim
-/// durability if this errors (some network volumes do not implement it).
+/// on APFS/HFS; a bare `fsync` only flushes to the drive cache. Other unix
+/// platforms have no `F_FULLFSYNC` (the rustix binding does not exist there,
+/// so this never compiled on Linux), and `fsync` is the durability barrier
+/// there. Failure is returned rather than silently falling back, so callers
+/// must not claim durability if this errors (some network volumes do not
+/// implement it).
 ///
 /// # Errors
 ///
 /// Returns an I/O error when the platform sync fails.
 pub(super) fn sync_file(file: &File) -> io::Result<()> {
-    rfs::fcntl_fullfsync(file.as_fd()).map_err(map_errno)
+    sync_fd_raw(file.as_fd()).map_err(map_errno)
+}
+
+#[cfg(target_vendor = "apple")]
+fn sync_fd_raw(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Errno> {
+    rfs::fcntl_fullfsync(fd)
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn sync_fd_raw(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Errno> {
+    rfs::fsync(fd)
 }
 
 pub(super) fn sync_parent(dir: &File) -> io::Result<()> {
