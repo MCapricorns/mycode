@@ -186,6 +186,174 @@ pub(super) fn file_preview(
     )
 }
 
+/// One inner call of a code-mode breakdown: its `tool_label` line, its
+/// failure flag, and the diff lines the projection appended under it.
+pub(super) struct CodeCall<'a> {
+    pub label: &'a str,
+    pub failed: bool,
+    pub body: Vec<&'a str>,
+}
+
+/// Splits a projected `run_code` result into the script's own output and
+/// its inner-call breakdown (see `CODE_CALLS_HEADING`).
+///
+/// Without this split the whole result fell into the generic text
+/// branch: a script that read, edited, and searched showed as one
+/// undifferentiated block under a bare `run_code` row, and no inner
+/// tool ever reached its dedicated renderer.
+pub(super) fn split_code_calls(text: &str) -> Option<(String, Vec<CodeCall<'_>>)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| *line == mycode_frontend::CODE_CALLS_HEADING)?;
+    let head = lines[..at].join("\n");
+    let mut calls: Vec<CodeCall<'_>> = Vec::new();
+    for line in &lines[at + 1..] {
+        // Diff lines belong to the call above them; anything else starts
+        // the next call.
+        let continuation = !calls.is_empty()
+            && (diff_added_line(line)
+                || diff_removed_line(line)
+                || line.starts_with("@@ ")
+                || line.starts_with("[diff truncated]"));
+        if continuation {
+            calls
+                .last_mut()
+                .expect("a continuation follows a call")
+                .body
+                .push(line);
+            continue;
+        }
+        let (label, failed) = match line.strip_suffix(" (failed)") {
+            Some(label) => (label, true),
+            None => (*line, false),
+        };
+        if label.is_empty() {
+            continue;
+        }
+        calls.push(CodeCall {
+            label,
+            failed,
+            body: Vec::new(),
+        });
+    }
+    (!calls.is_empty()).then_some((head, calls))
+}
+
+/// How many inner calls a projected `run_code` result names.
+pub(super) fn code_call_count(text: &str) -> usize {
+    split_code_calls(text)
+        .map(|(_, calls)| calls.len())
+        .unwrap_or(0)
+}
+
+/// The expanded body of a `run_code` row: one mini row per inner call,
+/// rendered through the same verb/icon dispatch as a top-level call —
+/// an inner `edit` gets its diff preview, an inner `read` its file
+/// icon — then the script's own output.
+pub(super) fn code_calls_body(
+    head: &str,
+    calls: &[CodeCall<'_>],
+    theme: &Theme,
+    desk: &Desk,
+) -> impl IntoElement {
+    let mut column = div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(skin::space(1))
+        .children(calls.iter().map(|call| code_call_row(call, theme, desk)));
+    let head = head.trim();
+    if !head.is_empty() {
+        column = column.child(
+            div()
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .px(skin::space(2))
+                .py(skin::space(1))
+                .rounded(skin::radius_xs())
+                .text_xs()
+                .whitespace_normal()
+                .font_family(theme.mono_font_family.clone())
+                .bg(desk.screen.opacity(0.45))
+                .text_color(desk.screen_dim)
+                .child(ellipsis(head, 2000)),
+        );
+    }
+    column
+}
+
+/// One inner call of a code-mode script, as a compact tool row.
+fn code_call_row(call: &CodeCall<'_>, theme: &Theme, desk: &Desk) -> gpui_kit::AnyElement {
+    let inner = tool_name(call.label);
+    let (verb, target) = tool_call_parts(call.label, true, false, call.failed);
+    let mut column = div().w_full().min_w_0().flex().flex_col().child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(skin::space(2))
+            .w_full()
+            .min_w_0()
+            .px(skin::space(2))
+            .py(px(2.))
+            .child(status_dot(call.failed, false, false, theme))
+            .child(
+                Icon::new(tool_icon(inner))
+                    .xsmall()
+                    .flex_shrink_0()
+                    .text_color(theme.muted_foreground),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                    .text_color(if call.failed {
+                        theme.danger
+                    } else {
+                        theme.foreground
+                    })
+                    .child(verb),
+            )
+            .when(!target.is_empty(), |row| {
+                row.child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .overflow_hidden()
+                        .truncate()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(theme.muted_foreground)
+                        .child(target),
+                )
+            }),
+    );
+    if !call.body.is_empty() {
+        let body: gpui_kit::AnyElement = if tool_paints_diff(inner) {
+            diff_preview(&call.body, theme).into_any_element()
+        } else {
+            div()
+                .w_full()
+                .min_w_0()
+                .overflow_hidden()
+                .px(skin::space(2))
+                .py(skin::space(1))
+                .text_xs()
+                .whitespace_normal()
+                .font_family(theme.mono_font_family.clone())
+                .text_color(desk.screen_dim)
+                .child(call.body.join("\n"))
+                .into_any_element()
+        };
+        column = column.child(div().w_full().min_w_0().pl(skin::space(4)).child(body));
+    }
+    column.into_any_element()
+}
+
 pub(super) fn result_body(
     tool: &str,
     target: &str,
@@ -200,6 +368,11 @@ pub(super) fn result_body(
     // command output of its own). Keep it only to drive the status.
     let text = raw.strip_prefix("failed: ").unwrap_or(raw);
     let lines: Vec<&str> = text.lines().collect();
+    if tool == "run_code"
+        && let Some((head, calls)) = split_code_calls(text)
+    {
+        return code_calls_body(&head, &calls, theme, desk).into_any_element();
+    }
     if shows_diff_preview(tool, text) {
         diff_preview(&lines, theme).into_any_element()
     } else if matches!(tool, "grep" | "find" | "search") && !failed {

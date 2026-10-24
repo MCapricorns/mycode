@@ -414,6 +414,23 @@ pub(super) fn tool_call_parts(
                 t("Asked", "已提问")
             }
         }
+        // Code mode's own tools get verbs too: without an arm the row
+        // showed the raw name `run_code` as its verb, indistinguishable
+        // from every other code-mode call.
+        "run_code" => {
+            if active {
+                t("Running code", "正在运行代码")
+            } else {
+                t("Ran code", "已运行代码")
+            }
+        }
+        "wait_code" => {
+            if active {
+                t("Waiting for code", "正在等待代码")
+            } else {
+                t("Waited for code", "已等待代码")
+            }
+        }
         other => other,
     };
     (verb.to_owned(), target)
@@ -433,6 +450,7 @@ fn tool_icon(tool: &str) -> IconName {
         "web_search" | "fetch_content" => IconName::Globe,
         "agent" => IconName::Bot,
         "ask" | "ask_user" => IconName::MessageSquare,
+        "run_code" | "wait_code" => IconName::Code,
         _ => IconName::Wrench,
     }
 }
@@ -468,6 +486,7 @@ fn tool_kind(tool: &str) -> &'static str {
         "web_search" | "fetch_content" => "web",
         "agent" => "agent",
         "ask" | "ask_user" => "ask",
+        "run_code" | "wait_code" => "code",
         _ => "other",
     }
 }
@@ -513,6 +532,14 @@ fn kind_phrase(kind: &str, count: usize) -> String {
             format!("运行了 {count} 个子代理"),
         ),
         "ask" => (format!("asked {count}"), format!("提问了 {count} 次")),
+        "code" if count == 1 => (
+            format!("ran {count} script"),
+            format!("运行了 {count} 段脚本"),
+        ),
+        "code" => (
+            format!("ran {count} scripts"),
+            format!("运行了 {count} 段脚本"),
+        ),
         _ if count == 1 => (
             format!("{count} other call"),
             format!("另外 {count} 次调用"),
@@ -540,6 +567,21 @@ pub(super) fn tool_status(
     let text = result.text.as_ref();
     if text.starts_with("failed:") {
         return t("failed", "失败").to_owned();
+    }
+    if tool == "run_code" {
+        // The summary names how many real tools the script called; the
+        // breakdown itself is one click away in the expanded body.
+        let calls = code_call_count(text);
+        if calls == 1 {
+            return t("1 call", "1 次调用").to_owned();
+        }
+        if calls > 1 {
+            return if is_chinese() {
+                format!("{calls} 次调用")
+            } else {
+                format!("{calls} calls")
+            };
+        }
     }
     if tool_paints_diff(tool) {
         let (added, removed) = count_diff_changes(text.lines());
