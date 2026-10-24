@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- code mode 下所有内层工具只显示为裸 `run_code`：内层 `call(...)` 现在逐次记录工具名、目标、成败与 diff 并写入结果，`run_code` 行标题回退解析脚本中的 `call("…")`、显示真实工具摘要（如 `read · grep · edit`），展开后每个内层调用按真实工具名渲染、edit/write 带 diff 预览，`run_code`/`wait_code` 也有专属动词、图标与调用计数。
+- subagent 面板打不开：dispatch 转发内层进度时给 `agent|role|phase` 协议行加了名字前缀，前端严格匹配失败导致 LiveJob 永远建不起来；现在协议行原样转发，subagent 的运行行、取消按钮与面板恢复。
+- Linux 下 workspace 编译失败：`fcntl_fullfsync` 按平台分流（Apple 用 F_FULLFSYNC、其他 unix 用 fsync）、errno 改用 `__errno_location`，并补上 `canonical_from_handle` 与 `list_descendants` 的 Linux 实现。
+
 ## [0.12.29] - 2026-10-23
 
 ### Changed
