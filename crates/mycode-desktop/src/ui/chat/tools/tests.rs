@@ -1,6 +1,6 @@
 use super::{
-    diff_counts, diff_line_text, read_path, shows_diff_preview, tool_batch_summary,
-    tool_call_parts, tool_dot_color, tool_status,
+    code_call_count, diff_counts, diff_line_text, read_path, shows_diff_preview, split_code_calls,
+    tool_batch_summary, tool_call_parts, tool_dot_color, tool_status,
 };
 use crate::view_model::{ConversationEntry, EntryKind};
 
@@ -145,6 +145,49 @@ fn a_run_of_reads_and_edits_collapses_to_one_line() {
     assert_eq!(
         tool_batch_summary(&["bash  cargo test", "grep  fn main"]),
         "ran 1 command, searched 1 time"
+    );
+}
+
+#[test]
+fn code_mode_rows_have_their_own_verbs_and_batch_phrase() {
+    assert_eq!(
+        tool_call_parts("run_code  read · grep", true, false, false).0,
+        "Ran code"
+    );
+    assert_eq!(
+        tool_call_parts("run_code  read · grep", false, true, false).0,
+        "Running code"
+    );
+    assert_eq!(
+        tool_call_parts("wait_code  cell-3", true, false, false),
+        ("Waited for code".to_owned(), "cell-3".to_owned())
+    );
+    assert_eq!(
+        tool_batch_summary(&["run_code  read", "run_code  edit", "read  a.rs"]),
+        "ran 2 scripts, read 1 file"
+    );
+}
+
+#[test]
+fn a_run_code_result_splits_into_its_inner_calls() {
+    let text = "script output\n[code calls]\nread  src/lib.rs\nedit  src/main.rs (failed)\n+ new\n- old\ngrep  needle src";
+    let (head, calls) = split_code_calls(text).expect("breakdown");
+    assert_eq!(head, "script output");
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].label, "read  src/lib.rs");
+    assert!(!calls[0].failed);
+    assert!(calls[0].body.is_empty());
+    assert_eq!(calls[1].label, "edit  src/main.rs");
+    assert!(calls[1].failed);
+    assert_eq!(calls[1].body, ["+ new", "- old"]);
+    assert_eq!(calls[2].label, "grep  needle src");
+    assert_eq!(code_call_count(text), 3);
+    // No heading, no split; a bare result counts nothing.
+    assert!(split_code_calls("plain output").is_none());
+    assert_eq!(code_call_count("plain output"), 0);
+    assert_eq!(
+        tool_status("run_code", Some(&result_entry(text)), false),
+        "3 calls"
     );
 }
 
