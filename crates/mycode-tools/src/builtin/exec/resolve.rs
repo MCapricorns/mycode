@@ -569,6 +569,34 @@ fn canonical_from_handle(file: &File) -> Result<PathBuf, ToolError> {
         }
         Ok(path)
     }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+
+        // The fd symlink in procfs names the file the handle pins. A
+        // deleted file's name carries a ` (deleted)` suffix and cannot
+        // be launched by path, so it is unavailable, not a target.
+        let link = format!("/proc/self/fd/{}", file.as_fd().as_raw_fd());
+        let path = std::fs::read_link(&link).map_err(|err| {
+            ToolError::InvalidArgs(format!("program canonical path is unavailable: {err}"))
+        })?;
+        if !path.is_absolute()
+            || path
+                .to_str()
+                .is_some_and(|name| name.ends_with(" (deleted)"))
+        {
+            return Err(ToolError::InvalidArgs(
+                "program canonical path is not absolute".into(),
+            ));
+        }
+        Ok(path)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err(ToolError::InvalidArgs(
+            "program canonical path is unavailable on this platform".into(),
+        ))
+    }
 }
 
 #[cfg(windows)]

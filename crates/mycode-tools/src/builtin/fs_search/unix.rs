@@ -209,7 +209,15 @@ pub(crate) fn unix_on_disk_component_name(
 #[cfg(unix)]
 pub(crate) fn unix_clear_errno() {
     // SAFETY: writing 0 into thread-local errno distinguishes `readdir`
-    // EOF from a real failure after a previous fallible syscall.
+    // EOF from a real failure after a previous fallible syscall. The
+    // accessor differs by libc: `__errno_location` on Linux/Android,
+    // `__error` on the BSDs and macOS — naming the BSD one unconditionally
+    // never compiled on Linux.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    unsafe {
+        *libc::__errno_location() = 0;
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     unsafe {
         *libc::__error() = 0;
     }
