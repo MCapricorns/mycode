@@ -271,6 +271,11 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             state.composer_draft.clear();
             state.mention = None;
         }
+        FrontendAction::SteerRetracted(text) => {
+            if let Some(position) = state.pending_steers.iter().position(|sent| *sent == text) {
+                state.pending_steers.remove(position);
+            }
+        }
         FrontendAction::SteersParked { session_id, texts } => {
             park_steers(state, session_id, texts);
         }
