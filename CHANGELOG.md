@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.30] - 2026-10-24
+
 ### Fixed
 
 - code mode 下所有内层工具只显示为裸 `run_code`：内层 `call(...)` 现在逐次记录工具名、目标、成败与 diff 并写入结果，`run_code` 行标题回退解析脚本中的 `call("…")`、显示真实工具摘要（如 `read · grep · edit`），展开后每个内层调用按真实工具名渲染、edit/write 带 diff 预览，`run_code`/`wait_code` 也有专属动词、图标与调用计数。
@@ -468,7 +470,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.29...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.30...HEAD
+[0.12.30]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.30
 [0.12.29]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.29
 [0.12.28]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.28
 [0.12.27]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.27
