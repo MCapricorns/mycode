@@ -265,7 +265,19 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
             .to_owned(),
         "search_tool" | "use_tool" => text("name"),
         "agent" => join_target(&text("agent"), &text("description")),
-        "run_code" => text("description"),
+        // The retired `run_code` carried a `description`; the current one
+        // carries only a `script`, so a description-only target left every
+        // code-mode row a bare `run_code` with no hint of what it ran. Fall
+        // back to the tools the script calls, in first-call order.
+        "run_code" => {
+            let description = text("description");
+            if !description.is_empty() {
+                description
+            } else {
+                script_call_summary(&text("script"))
+            }
+        }
+        "wait_code" => text("cell_id"),
         _ => text("path"),
     };
     let flat = joined.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -281,6 +293,54 @@ pub fn tool_label(name: &str, target: &str) -> String {
     } else {
         format!("{name}  {target}")
     }
+}
+
+/// The distinct tools a code-mode script calls, in first-call order
+/// (`read · grep · edit`), read from its `call("name", …)` literals.
+///
+/// A script whose calls are all computed (no literal name) falls back to
+/// its first meaningful line, so the row still names something the script
+/// does instead of nothing.
+fn script_call_summary(script: &str) -> String {
+    let mut names: Vec<&str> = Vec::new();
+    let mut rest = script;
+    while let Some(at) = rest.find("call") {
+        // Not a host call when `call` is the tail of a longer name
+        // (`recall`, `callback`).
+        let embedded = rest[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_alphanumeric() || ch == '_');
+        let after = &rest[at + 4..];
+        rest = after;
+        if embedded {
+            continue;
+        }
+        let Some(after) = after.trim_start().strip_prefix('(') else {
+            continue;
+        };
+        let after = after.trim_start();
+        let quote = match after.chars().next() {
+            Some(quote @ ('"' | '\'')) => quote,
+            _ => continue,
+        };
+        let Some((name, _)) = after[1..].split_once(quote) else {
+            continue;
+        };
+        let name = name.trim();
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    if !names.is_empty() {
+        return names.join(" · ");
+    }
+    script
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("//"))
+        .unwrap_or("")
+        .to_owned()
 }
 
 fn join_target(left: &str, right: &str) -> String {
@@ -611,6 +671,27 @@ mod tests {
     fn retired_run_code_replays_from_its_description() {
         let args = json!({"code": "print(1)", "description": "plot the data"});
         assert_eq!(tool_target("run_code", &args), "plot the data");
+    }
+
+    #[test]
+    fn run_code_target_names_the_tools_its_script_calls() {
+        // The current `run_code` arguments carry no `description`, so the
+        // row target comes from the script's `call` literals: distinct
+        // names in first-call order.
+        let args = json!({"script": "let a = call(\"read\", #{ path: \"x\" });\ncall(\"grep\", #{});\ncall(\"read\", #{});\ncomplete(a)"});
+        assert_eq!(tool_target("run_code", &args), "read · grep");
+        // A script with no literal call still names its first line, and a
+        // longer name ending in `call` is not a host call.
+        let args = json!({"script": "// setup\nlet total = 1 + 2;"});
+        assert_eq!(tool_target("run_code", &args), "let total = 1 + 2;");
+        let args = json!({"script": "recall(\"read\", #{});"});
+        assert_eq!(tool_target("run_code", &args), "recall(\"read\", #{});");
+    }
+
+    #[test]
+    fn wait_code_target_is_its_cell_id() {
+        let args = json!({"cell_id": "cell-3"});
+        assert_eq!(tool_target("wait_code", &args), "cell-3");
     }
 
     #[test]

@@ -221,7 +221,27 @@ fn sync_created_directory(directory: &File, parent: &File) -> Result<(), ConfigE
 }
 
 pub(super) fn sync_directory(directory: &File) -> Result<(), ConfigError> {
-    rfs::fcntl_fullfsync(directory.as_fd()).map_err(|error| map_errno(error, ConfigErrorKind::Io))
+    sync_fd(directory.as_fd())
+}
+
+/// Flushes one fd to stable storage.
+///
+/// Apple platforms get `F_FULLFSYNC`, the strongest flush macOS offers.
+/// Other unix platforms have no such fcntl — the rustix binding does not
+/// exist there, so this never compiled on Linux — and plain `fsync` is
+/// the durability barrier there.
+pub(super) fn sync_fd(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), ConfigError> {
+    sync_fd_raw(fd).map_err(|error| map_errno(error, ConfigErrorKind::Io))
+}
+
+#[cfg(target_vendor = "apple")]
+fn sync_fd_raw(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Errno> {
+    rfs::fcntl_fullfsync(fd)
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn sync_fd_raw(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Errno> {
+    rfs::fsync(fd)
 }
 
 pub(super) fn map_errno(error: Errno, kind: ConfigErrorKind) -> ConfigError {
