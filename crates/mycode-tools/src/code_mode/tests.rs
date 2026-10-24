@@ -204,6 +204,36 @@ complete(r.content[0]);
 }
 
 #[tokio::test]
+async fn the_result_names_its_inner_calls_for_the_ui() {
+    let workspace = workspace("inner-calls");
+    std::fs::write(workspace.0.join("note.txt"), "alpha body\n").unwrap();
+    let cells = Arc::new(CodeCells::new());
+    let result = run_script(
+        &cells,
+        &workspace.0,
+        json!({
+            "script": r#"
+let a = call("read", #{ path: "note.txt" });
+let b = call("nope", #{});
+complete("done");
+"#,
+            "yield_time_ms": 10_000,
+        }),
+    )
+    .await
+    .expect("the script runs");
+    assert!(!result.is_error, "{result:?}");
+    let details = result.details.expect("cell details");
+    let calls = details["inner_calls"].as_array().expect("inner calls");
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0]["name"], "read");
+    assert_eq!(calls[0]["target"], "note.txt");
+    assert_eq!(calls[0]["is_error"], false);
+    assert_eq!(calls[1]["name"], "nope");
+    assert_eq!(calls[1]["is_error"], true);
+}
+
+#[tokio::test]
 async fn an_unknown_tool_is_reported_to_the_script() {
     let workspace = workspace("unknown");
     let cells = Arc::new(CodeCells::new());
