@@ -176,6 +176,15 @@ pub(crate) fn run_core(
                     drop(inboxes);
                     let _ = with_reply.reply.send(BridgeReply::Steered(outcome));
                 }
+                BridgeCommand::RetractSteer { session_id, text } => {
+                    let inboxes = state.steer_inboxes.lock();
+                    let outcome = match inboxes.get(&session_id) {
+                        Some(inbox) => Ok(inbox.remove(&text)),
+                        None => Err("no turn is running for this session".to_owned()),
+                    };
+                    drop(inboxes);
+                    let _ = with_reply.reply.send(BridgeReply::SteerRetracted(outcome));
+                }
                 BridgeCommand::CancelChat { session_id } => {
                     let token = state.turn_cancels.lock().get(&session_id).cloned();
                     let outcome = match token {
@@ -341,6 +350,7 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
         BridgeCommand::CancelChat { .. } => BridgeReply::ChatCancelled(Err(message)),
         BridgeCommand::CancelSubagent { .. } => BridgeReply::SubagentCancelled(Err(message)),
         BridgeCommand::Steer { .. } => BridgeReply::Steered(Err(message)),
+        BridgeCommand::RetractSteer { .. } => BridgeReply::SteerRetracted(Err(message)),
         BridgeCommand::SummarizeTitle { .. } => BridgeReply::TitleSummarized(Err(message)),
     }
 }
@@ -503,6 +513,9 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
         BridgeCommand::Steer { .. } => {
             BridgeReply::Steered(Err("steers are applied on the core thread".to_owned()))
         }
+        BridgeCommand::RetractSteer { .. } => BridgeReply::SteerRetracted(Err(
+            "steer retractions are applied on the core thread".to_owned(),
+        )),
         BridgeCommand::SummarizeTitle { .. } => {
             BridgeReply::TitleSummarized(Err("title summaries run as concurrent tasks".to_owned()))
         }
