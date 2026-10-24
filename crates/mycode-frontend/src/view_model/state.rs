@@ -454,6 +454,10 @@ pub enum FrontendAction {
     /// returned after the turn's last request. They leave the pending strip;
     /// the driver puts them back in the composer.
     SteersReturned(Vec<String>),
+    /// One pending steer the user took back before the turn read it. The
+    /// core confirmed it left the steer inbox, so it leaves the pending
+    /// strip; the driver puts the text back in the composer.
+    SteerRetracted(String),
     /// Steers a chat that is not on screen did not take. They wait parked
     /// and come back to the composer when that chat opens.
     SteersParked {
