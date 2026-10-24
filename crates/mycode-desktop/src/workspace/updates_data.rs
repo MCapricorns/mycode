@@ -116,6 +116,13 @@ impl Workspace {
             self.set_command_palette(false, window, cx);
             return;
         }
+        // The send choice floats above the composer and is the newest
+        // layer there: Escape closes it and nothing else.
+        if self.send_choice_open {
+            self.send_choice_open = false;
+            cx.notify();
+            return;
+        }
         // One keypress closes one layer. Diff is painted above the drawer
         // and Details, so it goes first; the drawer next; then an unpinned
         // Details overlay. A pinned Details column is part of the desk, not
