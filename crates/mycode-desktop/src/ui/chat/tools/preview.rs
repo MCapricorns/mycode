@@ -241,10 +241,34 @@ pub(super) fn split_code_calls(text: &str) -> Option<(String, Vec<CodeCall<'_>>)
 }
 
 /// How many inner calls a projected `run_code` result names.
+///
+/// A counting scan, not a split: the row's status line asks this on every
+/// render of every `run_code` row, and the full split collects every line
+/// into a Vec, joins the head into a String, and builds a `CodeCall` per
+/// call — all to produce one number. This walks the same lines with the
+/// same continuation rules and allocates nothing.
 pub(super) fn code_call_count(text: &str) -> usize {
-    split_code_calls(text)
-        .map(|(_, calls)| calls.len())
-        .unwrap_or(0)
+    let mut in_calls = false;
+    let mut count = 0usize;
+    for line in text.lines() {
+        if !in_calls {
+            in_calls = line == mycode_frontend::CODE_CALLS_HEADING;
+            continue;
+        }
+        let continuation = count > 0
+            && (diff_added_line(line)
+                || diff_removed_line(line)
+                || line.starts_with("@@ ")
+                || line.starts_with("[diff truncated]"));
+        if continuation {
+            continue;
+        }
+        let label = line.strip_suffix(" (failed)").unwrap_or(line);
+        if !label.is_empty() {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// The expanded body of a `run_code` row: one mini row per inner call,
@@ -367,15 +391,19 @@ pub(super) fn result_body(
     // repeated in front of the first output line (`failed: True` read like a
     // command output of its own). Keep it only to drive the status.
     let text = raw.strip_prefix("failed: ").unwrap_or(raw);
-    let lines: Vec<&str> = text.lines().collect();
     if tool == "run_code"
         && let Some((head, calls)) = split_code_calls(text)
     {
         return code_calls_body(&head, &calls, theme, desk).into_any_element();
     }
+    // Only the diff and search previews index lines by position; the plain
+    // branches below work on the text itself, so the per-render line Vec
+    // is collected just for the two branches that need it.
     if shows_diff_preview(tool, text) {
+        let lines: Vec<&str> = text.lines().collect();
         diff_preview(&lines, theme).into_any_element()
     } else if matches!(tool, "grep" | "find" | "search") && !failed {
+        let lines: Vec<&str> = text.lines().collect();
         search_preview(tool, &lines, theme, desk).into_any_element()
     } else if tool == "read"
         && !failed
@@ -388,7 +416,7 @@ pub(super) fn result_body(
         && let Some(preview) = file_preview(&path, text, theme, desk)
     {
         preview
-    } else if failed || text.len() > 300 || lines.len() > 6 {
+    } else if failed || text.len() > 300 || text.lines().count() > 6 {
         div()
             .w_full()
             .min_w_0()
@@ -517,8 +545,12 @@ pub(crate) fn parse_diff_hunk_header(line: &str) -> Option<(u32, u32)> {
 
 pub(super) fn diff_preview(lines: &[&str], theme: &Theme) -> impl IntoElement {
     let (added, removed) = count_diff_changes(lines.iter().copied());
-    let numbered = number_diff(lines);
-    let shown = numbered.len().min(80);
+    // Only the first `shown` lines are ever painted, and numbering a line
+    // clones its text into a String — so number just the painted prefix
+    // instead of the whole diff on every render. Numbering is positional,
+    // so the prefix numbers exactly as the full pass would.
+    let shown = lines.len().min(80);
+    let numbered = number_diff(&lines[..shown]);
     let add_ink = crate::ui::desk::diff_ink(theme, true);
     let remove_ink = crate::ui::desk::diff_ink(theme, false);
     div()
@@ -581,7 +613,7 @@ pub(super) fn diff_preview(lines: &[&str], theme: &Theme) -> impl IntoElement {
                         .child(line.text.clone()),
                 )
         }))
-        .when(numbered.len() > shown, |this| {
+        .when(lines.len() > shown, |this| {
             this.child(preview_caption(
                 t("… more changes omitted", "… 更多改动已省略"),
                 theme,
