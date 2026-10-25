@@ -64,6 +64,7 @@ impl Render for TranscriptProbe {
                             }
                             cx.notify();
                         }),
+                        |_, _, _| {},
                     ),
                 )
                 .into_any_element()
@@ -402,6 +403,7 @@ fn assistant_speaker_header_renders_only_when_requested_for_the_turn(cx: &mut Te
                         None,
                         &theme,
                         window,
+                        |_, _, _| {},
                         |_, _, _| {},
                     ),
                 )

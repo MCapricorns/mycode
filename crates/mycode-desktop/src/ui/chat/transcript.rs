@@ -75,7 +75,6 @@ pub(super) fn render_streaming_entry(
                     t("Agent", "代理"),
                     IconName::Bot,
                     desk.green,
-                    theme,
                 )))
             })
             .when(show_reasoning && !streaming.thinking.is_empty(), |this| {
@@ -118,21 +117,27 @@ pub(super) fn render_entry(
     cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
     match entry.kind {
-        EntryKind::AssistantMessage => desk_block(
-            entry,
-            assistant_block(
+        EntryKind::AssistantMessage => {
+            let source = entry.text.clone();
+            desk_block(
                 entry,
-                workspace.thinking_open(),
-                display,
-                cache,
-                theme,
-                window,
-                cx.listener(|workspace, _, _, cx| {
-                    workspace.on_toggle_thinking(cx);
-                }),
-            ),
-        )
-        .into_any_element(),
+                assistant_block(
+                    entry,
+                    workspace.thinking_open(),
+                    display,
+                    cache,
+                    theme,
+                    window,
+                    cx.listener(|workspace, _, _, cx| {
+                        workspace.on_toggle_thinking(cx);
+                    }),
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_copy_plain_text(markdown::markdown_to_plain_text(&source), cx);
+                    }),
+                ),
+            )
+            .into_any_element()
+        }
         EntryKind::ToolResult => {
             let desk = Desk::of(theme);
             let failed = entry.text.starts_with("failed:");
@@ -195,7 +200,6 @@ fn speaker_row(
     name: &str,
     icon: IconName,
     color: gpui_kit::Hsla,
-    theme: &Theme,
 ) -> impl IntoElement {
     div()
         .flex()
@@ -224,7 +228,7 @@ fn speaker_row(
                 .truncate()
                 .text_xs()
                 .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                .text_color(theme.foreground)
+                .text_color(color)
                 .child(name.to_owned())
                 .test_support(),
         )
@@ -271,6 +275,7 @@ fn assistant_block(
     theme: &Theme,
     window: &Window,
     on_toggle: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
+    on_copy: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
 ) -> impl IntoElement {
     let AssistantDisplay {
         reasoning: show_reasoning,
@@ -285,6 +290,7 @@ fn assistant_block(
     // and the thinking card nested inside it. An entry with nothing to show
     // (reasoning hidden, no text) stays unframed and invisible.
     div()
+        .relative()
         .flex()
         .flex_col()
         .gap_2()
@@ -306,7 +312,6 @@ fn assistant_block(
                 t("Agent", "代理"),
                 IconName::Bot,
                 desk.green,
-                theme,
             )))
         })
         .when(has_thinking, |this| {
@@ -328,6 +333,51 @@ fn assistant_block(
                 window,
             ))
         })
+        .when(has_text, |this| {
+            this.child(copy_chip(
+                format!("entry-copy-{}", entry.event_id),
+                theme,
+                on_copy,
+            ))
+        })
+}
+
+/// The hover action on a reply card: copy the whole reply as plain text
+/// (Markdown markers stripped — see `markdown::markdown_to_plain_text`).
+/// Absolutely positioned in the card's corner so it never changes the
+/// card's layout height; the entry shell's `ledger-row` group reveals it,
+/// the same hover pattern as the user row's recall action.
+fn copy_chip(
+    id: String,
+    theme: &Theme,
+    on_copy: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .absolute()
+        .top(skin::space(2))
+        .right(skin::space(2))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .h(px(22.))
+        .rounded(skin::radius_control())
+        .text_xs()
+        .cursor_pointer()
+        .bg(skin::frost(theme))
+        .text_color(theme.muted_foreground)
+        .opacity(0.0)
+        .group_hover("ledger-row", |this| this.opacity(1.0))
+        .hover(|this| {
+            this.bg(skin::frost_hover(theme))
+                .text_color(theme.foreground)
+        })
+        .on_click(on_copy)
+        .child(Icon::new(IconName::Copy).xsmall())
+        .child(t("Copy as plain text", "复制为纯文本"))
+        .test_support()
 }
 
 /// One piece of a committed assistant message.
@@ -519,6 +569,7 @@ fn thinking_box(
     let toggle_id = id.to_string();
     let headline = thinking_headline(t("Thinking", "思考"), open, text);
     let body_id = SharedString::from(format!("thinking-body-{toggle_id}"));
+    let desk = Desk::of(theme);
     div()
         .id(id)
         .w_full()
@@ -529,8 +580,8 @@ fn thinking_box(
         .flex_col()
         .rounded(px(14.))
         .border_1()
-        .border_color(theme.border.opacity(0.65))
-        .bg(Desk::of(theme).thinking.opacity(0.07))
+        .border_color(desk.thinking.opacity(0.38))
+        .bg(desk.thinking.opacity(0.07))
         .overflow_hidden()
         .child(
             div()
