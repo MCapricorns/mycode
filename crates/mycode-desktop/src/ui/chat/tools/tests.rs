@@ -192,6 +192,47 @@ fn a_run_code_result_splits_into_its_inner_calls() {
 }
 
 #[test]
+fn the_counting_scan_agrees_with_the_full_split() {
+    // Continuations (diff lines, hunk headers, the truncation note) belong
+    // to the call above them; a blank line starts nothing.
+    let text = "out\n[code calls]\nread  a\nedit  b (failed)\n+ x\n@@ -1 +1 @@\n[diff truncated]\n\ngrep  c";
+    assert_eq!(code_call_count(text), 3);
+    assert_eq!(
+        code_call_count(text),
+        split_code_calls(text).expect("breakdown").1.len()
+    );
+    // A heading with no calls under it counts zero, like the split's None.
+    assert_eq!(code_call_count("[code calls]"), 0);
+    assert_eq!(code_call_count("[code calls]\n (failed)"), 0);
+}
+
+#[test]
+fn numbering_a_diff_prefix_matches_the_full_numbering() {
+    // The preview numbers only the painted prefix; numbering is
+    // positional, so the prefix must agree line for line with the full
+    // pass it replaces.
+    let lines: Vec<String> = (0..120)
+        .map(|n| {
+            if n % 2 == 0 {
+                format!("+ line {n}")
+            } else {
+                format!("- line {n}")
+            }
+        })
+        .collect();
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let full = super::number_diff(&refs);
+    let prefix = super::number_diff(&refs[..80]);
+    assert_eq!(prefix.len(), 80);
+    for (capped, whole) in prefix.iter().zip(&full) {
+        assert_eq!(capped.old, whole.old);
+        assert_eq!(capped.new, whole.new);
+        assert_eq!(capped.text, whole.text);
+        assert!(capped.kind == whole.kind);
+    }
+}
+
+#[test]
 fn diff_lines_are_numbered_from_the_first_change() {
     let lines = ["edited src/lib.rs", "+ alpha", "- beta", "  kept"];
     let numbered = super::number_diff(&lines);
