@@ -7,7 +7,7 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 use gpui_kit::component::scroll::Scrollbar;
-use gpui_kit::component::text::{TextView, TextViewStyle};
+use gpui_kit::component::text::{SelectionFormat, TextView, TextViewStyle};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -235,6 +235,265 @@ fn flush_prose(prose: &mut Vec<&str>, blocks: &mut Vec<MarkdownBlock>) {
     prose.clear();
 }
 
+/// The plain-text form of assistant markdown, for the reply's copy action.
+///
+/// Selection copies already leave the app as rendered plain text (see
+/// `text_view`), but a selection cannot span the app-rendered table block,
+/// so the whole-message action converts from the source: emphasis and
+/// heading markers are stripped, a fenced block drops to its contents, a
+/// table becomes tab-separated rows, and a link keeps its text with the
+/// URL appended in parentheses when the text does not already say it.
+#[must_use]
+pub(super) fn markdown_to_plain_text(source: &str) -> String {
+    let parts: Vec<String> = split_markdown(source)
+        .iter()
+        .map(|block| match block {
+            MarkdownBlock::Prose(text) => text
+                .lines()
+                .map(plain_prose_line)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            MarkdownBlock::Code(text) => code_block_body(text.as_ref()).join("\n"),
+            MarkdownBlock::Table(table) => table
+                .rows
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|cell| strip_inline_markers(cell))
+                        .collect::<Vec<_>>()
+                        .join("\t")
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        })
+        .collect();
+    parts.join("\n\n")
+}
+
+/// The content lines of a fenced block: everything between the opening
+/// fence (always the first line of a `Code` block) and the closing fence
+/// when one was written. A fence the stream has not closed yet keeps
+/// every line after the opener.
+fn code_block_body(text: &str) -> Vec<&str> {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some((first, rest)) = lines.split_first() else {
+        return Vec::new();
+    };
+    let Some(fence) = opening_fence(first) else {
+        return lines;
+    };
+    match rest.last() {
+        Some(last) if is_closing_fence(last, fence) => rest[..rest.len() - 1].to_vec(),
+        _ => rest.to_vec(),
+    }
+}
+
+/// One prose line with its block markers removed: headings lose their
+/// `#`s, quotes their `>`, bullets normalize to `- ` (a task's checkbox
+/// goes with it), ordered markers keep their number, and a thematic rule
+/// becomes a blank line.
+fn plain_prose_line(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+    let squashed: String = trimmed.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if squashed.len() >= 3 && squashed.chars().all(|ch| matches!(ch, '-' | '*' | '_')) {
+        return String::new();
+    }
+    let mut content = trimmed;
+    while let Some(rest) = content.strip_prefix('>') {
+        content = rest.strip_prefix(' ').unwrap_or(rest);
+    }
+    let hashes = content.bytes().take_while(|byte| *byte == b'#').count();
+    if (1..=6).contains(&hashes) && content.as_bytes().get(hashes) == Some(&b' ') {
+        return strip_inline_markers(content[hashes + 1..].trim_start());
+    }
+    if let Some(rest) = list_item_body(content) {
+        let (marker, body) = rest;
+        let body = body
+            .strip_prefix("[ ] ")
+            .or_else(|| body.strip_prefix("[x] "))
+            .or_else(|| body.strip_prefix("[X] "))
+            .unwrap_or(body);
+        return format!("{indent}{marker}{}", strip_inline_markers(body));
+    }
+    format!("{indent}{}", strip_inline_markers(content))
+}
+
+/// The marker and body of a list item line: `- `, `* `, and `+ ` bullets
+/// normalize to `- `; an ordered marker (`1. `, `2) `) keeps its text.
+fn list_item_body(line: &str) -> Option<(&str, &str)> {
+    for bullet in ["- ", "* ", "+ "] {
+        if let Some(body) = line.strip_prefix(bullet) {
+            return Some(("- ", body));
+        }
+    }
+    let digits = line
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digits > 0 {
+        let rest = &line[digits..];
+        for marker in [". ", ") "] {
+            if let Some(body) = rest.strip_prefix(marker) {
+                return Some((&line[..digits + marker.len()], body));
+            }
+        }
+    }
+    None
+}
+
+/// Strips inline markdown from one line or cell: emphasis, strikethrough,
+/// and code-span markers drop to their contents, a link keeps its text
+/// (plus the URL when that adds information), an image keeps its alt
+/// text, HTML tags drop, and backslash escapes resolve to the literal
+/// character. Unclosed markers stay literal, matching how the renderer
+/// treats a span the stream has not finished.
+fn strip_inline_markers(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let rest = &source[index..];
+        let byte = bytes[index];
+        if byte == b'\\'
+            && let Some(next) = bytes.get(index + 1)
+            && next.is_ascii_punctuation()
+        {
+            out.push(*next as char);
+            index += 2;
+            continue;
+        }
+        let link = if byte == b'[' || (byte == b'!' && rest.starts_with("![")) {
+            link_span(rest)
+        } else {
+            None
+        };
+        if let Some((label, url, consumed)) = link {
+            let image = byte == b'!';
+            let label = strip_inline_markers(label);
+            if image || url.is_empty() || label == url {
+                out.push_str(&label);
+            } else if label.is_empty() {
+                out.push_str(url);
+            } else {
+                out.push_str(&label);
+                out.push_str(" (");
+                out.push_str(url);
+                out.push(')');
+            }
+            index += consumed;
+            continue;
+        }
+        if byte == b'<'
+            && let Some(end) = rest.find('>')
+        {
+            let inner = &rest[1..end];
+            if let Some(mail) = inner.strip_prefix("mailto:") {
+                out.push_str(mail);
+                index += end + 1;
+                continue;
+            }
+            if inner.starts_with("http://") || inner.starts_with("https://") {
+                out.push_str(inner);
+                index += end + 1;
+                continue;
+            }
+            if inner
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '/')
+            {
+                index += end + 1;
+                continue;
+            }
+        }
+        if byte == b'`' {
+            let run = rest.bytes().take_while(|byte| *byte == b'`').count();
+            let fence: String = std::iter::repeat_n('`', run).collect();
+            if let Some(close) = rest[run..].find(&fence) {
+                out.push_str(&rest[run..run + close]);
+                index += run + close + run;
+                continue;
+            }
+        }
+        let mut stripped = false;
+        for marker in ["**", "__", "~~"] {
+            if let Some((interior, consumed)) = emphasis_span(rest, marker) {
+                out.push_str(&strip_inline_markers(interior));
+                index += consumed;
+                stripped = true;
+                break;
+            }
+        }
+        if stripped {
+            continue;
+        }
+        if byte == b'*'
+            && let Some((interior, consumed)) = emphasis_span(rest, "*")
+        {
+            out.push_str(&strip_inline_markers(interior));
+            index += consumed;
+            continue;
+        }
+        // An underscore inside a word is a name, not emphasis: `snake_case`
+        // keeps its underscores.
+        if byte == b'_'
+            && !source[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+            && let Some((interior, consumed)) = emphasis_span(rest, "_")
+        {
+            out.push_str(&strip_inline_markers(interior));
+            index += consumed;
+            continue;
+        }
+        let step = rest.chars().next().map(char::len_utf8).unwrap_or(1);
+        out.push_str(&rest[..step]);
+        index += step;
+    }
+    out
+}
+
+/// If `rest` opens an emphasis span with `marker`, the interior and the
+/// byte length of the whole span. The interior must be non-empty and may
+/// not start or end with whitespace, so spaced markers and arithmetic
+/// stay literal.
+fn emphasis_span<'a>(rest: &'a str, marker: &str) -> Option<(&'a str, usize)> {
+    let inner = rest.strip_prefix(marker)?;
+    let close = inner.find(marker)?;
+    let interior = &inner[..close];
+    if interior.is_empty()
+        || interior.starts_with(char::is_whitespace)
+        || interior.ends_with(char::is_whitespace)
+    {
+        return None;
+    }
+    Some((interior, close + marker.len() * 2))
+}
+
+/// Parses `[label](url)` (or the `![label](url)` image form) at the start
+/// of `rest`: the label, the URL with any `"title"` dropped, and the byte
+/// length of the whole span.
+fn link_span(rest: &str) -> Option<(&str, &str, usize)> {
+    let open = if rest.starts_with("![") {
+        2
+    } else if rest.starts_with('[') {
+        1
+    } else {
+        return None;
+    };
+    let close = rest[open..].find("](")? + open;
+    let label = &rest[open..close];
+    let url_start = close + 2;
+    let url_end = rest[url_start..].find(')')? + url_start;
+    let url = rest[url_start..url_end]
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    Some((label, url, url_end + 1))
+}
+
 #[derive(Clone, Copy)]
 struct Fence {
     marker: u8,
@@ -435,6 +694,11 @@ fn text_view(
         .style(prose_style().clone())
         .text_color(ink)
         .selectable(true)
+        // Pin selection copies to the rendered plain text. Plain is the
+        // kit's default today, but the pin keeps a future default change
+        // from leaking Markdown source (or rich formatting) onto the
+        // clipboard: what leaves the app is always plain text.
+        .selection_format(SelectionFormat::Plain)
         .stream_fade(stream_fade)
 }
 
@@ -705,7 +969,11 @@ fn render_span(span: &InlineSpan, theme: &Theme) -> AnyElement {
             .font_family(theme.mono_font_family.clone())
             .px(px(3.))
             .rounded(px(3.))
-            .bg(theme.secondary)
+            // The accent tint chip with accent ink, the same pairing as a
+            // primary control, so inline code reads as its own kind of
+            // content in a cell instead of a grey smudge.
+            .bg(theme.accent)
+            .text_color(theme.primary)
             .child(text.clone())
             .into_any_element(),
         InlineSpan::Bold(parts) => div()
@@ -888,6 +1156,48 @@ mod tests {
                 InlineSpan::Text("运行时 ".into()),
                 InlineSpan::Code("mio".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn plain_text_copy_strips_markers_and_keeps_the_reading() {
+        use super::markdown_to_plain_text;
+
+        let source = "# 结论\n\n用 **Tokio** 和 `mio` 实现，见 [文档](https://example.com/docs)。\n\n```rust\nfn main() { println!(\"hi\"); }\n```\n\n| 名称 | 值 |\n| --- | --- |\n| **a** | `1` |\n\n- 第一项\n- [ ] 待办\n1. 有序";
+        let plain = markdown_to_plain_text(source);
+        assert_eq!(
+            plain,
+            "结论\n\n用 Tokio 和 mio 实现，见 文档 (https://example.com/docs)。\n\nfn main() { println!(\"hi\"); }\n\n名称\t值\na\t1\n\n- 第一项\n- 待办\n1. 有序"
+        );
+    }
+
+    #[test]
+    fn plain_text_copy_handles_links_images_and_unclosed_spans() {
+        use super::markdown_to_plain_text;
+
+        // A link whose text is the URL is not repeated; an image keeps its
+        // alt; an autolink keeps the address; tags drop; escapes resolve.
+        assert_eq!(
+            markdown_to_plain_text(
+                "见 [https://example.com](https://example.com) 与 ![示意图](a.png)、<https://b.dev>、<b>粗</b>、a \\* b"
+            ),
+            "见 https://example.com 与 示意图、https://b.dev、粗、a * b"
+        );
+        // Underscores inside a word are a name, not emphasis.
+        assert_eq!(
+            markdown_to_plain_text("调用 `read_file` 读 snake_case_name 与 _斜体_"),
+            "调用 read_file 读 snake_case_name 与 斜体"
+        );
+        // Unclosed markers and spaced arithmetic stay literal.
+        assert_eq!(
+            markdown_to_plain_text("**未闭合 与 2 * 3 * 4"),
+            "**未闭合 与 2 * 3 * 4"
+        );
+        // A fence the stream has not closed keeps its body; a quote and a
+        // rule collapse to readable lines.
+        assert_eq!(
+            markdown_to_plain_text("> 引用 **重点**\n\n---\n\n```\nlet x = 1;"),
+            "引用 重点\n\n\n\nlet x = 1;"
         );
     }
 
