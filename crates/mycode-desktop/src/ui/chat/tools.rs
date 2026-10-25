@@ -113,7 +113,7 @@ pub(super) fn render_tool_block(
                     Icon::new(tool_icon(tool))
                         .xsmall()
                         .flex_shrink_0()
-                        .text_color(theme.muted_foreground),
+                        .text_color(tool_icon_color(tool, theme, &desk)),
                 )
                 // Verb, then the short status (failed, +3 -1, in progress),
                 // then the target filling the rest and truncating. Nothing
@@ -452,6 +452,21 @@ fn tool_icon(tool: &str) -> IconName {
         "ask" | "ask_user" => IconName::MessageSquare,
         "run_code" | "wait_code" => IconName::Code,
         _ => IconName::Wrench,
+    }
+}
+
+/// The icon's ink, one existing semantic token per tool family, so a run
+/// of rows reads by color as well as by verb: info blue for reading and
+/// fetching, violet for changes and code, amber for searching, green for
+/// shell. Anything unlisted keeps the muted ink.
+pub(super) fn tool_icon_color(tool: &str, theme: &Theme, desk: &Desk) -> gpui_kit::Hsla {
+    match tool {
+        "read" | "web_search" | "fetch_content" => theme.blue,
+        "edit" | "write" | "run_code" | "wait_code" => desk.violet,
+        "grep" | "search" | "find" => desk.amber,
+        tool if is_shell_tool(tool) => desk.green,
+        "agent" => theme.primary,
+        _ => theme.muted_foreground,
     }
 }
 
