@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.12.31] - 2026-10-25
+
 ### Changed
 
 - 转录区各类内容改为卡片区分：助手回答、工具调用组各自成框，思考收进独立卡片——淡紫底色只留在边框与标题上，正文改用常规字体与中性墨色，不再是小号紫色斜体，与正文一眼可分。
@@ -488,7 +490,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.30...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.31...HEAD
+[0.12.31]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.31
 [0.12.30]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.30
 [0.12.29]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.29
 [0.12.28]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.28
