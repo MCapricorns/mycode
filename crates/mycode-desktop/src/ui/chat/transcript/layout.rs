@@ -55,16 +55,18 @@ impl Render for TranscriptProbe {
                         None,
                         &theme,
                         window,
-                        cx.listener(move |probe, _, _, cx| {
-                            {
-                                let mut open = probe.open.borrow_mut();
-                                if !open.remove(&toggle_key) {
-                                    open.insert(toggle_key.clone());
+                        super::AssistantActions {
+                            on_toggle: Box::new(cx.listener(move |probe, _, _, cx| {
+                                {
+                                    let mut open = probe.open.borrow_mut();
+                                    if !open.remove(&toggle_key) {
+                                        open.insert(toggle_key.clone());
+                                    }
                                 }
-                            }
-                            cx.notify();
-                        }),
-                        |_, _, _| {},
+                                cx.notify();
+                            })),
+                            on_copy: Box::new(|_, _, _| {}),
+                        },
                     ),
                 )
                 .into_any_element()
@@ -403,8 +405,10 @@ fn assistant_speaker_header_renders_only_when_requested_for_the_turn(cx: &mut Te
                         None,
                         &theme,
                         window,
-                        |_, _, _| {},
-                        |_, _, _| {},
+                        super::AssistantActions {
+                            on_toggle: Box::new(|_, _, _| {}),
+                            on_copy: Box::new(|_, _, _| {}),
+                        },
                     ),
                 )
             });

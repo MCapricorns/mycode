@@ -25,8 +25,41 @@ const INVOCATION_DIGEST_VERSION: u64 = 2;
 #[derive(Debug)]
 pub(crate) struct PreparedInvocation {
     pinned: PinnedImage,
+    // `argv0`, `args`, and `cwd` are read only through `into_spawn_parts`,
+    // whose callers are the platform spawn paths; on a platform without
+    // one they are written at preparation and never read back.
+    #[cfg_attr(
+        not(any(
+            all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+            all(target_os = "macos", target_arch = "aarch64")
+        )),
+        allow(
+            dead_code,
+            reason = "read only through into_spawn_parts by the platform spawn paths"
+        )
+    )]
     argv0: String,
+    #[cfg_attr(
+        not(any(
+            all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+            all(target_os = "macos", target_arch = "aarch64")
+        )),
+        allow(
+            dead_code,
+            reason = "read only through into_spawn_parts by the platform spawn paths"
+        )
+    )]
     args: Vec<String>,
+    #[cfg_attr(
+        not(any(
+            all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+            all(target_os = "macos", target_arch = "aarch64")
+        )),
+        allow(
+            dead_code,
+            reason = "read only through into_spawn_parts by the platform spawn paths"
+        )
+    )]
     cwd: PathBuf,
     env: Vec<(OsString, OsString)>,
     invocation_digest: [u8; 32],
@@ -178,6 +211,10 @@ impl PreparedInvocation {
     }
 
     /// Splits the snapshot into its owned spawn inputs.
+    #[cfg(any(
+        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     pub(super) fn into_spawn_parts(
         self,
     ) -> (

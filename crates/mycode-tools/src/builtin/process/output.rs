@@ -6,12 +6,20 @@
 
 use std::fmt::Write as _;
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// Combined stdout+stderr cap per call (~50 KiB, then a notice).
 pub(crate) const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 
 /// A fixed scratch buffer keeps discarded output from growing user-space memory.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const OUTPUT_READ_CHUNK_BYTES: usize = 16 * 1024;
 /// BOM-marked UTF-16 ASCII uses two raw bytes per rendered UTF-8 byte. Retain
 /// one rendered byte beyond the output cap so truncation remains observable.
@@ -33,6 +41,11 @@ pub(crate) struct CapturedStream {
 
 impl CapturedStream {
     /// An empty capture with the retained-prefix capacity reserved.
+    #[cfg(any(
+        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+        all(target_os = "macos", target_arch = "aarch64"),
+        test
+    ))]
     pub(crate) fn new() -> Self {
         Self {
             retained: Vec::with_capacity(MAX_RETAINED_OUTPUT_BYTES),
@@ -41,6 +54,11 @@ impl CapturedStream {
         }
     }
 
+    #[cfg(any(
+        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+        all(target_os = "macos", target_arch = "aarch64"),
+        test
+    ))]
     fn keep(&mut self, bytes: &[u8]) {
         let room = MAX_RETAINED_OUTPUT_BYTES.saturating_sub(self.retained.len());
         let (head, rest) = bytes.split_at(bytes.len().min(room));
@@ -111,6 +129,10 @@ fn decode_tail(head: &[u8], tail: &[u8], tail_start: u64) -> String {
 /// How long to keep reading after the leader exits, so output it already
 /// wrote can leave the pipe buffer. This does not wait for a background
 /// child to close the inherited write end.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const OUTPUT_GRACE_AFTER_EXIT: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Read both pipes until `wait_for_exit` finishes.
@@ -118,6 +140,10 @@ const OUTPUT_GRACE_AFTER_EXIT: std::time::Duration = std::time::Duration::from_m
 /// # Errors
 ///
 /// Returns the first I/O error from either pipe or from the wait.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 pub(crate) async fn collect_until_exit<Out, ErrStream, Wait>(
     stdout_pipe: &mut Option<Out>,
     stderr_pipe: &mut Option<ErrStream>,
@@ -163,6 +189,10 @@ where
 /// # Errors
 ///
 /// Returns the first I/O error from either pipe.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 async fn drain_pipes<Out, Err>(
     stdout_pipe: &mut Option<Out>,
     stderr_pipe: &mut Option<Err>,
@@ -190,6 +220,10 @@ where
 ///
 /// Returns an I/O error from the reader or when the total length overflows
 /// `u64`.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 pub(crate) async fn read_bounded<R>(
     pipe: &mut Option<R>,
     captured: &mut CapturedStream,

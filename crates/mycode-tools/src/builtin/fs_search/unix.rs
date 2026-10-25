@@ -304,6 +304,10 @@ pub(crate) fn open_named_unix(
 
 /// Reads one named Unix child's identity without following its final link.
 #[cfg(unix)]
+#[allow(
+    clippy::unnecessary_cast,
+    reason = "st_dev is u64 on Linux but i32 on macOS; the cast unifies it with MetadataExt::dev()"
+)]
 pub(crate) fn unix_named_identity(
     parent: &File,
     name: &OsStr,
@@ -368,6 +372,10 @@ pub(crate) fn unix_named_identity(
 /// Lookup does not open the child for reading; inability to prove
 /// containment fails closed.
 #[cfg(unix)]
+#[allow(
+    clippy::unnecessary_cast,
+    reason = "st_dev is u64 on Linux but i32 on macOS; the cast unifies it with MetadataExt::dev()"
+)]
 pub(crate) fn confirm_named_unix_metadata(
     parent: &File,
     name: &OsStr,

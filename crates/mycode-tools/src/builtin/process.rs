@@ -88,6 +88,13 @@ pub(crate) async fn acquire_execution_lease() -> ExecutionLease {
 }
 
 /// Platform teardown state kept alive until the child is reaped.
+///
+/// Only the platform spawn paths construct one, so the type exists only
+/// where they do.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 pub(crate) struct ProcessTree {
     #[cfg(unix)]
     group: UnixProcessGroupId,
@@ -95,6 +102,10 @@ pub(crate) struct ProcessTree {
     job: windows::WindowsJob,
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 impl ProcessTree {
     /// Enrolls a Unix process-group leader identified by its pid.
     ///
@@ -137,7 +148,7 @@ impl ProcessTree {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn ignore_missing_process_group(result: std::io::Result<()>) -> std::io::Result<()> {
     result.or_else(|err| {
         if err.raw_os_error() == Some(libc::ESRCH) {
@@ -160,13 +171,16 @@ pub(crate) fn combine_teardown_results(
 }
 
 /// A process group tied to an unreaped child leader.
-#[cfg(unix)]
+///
+/// The group machinery below serves only the macOS teardown in
+/// [`ProcessTree::terminate`], the one enrolled-group consumer.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[derive(Debug, Clone, Copy)]
 struct UnixProcessGroupId {
     group_id: libc::pid_t,
 }
 
-#[cfg(unix)]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 impl UnixProcessGroupId {
     fn new(pid: u32) -> std::io::Result<Self> {
         if pid <= 1 {
@@ -258,14 +272,14 @@ impl UnixProcessGroupId {
 ///
 /// A child can fork between the walk and the signal. A few passes catch that
 /// without waiting on a process that is spawning forever.
-#[cfg(unix)]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const DESCENDANT_KILL_PASSES: usize = 3;
 
 /// `SIGKILL` every descendant of `root`, not `root` itself.
 ///
 /// Process-group signals miss a `setsid` child; the walk follows parent
 /// links instead.
-#[cfg(unix)]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn signal_descendants(root: libc::pid_t) -> std::io::Result<()> {
     let mut error = None;
     for _ in 0..DESCENDANT_KILL_PASSES {
@@ -290,7 +304,7 @@ fn signal_descendants(root: libc::pid_t) -> std::io::Result<()> {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn list_descendants(root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
     let mut out = Vec::new();
     let mut stack = vec![root];
@@ -307,52 +321,7 @@ fn list_descendants(root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
     Ok(out)
 }
 
-/// The walk above is unix-generic but only ever had the macOS child
-/// listing, so `signal_descendants` never compiled on Linux.
-#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
-fn list_descendants(_root: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "listing descendant processes is not implemented on this platform",
-    ))
-}
-
-/// Children from procfs: each `/proc/<pid>/stat` names its parent. The
-/// `comm` field is parenthesized and may itself contain spaces or
-/// parentheses, so the parent pid is read after the final `)`.
-#[cfg(target_os = "linux")]
-fn direct_children(parent: libc::pid_t) -> Vec<libc::pid_t> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(pid) = name
-            .to_str()
-            .and_then(|text| text.parse::<libc::pid_t>().ok())
-        else {
-            continue;
-        };
-        if pid <= 1 {
-            continue;
-        }
-        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
-            continue;
-        };
-        let Some((_, fields)) = stat.rsplit_once(')') else {
-            continue;
-        };
-        let mut fields = fields.split_whitespace();
-        let _state = fields.next();
-        if fields.next().and_then(|ppid| ppid.parse::<libc::pid_t>().ok()) == Some(parent) {
-            out.push(pid);
-        }
-    }
-    out
-}
-
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn direct_children(parent: libc::pid_t) -> Vec<libc::pid_t> {
     unsafe extern "C" {
         fn proc_listchildpids(
@@ -380,7 +349,7 @@ fn direct_children(parent: libc::pid_t) -> Vec<libc::pid_t> {
     buf.into_iter().filter(|pid| *pid > 1).collect()
 }
 
-#[cfg(unix)]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn get_process_group(pid: libc::pid_t) -> std::io::Result<libc::pid_t> {
     // SAFETY: `pid` was range-checked at enrollment and getpgid only observes
     // process metadata. A return value of -1 is the documented failure value.
