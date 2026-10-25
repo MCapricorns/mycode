@@ -2,11 +2,25 @@
 //! walks older pages through a scoped reply until it finds the rewind
 //! target, and a session delete forgets its bindings only after the core
 //! confirms the row went away.
-use gpui_kit::Context;
+use gpui_kit::{ClipboardItem, Context};
 
 use super::Workspace;
+use super::toasts::ToastKind;
+use crate::i18n::t;
 
 impl Workspace {
+    /// Copies an assistant reply from its card's copy action. The text
+    /// arrives already converted to plain text by the transcript, so the
+    /// clipboard never carries Markdown markers or rich formatting.
+    pub(crate) fn on_copy_plain_text(&mut self, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.push_toast(
+            t("Copied as plain text", "已复制为纯文本"),
+            ToastKind::Info,
+            cx,
+        );
+    }
+
     pub(crate) fn can_rewind_message(&self, index: usize) -> bool {
         self.driver.can_rewind_message(index)
     }
