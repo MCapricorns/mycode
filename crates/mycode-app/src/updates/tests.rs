@@ -184,17 +184,6 @@ fn set_unix_mode(path: &std::path::Path, mode: u32) {
 }
 
 #[cfg(unix)]
-struct DirModeGuard<'a>(&'a std::path::Path);
-
-#[cfg(unix)]
-impl Drop for DirModeGuard<'_> {
-    fn drop(&mut self) {
-        use std::os::unix::fs::PermissionsExt as _;
-        let _ = std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o755));
-    }
-}
-
-#[cfg(unix)]
 fn run_sh(script: &std::path::Path) -> std::process::Output {
     std::process::Command::new("/bin/sh")
         .arg(script)
@@ -314,23 +303,50 @@ fn unix_script_retries_replace_while_target_is_busy() {
     set_unix_mode(&current, 0o755);
     std::fs::write(&staged, b"new-bytes").unwrap();
     // The backup already exists so `cp -p` can overwrite it without
-    // creating a directory entry. The directory itself is not writable,
-    // which makes `mv` fail until the test releases it.
+    // creating a directory entry.
     std::fs::write(&backup, b"stale").unwrap();
     let script = super::unix_script(&staged, &current, &super::sha256_hex(b"new-bytes"), false);
     let path = dir.join("update.sh");
     std::fs::write(&path, &script).unwrap();
-    set_unix_mode(&dir, 0o555);
-    let _restore_dir = DirModeGuard(&dir);
-    let mut child = spawn_sh(&path);
+    // A busy target is simulated with a PATH shim: `mv` fails while the
+    // block flag exists and delegates to the real `mv` once it is gone.
+    // Unlike a read-only directory this holds for any user — root ignores
+    // directory permission bits, so the old 0o555 setup let the replace
+    // straight through when the suite ran as root. The script cannot
+    // tell a shim failure from a genuinely busy target, which is exactly
+    // what its retry loop exists for.
+    let block_flag = dir.join("mv-blocked");
+    std::fs::write(&block_flag, b"").unwrap();
+    let shim_dir = dir.join("shim");
+    std::fs::create_dir(&shim_dir).unwrap();
+    let shim = format!(
+        "#!/bin/sh\nif [ -f {} ]; then\n  exit 1\nfi\nexec /bin/mv \"$@\"\n",
+        super::shell_single_quote(&block_flag.to_string_lossy())
+    );
+    let shim_path = shim_dir.join("mv");
+    std::fs::write(&shim_path, shim).unwrap();
+    set_unix_mode(&shim_path, 0o755);
+    let path_env = format!(
+        "{}:{}",
+        shim_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut child = std::process::Command::new("/bin/sh")
+        .arg(&path)
+        .env("PATH", path_env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(1500));
     assert_eq!(
         std::fs::read(&current).unwrap(),
         b"old-bytes",
-        "replace succeeded while the directory rejected mv"
+        "replace succeeded while mv was failing"
     );
     assert_eq!(std::fs::read(&backup).unwrap(), b"old-bytes");
-    set_unix_mode(&dir, 0o755);
+    assert_eq!(std::fs::read(&staged).unwrap(), b"new-bytes");
+    std::fs::remove_file(&block_flag).unwrap();
     let output = wait_child(&mut child, std::time::Duration::from_secs(15));
     assert!(
         output.status.success(),

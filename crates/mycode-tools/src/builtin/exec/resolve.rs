@@ -16,6 +16,10 @@ use tokio_util::sync::CancellationToken;
 use super::ResolveError;
 use super::env::is_searchable_path_entry;
 use super::image::{ImageKind, classify_image, parse_shebang, read_pe_tail};
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use super::spawn::{SpawnFailure, SpawnGate};
 use crate::builtin::fs_search::lexical_normalize;
 #[cfg(windows)]
@@ -44,6 +48,20 @@ const IMAGE_HEADER_BYTES: usize = 4_096;
 #[derive(Debug)]
 pub(super) struct PinnedImage {
     /// Open file describing the same object that will be launched.
+    ///
+    /// Holding the handle is the pin; only the platform spawn paths read
+    /// it back (rehash and launch), so on a platform without one it is
+    /// never read, only kept alive and dropped.
+    #[cfg_attr(
+        not(any(
+            all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+            all(target_os = "macos", target_arch = "aarch64")
+        )),
+        allow(
+            dead_code,
+            reason = "the retained handle is the pin; only platform spawn paths read it"
+        )
+    )]
     pub file: File,
     /// Canonical path of the opened object.
     pub canonical_path: PathBuf,
@@ -221,6 +239,10 @@ pub(super) fn identity_of(file: &File) -> Result<FileIdentity, ToolError> {
 /// # Errors
 ///
 /// Returns the first cancellation or file I/O error.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 pub(super) fn rehash_image_cancellable<F>(
     file: &mut File,
     mut check_cancelled: F,
@@ -239,6 +261,10 @@ where
 /// Shared prelude of every platform spawn: the digest pinned during
 /// resolution must still match immediately before launch, and the gate must
 /// stay pending-free across the rehash.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 pub(super) fn verify_pinned_digest(
     pinned: &mut PinnedImage,
     gate: &SpawnGate,

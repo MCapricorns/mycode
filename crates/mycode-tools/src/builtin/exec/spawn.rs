@@ -1,15 +1,36 @@
 //! Contained spawn, output collection, and teardown for the `shell` program launch.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use std::future::Future;
 use std::pin::Pin;
 use std::process::ExitStatus;
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use std::sync::Arc;
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use tokio::time::Sleep;
 use tokio_util::sync::CancellationToken;
 
 use super::prepare::PreparedInvocation;
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use super::resolve::PinnedImage;
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
+use crate::builtin::process::ProcessTree;
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
     all(target_os = "macos", target_arch = "aarch64")
@@ -17,8 +38,13 @@ use super::resolve::PinnedImage;
 use crate::builtin::process::collect_until_exit;
 #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
 use crate::builtin::process::combine_teardown_results;
-use crate::builtin::process::{CapturedStream, ExecutionLease, ProcessTree};
-use crate::tool::{INTERRUPTED_NOTE, ToolError};
+use crate::builtin::process::{CapturedStream, ExecutionLease};
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
+use crate::tool::INTERRUPTED_NOTE;
+use crate::tool::ToolError;
 
 /// Architecture selected by the macOS kernel for a loaded image.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -83,6 +109,20 @@ impl ExecutionMetadata {
 }
 
 /// How a contained run ended.
+///
+/// The variants are constructed only by the platform spawn paths below;
+/// a platform without one only ever matches on them, so the constructors
+/// count as dead there.
+#[cfg_attr(
+    not(any(
+        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+        all(target_os = "macos", target_arch = "aarch64")
+    )),
+    allow(
+        dead_code,
+        reason = "variants are constructed only by the platform spawn paths"
+    )
+)]
 pub(crate) enum RunOutcome {
     Done {
         status: ExitStatus,
@@ -106,6 +146,10 @@ pub(crate) enum RunOutcome {
     },
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 enum TeardownKind {
     Done(ExitStatus),
     Timeout,
@@ -165,8 +209,7 @@ pub(super) async fn run_pinned(
 
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "macos", target_arch = "aarch64"),
-    test
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 enum SpawnWait<T> {
     Spawned(T),
@@ -180,6 +223,10 @@ enum SpawnWait<T> {
 }
 
 /// One launched-process cleanup owner: terminate, reap, then drop pin/lease.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 trait SpawnCleanup: Send + 'static {
     fn cleanup(self) -> impl Future<Output = Result<(), std::io::Error>> + Send;
 }
@@ -195,6 +242,10 @@ pub(super) enum SpawnFailureKind {
 }
 
 /// Spawn failure plus the result of cleaning any process already created.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 pub(super) struct SpawnFailure {
     pub(super) error: ToolError,
     pub(super) teardown: Result<(), std::io::Error>,
@@ -202,6 +253,10 @@ pub(super) struct SpawnFailure {
     pub(super) kind: SpawnFailureKind,
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 impl SpawnFailure {
     pub(super) fn new(error: ToolError, teardown: Result<(), std::io::Error>) -> Self {
         Self {
@@ -235,6 +290,10 @@ impl SpawnFailure {
     }
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 impl From<ToolError> for SpawnFailure {
     fn from(error: ToolError) -> Self {
         Self::new(error, Ok(()))
@@ -245,9 +304,17 @@ impl From<ToolError> for SpawnFailure {
 ///
 /// Ten milliseconds avoids a hot loop while keeping transient wait failures
 /// responsive. The owner remains live for every retry.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const CLEANUP_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Retains a cleanup owner until one teardown attempt succeeds.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn finish_owned_spawn_cleanup<T>(
     mut owner: T,
     mut cleanup: impl FnMut(&mut T) -> Result<(), std::io::Error>,
@@ -263,24 +330,48 @@ fn finish_owned_spawn_cleanup<T>(
 /// retry a synchronous teardown that just failed. Blocking preserves the
 /// surrounding executable pin and execution lease until the child is
 /// confirmed reaped.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 pub(super) fn finish_pending_spawn_cleanup(
     mut cleanup: impl FnMut() -> Result<(), std::io::Error>,
 ) {
     finish_owned_spawn_cleanup((), |_| cleanup());
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 impl SpawnCleanup for () {
     async fn cleanup(self) -> Result<(), std::io::Error> {
         Ok(())
     }
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const SPAWN_PENDING: u8 = 0;
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const SPAWN_CANCELLED: u8 = 1;
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const SPAWN_STARTED: u8 = 2;
 
 /// Coordinates cancellation, the deadline, and future drop with the
 /// platform's irreversible spawn call.
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 #[derive(Clone)]
 pub(super) struct SpawnGate {
     state: Arc<AtomicU8>,
@@ -288,6 +379,10 @@ pub(super) struct SpawnGate {
     launched: Arc<AtomicBool>,
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 impl SpawnGate {
     pub(super) fn new() -> Self {
         Self {
@@ -346,8 +441,16 @@ impl SpawnGate {
     }
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 struct CancelSpawnOnDrop(SpawnGate);
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 impl Drop for CancelSpawnOnDrop {
     fn drop(&mut self) {
         self.0.cancel();
@@ -356,8 +459,7 @@ impl Drop for CancelSpawnOnDrop {
 
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "macos", target_arch = "aarch64"),
-    test
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 async fn wait_for_spawn<T, F>(
     work: F,
@@ -407,8 +509,7 @@ where
 
 #[cfg(any(
     all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-    all(target_os = "macos", target_arch = "aarch64"),
-    test
+    all(target_os = "macos", target_arch = "aarch64")
 ))]
 async fn cleanup_started_spawn<T: SpawnCleanup>(
     worker: &mut Pin<&mut tokio::task::JoinHandle<Result<T, SpawnFailure>>>,
@@ -457,11 +558,19 @@ fn spawn_program(
     })
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 struct SpawnedProgram {
     metadata: ExecutionMetadata,
     live: Option<LiveSpawn>,
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 struct LiveSpawn {
     inner: Inner,
     process_tree: ProcessTree,
@@ -469,19 +578,21 @@ struct LiveSpawn {
     _lease: ExecutionLease,
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 enum Inner {
     #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     Windows(super::windows::WindowsChild),
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     Mac(super::macos::MacChild),
-    /// Platform without a supported process runtime.
-    #[cfg(not(any(
-        all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-        all(target_os = "macos", target_arch = "aarch64")
-    )))]
-    Unsupported,
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 impl Drop for SpawnedProgram {
     fn drop(&mut self) {
         if let Some(live) = self.live.take() {
@@ -500,6 +611,10 @@ impl SpawnCleanup for SpawnedProgram {
     }
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn supervise_spawn_cleanup(live: LiveSpawn) {
     let pending = Arc::new(parking_lot::Mutex::new(Some(live)));
     let worker_pending = Arc::clone(&pending);
@@ -518,10 +633,18 @@ fn supervise_spawn_cleanup(live: LiveSpawn) {
     }
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn take_pending_cleanup(pending: &parking_lot::Mutex<Option<LiveSpawn>>) -> Option<LiveSpawn> {
     pending.lock().take()
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn teardown_live_blocking(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
     match &mut live.inner {
         #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -538,14 +661,13 @@ fn teardown_live_blocking(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
             child.terminate_tree(&live.process_tree)?;
             child.reap_blocking()
         }
-        #[cfg(not(any(
-            all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-            all(target_os = "macos", target_arch = "aarch64")
-        )))]
-        Inner::Unsupported => Ok(()),
     }
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 async fn teardown_live(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
     match &mut live.inner {
         #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -572,14 +694,13 @@ async fn teardown_live(live: &mut LiveSpawn) -> Result<(), std::io::Error> {
                 }),
             }
         }
-        #[cfg(not(any(
-            all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-            all(target_os = "macos", target_arch = "aarch64")
-        )))]
-        Inner::Unsupported => Ok(()),
     }
 }
 
+#[cfg(any(
+    all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 impl SpawnedProgram {
     async fn run_until(
         mut self,
@@ -665,13 +786,6 @@ impl SpawnedProgram {
                 )
                 .await
             }
-            #[cfg(not(any(
-                all(windows, any(target_arch = "x86_64", target_arch = "aarch64")),
-                all(target_os = "macos", target_arch = "aarch64")
-            )))]
-            Inner::Unsupported => Err(std::io::Error::other(
-                "direct program launch is not supported",
-            )),
         }
     }
 

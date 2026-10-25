@@ -22,6 +22,17 @@ pub(super) struct AssistantDisplay {
     pub speaker: bool,
 }
 
+/// One click handler an assistant block wires up (toggle or copy).
+pub(super) type AssistantAction =
+    Box<dyn Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static>;
+
+/// Click handlers an assistant block wires up, grouped so the builder
+/// signature stays readable: toggle the thinking trace, copy the reply.
+pub(super) struct AssistantActions {
+    pub on_toggle: AssistantAction,
+    pub on_copy: AssistantAction,
+}
+
 /// The in-flight assistant turn: a live status line, then thinking and text.
 ///
 /// While subagents run the status line only says the turn is waiting for
@@ -128,12 +139,15 @@ pub(super) fn render_entry(
                     cache,
                     theme,
                     window,
-                    cx.listener(|workspace, _, _, cx| {
-                        workspace.on_toggle_thinking(cx);
-                    }),
-                    cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_copy_plain_text(markdown::markdown_to_plain_text(&source), cx);
-                    }),
+                    AssistantActions {
+                        on_toggle: Box::new(cx.listener(|workspace, _, _, cx| {
+                            workspace.on_toggle_thinking(cx);
+                        })),
+                        on_copy: Box::new(cx.listener(move |workspace, _, _, cx| {
+                            workspace
+                                .on_copy_plain_text(markdown::markdown_to_plain_text(&source), cx);
+                        })),
+                    },
                 ),
             )
             .into_any_element()
@@ -274,13 +288,13 @@ fn assistant_block(
     cache: Option<&markdown::MarkdownCache>,
     theme: &Theme,
     window: &Window,
-    on_toggle: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
-    on_copy: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
+    actions: AssistantActions,
 ) -> impl IntoElement {
     let AssistantDisplay {
         reasoning: show_reasoning,
         speaker: show_speaker,
     } = display;
+    let AssistantActions { on_toggle, on_copy } = actions;
     let desk = Desk::of(theme);
     let thinking_id: SharedString = format!("thinking-{}", entry.event_id).into();
     let has_text = !entry.text.trim().is_empty();
