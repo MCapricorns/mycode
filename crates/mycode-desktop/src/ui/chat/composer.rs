@@ -359,6 +359,10 @@ fn composer_round_button(
 ) -> impl IntoElement {
     let theme = cx.theme();
     let active = sending || can_send;
+    // A sendable draft gets the primary treatment — the same soft accent
+    // fill and thin accent edge as a glass button — so the one action the
+    // composer exists for carries the accent instead of sitting grey.
+    let send_fill = crate::ui::desk::primary_fill(theme.accent, theme.primary);
     div()
         .id(if sending {
             "composer-stop"
@@ -377,7 +381,14 @@ fn composer_round_button(
         } else {
             theme.muted_foreground
         })
-        .when(active, |this| {
+        .when(!sending && can_send, |this| {
+            this.bg(send_fill)
+                .border_1()
+                .border_color(crate::ui::desk::primary_edge(theme.primary))
+                .cursor_pointer()
+                .hover(|style| style.bg(crate::ui::desk::deepen(send_fill)))
+        })
+        .when(sending, |this| {
             this.cursor_pointer()
                 .hover(|style| style.bg(theme.secondary_hover))
         })
@@ -419,9 +430,12 @@ fn composer_steer_button(cx: &Context<Workspace>) -> impl IntoElement {
         .flex()
         .items_center()
         .justify_center()
-        .text_color(theme.foreground)
+        // The accent tint tells the steering arrow from the neutral stop
+        // beside it before the tooltip can.
+        .bg(skin::frost_accent(theme))
+        .text_color(theme.primary)
         .cursor_pointer()
-        .hover(|style| style.bg(theme.secondary_hover))
+        .hover(|style| style.bg(crate::ui::desk::deepen(skin::frost_accent(theme))))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_steer_send(cx);
         }))
@@ -537,6 +551,7 @@ fn render_send_choice(cx: &Context<Workspace>) -> impl IntoElement {
         .child(send_choice_row(
             "composer-send-choice-steer",
             IconName::ArrowUp,
+            (skin::frost_accent(theme), theme.primary),
             t("Steer this turn", "引导本轮"),
             t(
                 "The agent reads it before its next step; nothing stops.",
@@ -549,6 +564,7 @@ fn render_send_choice(cx: &Context<Workspace>) -> impl IntoElement {
         .child(send_choice_row(
             "composer-send-choice-interrupt",
             IconName::Zap,
+            (theme.danger.opacity(0.12), theme.danger),
             t("Interrupt and send", "打断并发送"),
             t(
                 "Stops this turn and every subagent, then sends at once.",
@@ -572,6 +588,7 @@ fn render_send_choice(cx: &Context<Workspace>) -> impl IntoElement {
 fn send_choice_row(
     id: &'static str,
     icon: IconName,
+    disc: (gpui_kit::Hsla, gpui_kit::Hsla),
     title: &'static str,
     detail: &'static str,
     keys: &'static str,
@@ -579,6 +596,7 @@ fn send_choice_row(
     pick: impl Fn(&mut Workspace, &mut Context<Workspace>) + 'static,
 ) -> impl IntoElement {
     let theme = cx.theme();
+    let (disc_fill, disc_ink) = disc;
     div()
         .id(id)
         .flex()
@@ -600,8 +618,8 @@ fn send_choice_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(theme.secondary)
-                .text_color(theme.foreground)
+                .bg(disc_fill)
+                .text_color(disc_ink)
                 .child(Icon::new(icon).small()),
         )
         .child(
