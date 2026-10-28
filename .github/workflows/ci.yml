@@ -1,75 +1,19 @@
-# One workflow for pull requests and for main.
+# Pull requests and main pushes validate the whole workspace on Windows x64,
+# Windows ARM64 and macOS Apple Silicon. ARM64 jobs run natively on GitHub,
+# not through a developer-machine cross compiler. Windows x64 also runs clippy.
 #
-# pull_request (check): Windows only, dev/test profile. Runs
-# `cargo test --workspace` and
-# `cargo clippy --workspace --all-targets -- -D warnings`
-# on windows-latest, with `--locked`. The whole workspace is covered.
-# No fat LTO, no `cargo build --release`, no packaging, no tag, no
-# GitHub Release, no version bump. Release builds stay on marked main
-# pushes so a pull request does not wait on four LTO links.
+# Only a main push containing [release] in a new commit subject publishes.
+# release-plan selects or bumps the workspace version on a temporary ref;
+# release-build packages all three native targets with warnings denied.
+# release-publish waits for every check and build, creates the tag and assets,
+# then advances main without force. A failed run cleans its temporary ref.
 #
-# check-macos: the Windows check never compiles code behind
-# `cfg(not(windows))`. Release 0.12.22's release-build job failed there:
-# `install.rs` carried a unix PATH installer no non-Windows caller used,
-# and `RUSTFLAGS=-Dwarnings` turned the dead code into an error after the
-# version bump was already on a temporary ref. `cargo check
-# --workspace --all-targets` on macos-latest compiles those paths without
-# linking (no fat LTO, a few minutes) and dies on any warning, dead code
-# included. It runs for pull requests and main pushes alike.
-#
-# push to main: the same Windows check plus the macOS check. A push
-# publishes only when one of its new commit subjects carries `[release]`
-# (merge subjects included; the marker does not have to be on the head
-# commit). A push without the marker ends after the checks: no release
-# build, no tag, no version bump. The client
-# downloads the models.dev catalog
-# into its runtime cache, so CI does not refresh a vendored snapshot. Release
-# builds use `[profile.release]`
-# (fat LTO, one codegen unit) through cargo_release_build.sh and treat
-# warnings as errors (`RUSTFLAGS=-Dwarnings`). They do not run tests or
-# clippy; the Windows check owns those. A publish waits until the check and all
-# three builds succeed. When the workspace version is new, tag that commit and
-# publish the archives.
-# release-plan chooses `v<workspace version>` when that tag is free. When
-# the tag already exists, it bumps the patch in Cargo.toml, Cargo.lock,
-# and CHANGELOG.md on a temporary commit and pushes only
-# `ci/release-<version>-<run id>`. The three product builds check out that
-# commit, so the version compiled into the binaries is the version that
-# will be tagged.
-#
-# Targets:
-#   windows-latest  -> x86_64-pc-windows-msvc
-#   windows-11-arm  -> aarch64-pc-windows-msvc
-#   macos-latest    -> aarch64-apple-darwin
-# windows-latest is x64. Windows ARM64 uses the native windows-11-arm
-# image; it is not a cross-compile from windows-latest. The product does
-# not support Linux, so no job compiles it there. There is no fmt job. cargo build retries crates.io
-# DNS and download failures (the macOS release of 797dfde died resolving
-# index.crates.io). Compile errors are not retried.
-#
-# After the Windows check and those three builds succeed and the plan asked
-# to publish, release-publish creates the tag and uploads the archives from that
-# commit, then advances main. The advance fast-forwards when it can.
-# When main moved during the build, the version bump is replayed onto
-# current main and pushed without force. The temporary ref is deleted
-# after success or failure. The body is that version's CHANGELOG section,
-# then the pull requests and fixed issues since the previous tag
-# (release_notes.py). Archives
-# already uploaded for the previous tag do not skip the release. The
-# version ref and the later main update are pushed with GITHUB_TOKEN,
-# which does not start another workflow run. release-plan also ignores
-# github-actions[bot], so a replayed version bump cannot publish a
-# second patch. check runs on windows-latest and compiles and tests the
-# workspace. release-plan, release-publish, and release-cleanup run on
-# ubuntu-latest and do not compile the product.
-#
-# Assets produced per release (Windows x64, Windows ARM64, macOS Apple Silicon):
-#   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip      (+ .sha256)
-#   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip     (+ .sha256)
-#   mycode-desktop-<tag>-aarch64-apple-darwin.zip        (+ .sha256)
-#   mycode-desktop-<tag>-aarch64-apple-darwin.dmg        (+ .sha256)
-# Only the desktop app is wrapped into a dmg. It self-updates from the
-# `mycode-desktop` asset family.
+# Published archives: Windows x64/ARM64 zip, macOS Apple Silicon zip and dmg,
+# each accompanied by SHA-256. Linux and Intel macOS are not supported.
+#   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip
+#   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip
+#   mycode-desktop-<tag>-aarch64-apple-darwin.zip
+#   mycode-desktop-<tag>-aarch64-apple-darwin.dmg
 
 name: ci
 
@@ -93,8 +37,7 @@ env:
 
 jobs:
   check:
-    # Dev/test profile only. Pull requests run this job and nothing else.
-    # A main push runs it beside the release builds; publish waits for it.
+    # Dev/test profile only; release publication waits for this job.
     name: check
     runs-on: windows-latest
     timeout-minutes: 60
@@ -120,26 +63,31 @@ jobs:
           CARGO_HTTP_TIMEOUT: "60"
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-  check-macos:
-    # macOS-only code (cfg(not(windows))) is invisible to the Windows
-    # check. No tests and no clippy here: this job exists to compile every
-    # target on macOS with warnings denied.
-    name: check-macos
-    runs-on: macos-latest
-    timeout-minutes: 30
+  check-platforms:
+    name: check-${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            os: macos-latest
+          - platform: windows-arm64
+            os: windows-11-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: cargo check --workspace --all-targets
+      - name: cargo test --workspace
         shell: bash
         env:
           CARGO_NET_RETRY: "10"
           CARGO_HTTP_TIMEOUT: "60"
           RUSTFLAGS: "-Dwarnings"
-        run: cargo check --workspace --all-targets --locked
+        run: cargo test --workspace --locked
 
   release-plan:
     # github-actions[bot] is the GITHUB_TOKEN pusher. Ignore it so the
@@ -374,8 +322,8 @@ jobs:
           if-no-files-found: error
 
   release-publish:
-    needs: [release-plan, release-build, check, check-macos]
-    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success' && needs.check.result == 'success' && needs.check-macos.result == 'success'
+    needs: [release-plan, release-build, check, check-platforms]
+    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success' && needs.check.result == 'success' && needs.check-platforms.result == 'success'
     name: release-publish
     runs-on: ubuntu-latest
     timeout-minutes: 10

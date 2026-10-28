@@ -2,9 +2,27 @@
 
 日期为发布日（UTC）。0.12.0 是第一个正式版本；之前的预览版本及其 Release 已移除，历史可在 git 记录中查看。
 
-`main` 上只有提交主题带 `[release]` 标记的推送才会发布新的 GitHub Release 和新标签（三个平台的 zip 与 `.sha256`：Windows x64 `x86_64-pc-windows-msvc`、Windows ARM64 `aarch64-pc-windows-msvc`、macOS Apple Silicon `aarch64-apple-darwin`，压缩包名形如 `mycode-desktop-vX.Y.Z-{target}.zip`；没有 Linux 包）。标记匹配的是本次推送新增的任一提交主题（合并提交也算），不要求写在最顶上那条。pull request 不发版，也不跑发布构建：PR CI 只在 Windows 上执行 `cargo test --workspace` 和 `cargo clippy --workspace --all-targets -- -D warnings`（dev/test profile，没有 fat LTO）。不带标记的 `main` 推送同样只跑检查（Windows 测试加 macOS `cargo check`），不跑 fat LTO 发布构建、不打标签、不 bump 版本；带 `[release]` 的推送才在三个平台做发布构建，同一份检查通过且三个构建都成功后才打标签。说明先用本文件里该版本的条目，再附上自上一个标签以来合并的 pull request、这些 PR 关闭的 issue，以及比较链接。写回 main 使用 GITHUB_TOKEN，release-plan 会跳过 github-actions[bot]，避免同一次发布把补丁号再加一次。工作区版本如果已经有标签，发布计划会把补丁号加一，把 `## [Unreleased]` 的内容写到新版本下（没有内容就写一句固定说明），并更新 `Cargo.toml` 与 `Cargo.lock`。这次提交先放在临时引用上，三个平台都从该提交构建成功后，先创建标签并上传压缩包，再把版本写回 `main`（能快进就快进，否则把版本提交重放到当前 `main` 上，不强制推送）。不会因为旧版本的压缩包已经齐就跳过。压缩包未签名。
+只有提交主题带 `[release]` 标记的 main 推送才会发布。pull request 不发版。pull request 和普通推送在 Windows x64、Windows ARM64 与 macOS Apple Silicon 原生执行 `cargo test --workspace --locked`，Windows x64 另跑 `cargo clippy --workspace --all-targets --locked -- -D warnings`。检查使用 dev/test profile，fat LTO 只用于发布构建。发版使用同一提交构建三个平台，所有检查与构建成功后创建标签、上传 zip / dmg 与 SHA-256。已有版本标签时，release-plan 自动提升补丁版本，将 Unreleased 条目归入新版本；版本提交先放在临时引用，发布成功后再写回 main，不强制推送。产物未做开发者证书签名。目标为 Windows x64 `x86_64-pc-windows-msvc`、Windows ARM64 `aarch64-pc-windows-msvc` 和 macOS Apple Silicon `aarch64-apple-darwin`。
+
+发布说明包含该版本条目、自上一个标签以来的 pull request、关联 issue 与比较链接。发布计划跳过 `github-actions[bot]` 的版本写回，避免重复发版。
 
 ## [Unreleased]
+
+### Changed
+
+- 原生界面重构为顶部项目书架、会话账本与带改动轨迹的工作页；重做 wiki，统一纸白、墨黑、朱红配色和 bracket-M 图标。slogan 为「每次改动，有迹可循。」，浅色与深色保持同一套布局。
+- 全局与项目规则标明来源并按优先级装配；提示词准确描述 Rhai、工具参数与既有授权，远程 MCP schema 保持按需发现。
+- GitHub Actions 在 Windows ARM64 和 macOS Apple Silicon 原生执行 workspace 测试，发布等待所有平台门禁。
+
+### Fixed
+
+- magpie 首次生成的有效无版本绑定规范导入，不再误报损坏；临时文件访问错误不会重置配置，文件信任检查继续生效。
+- 模型目录刷新后重新同步 magpie binding 和模型选择，首次打开不再依赖关闭重开；保留未保存设置和各会话已选模型，拒绝过期回复。已选模型不可用时明确报错，不会静默切换到其他模型。
+- MCP 工具名冲突、带服务器前缀的误派发与搜索排序，保留连接失败的实际原因。
+- codemode 的取消、错误、yield 与结果收集；内层 subagent 具有独立 ID、进度和停止入口，跨回合收集仍能恢复实时状态。停止失败时保留任务行，确认停止后才移除。
+- 停止可打断请求准备、连接和上下文收缩，后台任务随驱动取消；同一会话在终态清理完成前不接受重叠回合。
+- 停止事件不再积压在逐字显示队列后，隐藏会话不拖慢当前流式输出；重开会话不会重复插入工具调用和结果。
+- subagent 的脏 worktree、未跟踪和忽略文件始终保留，返回可恢复路径；停止状态在附加 diff 后仍正确记录为 cancelled。
 
 ## [0.12.31] - 2026-10-25
 
