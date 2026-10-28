@@ -24,8 +24,9 @@ pub use builtin::shell::{
 };
 pub use builtin::{ShellTool, register_builtins};
 pub use code_mode::{
-    CellPhase, CellSnapshot, CodeCellState, CodeCells, InnerCallSummary, JournalEntry, RunCodeTool,
-    ScriptCell, ScriptEvent, ScriptEventKind, ScriptJournal, WaitCodeTool,
+    CODE_MODE_PROGRESS_PREFIX, CellPhase, CellSnapshot, CodeCellState, CodeCells, CodeModeProgress,
+    InnerCallPhase, InnerCallSummary, JournalEntry, RunCodeTool, ScriptCell, ScriptEvent,
+    ScriptEventKind, ScriptJournal, WaitCodeTool,
 };
 pub use ctx::ToolCtx;
 pub use invoke::prepare_tool_ctx;

@@ -29,8 +29,7 @@ use self::compact::{DeferredSummaries, publish_visible_summary};
 use self::control::TurnControl;
 use self::prompt::session_system_prompt;
 pub(crate) use self::prompt::{
-    push_scratch_note, push_workspace_skills, split_scratch_root,
-    workspace_extra_roots,
+    push_scratch_note, push_workspace_skills, split_scratch_root, workspace_extra_roots,
 };
 
 /// One model turn: resolve the provider, stream the reply into the event
@@ -568,7 +567,7 @@ async fn run_chat_turn_on(
     // The ledger pump owns the branch head for the rest of the turn. The
     // clone shares that head, for the summary filed after the pump drains.
     let final_head = writer.clone();
-    let pump = tokio::spawn(
+    let mut pump = AbortTask(tokio::spawn(
         pump::LedgerPump {
             events: events.clone(),
             writer,
@@ -579,7 +578,7 @@ async fn run_chat_turn_on(
             started: turn_started,
         }
         .run(agent_rx),
-    );
+    ));
 
     agent.seed_history(history);
     let env = mycode_agent::TurnEnv::new(&wire, &registry, &hooks)
@@ -590,7 +589,20 @@ async fn run_chat_turn_on(
         .with_read_roots(read_roots)
         .with_steer(Some(Arc::clone(&control.steer)));
     let prompt_message = Message::User(prompt);
-    let outcome = agent.prompt(prompt_message, &env).await;
+    // Observe a failed pump while the agent is running. Awaiting the
+    // prompt first would leave tools running after a pump panic.
+    let (outcome, terminal) = {
+        let mut prompt = Box::pin(agent.prompt(prompt_message, &env));
+        tokio::select! {
+            terminal = &mut pump.0 => {
+                if terminal.is_err() {
+                    control.cancel.cancel();
+                }
+                (prompt.await, Some(terminal))
+            }
+            outcome = &mut prompt => (outcome, None),
+        }
+    };
     state.remember_token_scale(&session_id, calibration.scale());
     // Close the agent bus (the env and the hook each hold a sender) so a
     // turn that never started reaches the pump as a closed stream instead of
@@ -599,7 +611,11 @@ async fn run_chat_turn_on(
     drop(hooks);
     // Drain the pump before returning. An agent error already became the
     // pump's ChatFailed; returning Err here would report a second one.
-    match pump.await {
+    let terminal = match terminal {
+        Some(terminal) => terminal,
+        None => (&mut pump.0).await,
+    };
+    match terminal {
         Ok(terminal) => {
             // The ledger is complete only once the pump drained, and the
             // summary is filed before the turn reports its end: the next
@@ -679,13 +695,14 @@ async fn persist_hook_summary(
     .await;
 }
 
-/// Aborts a background task when the turn ends, without waiting for it.
+/// Aborts a background task when its turn driver goes away.
 ///
 /// The MCP drain task only listens to the pool; aborting it leaves the
-/// handshakes (owned by the pool) running for the next turn.
-struct AbortTask(tokio::task::JoinHandle<()>);
+/// handshakes (owned by the pool) running for the next turn. The ledger
+/// pump must likewise stop if the turn task is dropped.
+struct AbortTask<T = ()>(tokio::task::JoinHandle<T>);
 
-impl Drop for AbortTask {
+impl<T> Drop for AbortTask<T> {
     fn drop(&mut self) {
         self.0.abort();
     }

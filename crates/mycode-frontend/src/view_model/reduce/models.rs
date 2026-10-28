@@ -70,11 +70,22 @@ pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
     remember_active_session_model(state);
 }
 
-/// Keeps the model picker on a provider/model that actually exists.
+/// Fills an invalid or unset picker from the gateway default, preserving
+/// explicit session pins even when their model is currently unavailable.
 pub(super) fn ensure_model_selection(state: &mut WorkspaceState) {
     let Some(settings) = state.settings.as_ref() else {
         return;
     };
+    // A catalog/settings reload must not replace a chat's explicit model
+    // with the gateway default, including while that model is unavailable.
+    if state.active.as_ref().is_some_and(|active| {
+        mycode_app::session_model(&state.session_models, &active.session_id).is_some_and(|pin| {
+            state.selected_provider.as_deref() == Some(pin.provider.as_str())
+                && state.selected_model.as_deref() == Some(pin.model.as_str())
+        })
+    }) {
+        return;
+    }
     let selected_valid = state
         .selected_provider
         .as_ref()
@@ -99,7 +110,15 @@ pub(super) fn ensure_model_selection(state: &mut WorkspaceState) {
         .iter()
         .find(|provider| provider.enabled && !provider.models.is_empty());
     state.selected_provider = fallback.map(|provider| provider.id.clone());
-    state.selected_model = fallback.and_then(|provider| provider.models.first().cloned());
+    state.selected_model = fallback.and_then(|provider| {
+        if provider.id == mycode_app::MAGPIE_PROVIDER_ID
+            && provider.models.contains(&settings.magpie.model)
+        {
+            Some(settings.magpie.model.clone())
+        } else {
+            provider.models.first().cloned()
+        }
+    });
 }
 
 /// Whether the selected catalog model advertises reasoning.

@@ -65,6 +65,7 @@ pub(super) fn reset_turn_view(state: &mut WorkspaceState) {
     state.pending_steers.clear();
     state.turn_alert = None;
     retire_live_jobs(state);
+    state.finished_jobs.clear();
     drop_preparing_rows(state);
     // `retire_live_jobs` just parked each job's final runtime on the state
     // for the transcript rows that stay behind; clearing here would undo it.

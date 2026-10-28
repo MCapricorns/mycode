@@ -20,6 +20,28 @@ use crate::tool_hosts::{deliver_ask_answer, dismiss_ask};
 use crate::turn::{chat_turn, manual_compact};
 use crate::{BridgeCommand, BridgeReply, WithReply, protocol::SessionSummary};
 
+#[cfg(test)]
+mod tests;
+
+fn reject_overlapping_turn(state: &CoreState, command: &BridgeCommand) -> Option<BridgeReply> {
+    let session = match command {
+        BridgeCommand::ChatTurn { session, .. } | BridgeCommand::CompactSession { session, .. } => {
+            session
+        }
+        _ => return None,
+    };
+    state
+        .turn_cancels
+        .lock()
+        .contains_key(session.as_str())
+        .then(|| {
+            BridgeReply::ChatStarted(Err(
+            "This session is still finishing a turn. Wait for it to stop before starting another."
+                .to_owned(),
+        ))
+        })
+}
+
 pub(crate) fn run_core(
     home: HomeLayout,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<WithReply>,
@@ -80,6 +102,13 @@ pub(crate) fn run_core(
                     continue;
                 }
             };
+            // A replacement cannot write safely until the previous turn's
+            // partial work and terminal event have settled. The UI's
+            // interrupt-and-send path already waits for that terminal.
+            if let Some(reply) = reject_overlapping_turn(&state, &with_reply.command) {
+                let _ = with_reply.reply.send(reply);
+                continue;
+            }
             match with_reply.command {
                 BridgeCommand::ChatTurn {
                     session,
@@ -88,13 +117,8 @@ pub(crate) fn run_core(
                     model,
                     reasoning,
                 } => {
-                    // One live turn per session: a second turn would replace
-                    // the cancel token without stopping the first, and both
-                    // pumps would append to the same branch. Only the turn token
-                    // is cancelled: subagents are children of that token and
-                    // stop with it. Sweeping the subagent map here also
-                    // stopped children the user meant to steer.
-                    cancel_turn(&state, session.as_str());
+                    // chat_turn registers its control synchronously, before
+                    // another command can start work in the same session.
                     let task = chat_turn(
                         state.clone(),
                         events.clone(),
@@ -114,7 +138,6 @@ pub(crate) fn run_core(
                     provider_id,
                     model,
                 } => {
-                    cancel_turn(&state, session.as_str());
                     let task = manual_compact(
                         state.clone(),
                         events.clone(),
@@ -600,8 +623,7 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::ImportData { path } => {
             let home = state.home.clone();
-            let outcome =
-                blocking(move || crate::export::import_from_file(&home, &path)).await;
+            let outcome = blocking(move || crate::export::import_from_file(&home, &path)).await;
             BridgeReply::Imported(outcome)
         }
         BridgeCommand::ListResources { session_id } => {

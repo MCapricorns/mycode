@@ -115,32 +115,6 @@ impl ToolStream {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{ToolStream, ToolStreamItem};
-    use crate::tool::ToolResult;
-
-    #[test]
-    fn a_closed_receiver_does_not_latch_the_terminal() {
-        let stream = ToolStream::closed();
-        assert!(!stream.terminal(ToolResult::text("done")));
-        assert!(!*stream.state.lock());
-        assert!(!stream.progress("later"));
-        assert!(!*stream.state.lock());
-    }
-
-    #[test]
-    fn a_delivered_terminal_rejects_later_items() {
-        let (stream, mut rx) = ToolStream::channel();
-        assert!(stream.terminal(ToolResult::text("done")));
-        assert!(*stream.state.lock());
-        assert!(!stream.progress("later"));
-        let item = rx.rx.try_recv().expect("terminal queued");
-        assert!(matches!(item, ToolStreamItem::Terminal(_)));
-        assert!(rx.rx.try_recv().is_err());
-    }
-}
-
 /// Consumer half of a [`ToolStream`].
 #[derive(Debug)]
 pub struct ToolStreamReceiver {
@@ -171,5 +145,31 @@ impl ToolStreamReceiver {
             }
         }
         items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ToolStream, ToolStreamItem};
+    use crate::tool::ToolResult;
+
+    #[test]
+    fn a_closed_receiver_does_not_latch_the_terminal() {
+        let stream = ToolStream::closed();
+        assert!(!stream.terminal(ToolResult::text("done")));
+        assert!(!*stream.state.lock());
+        assert!(!stream.progress("later"));
+        assert!(!*stream.state.lock());
+    }
+
+    #[test]
+    fn a_delivered_terminal_rejects_later_items() {
+        let (stream, mut rx) = ToolStream::channel();
+        assert!(stream.terminal(ToolResult::text("done")));
+        assert!(*stream.state.lock());
+        assert!(!stream.progress("later"));
+        let item = rx.rx.try_recv().expect("terminal queued");
+        assert!(matches!(item, ToolStreamItem::Terminal(_)));
+        assert!(rx.rx.try_recv().is_err());
     }
 }

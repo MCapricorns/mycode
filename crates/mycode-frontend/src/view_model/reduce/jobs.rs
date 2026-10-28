@@ -11,6 +11,17 @@ use mycode_app::builtin::AGENT_PROGRESS_PREFIX;
 
 use super::streaming::{set_streaming_status, tool_call_label};
 
+mod code_mode;
+
+fn job_finished(state: &WorkspaceState, call_id: &str) -> bool {
+    state.finished_jobs.contains(call_id)
+        || state.active.as_ref().is_some_and(|conversation| {
+            conversation.entries.iter().any(|entry| {
+                entry.kind == EntryKind::ToolResult && entry.call_id.as_deref() == Some(call_id)
+            })
+        })
+}
+
 /// Event-id prefix of a placeholder row for an `agent` call the model is
 /// still writing. The row carries no call id, so nothing pairs with it.
 pub const PREPARING_ROW_PREFIX: &str = "prep-";
@@ -72,6 +83,11 @@ pub(super) fn tool_started(
     name: String,
     target: String,
 ) {
+    // A reopened snapshot may already contain this result while its live
+    // start event is still in the UI queue. It must not restart a finished job.
+    if job_finished(state, &call_id) {
+        return;
+    }
     let label = tool_call_label(&name, &target);
     // The started call replaces its placeholder, if it had one, and joins
     // the transcript after the step that issued it.
@@ -95,7 +111,11 @@ pub(super) fn tool_started(
     } else {
         set_streaming_status(state, &format!("{} {label}", t("Running", "正在执行")));
     }
-    if let Some(conversation) = state.active.as_mut() {
+    if let Some(conversation) = state.active.as_mut()
+        && !conversation.entries.iter().any(|entry| {
+            entry.kind == EntryKind::ToolCall && entry.call_id.as_deref() == Some(&call_id)
+        })
+    {
         conversation.entries.push(ConversationEntry {
             event_id: format!("call-{call_id}"),
             kind: EntryKind::ToolCall,
@@ -115,7 +135,13 @@ pub(super) fn tool_progress(
     name: String,
     message: String,
 ) {
+    if code_mode::apply_progress(state, &message) {
+        return;
+    }
     let agent_event = is_agent_event(&name, &message);
+    if agent_event && job_finished(state, &call_id) {
+        return;
+    }
     apply_live_job_progress(state, &call_id, &name, &message);
     claim_provider_call_id(state, &call_id, provider_call_id);
     if agent_event || !state.live_jobs.is_empty() {
@@ -400,6 +426,9 @@ fn live_job_mut<'a>(state: &'a mut WorkspaceState, call_id: &str) -> Option<&'a 
 /// Its clock stops here: the final runtime is stored for the transcript
 /// row that stays behind. Returns whether a job left the list.
 pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) -> bool {
+    if !call_id.is_empty() {
+        state.finished_jobs.insert(call_id.to_owned());
+    }
     let index = if call_id.is_empty() {
         state.live_jobs.len().checked_sub(1)
     } else {
@@ -685,7 +714,7 @@ mod tests {
             FrontendAction::SubagentDismissed("c1".to_owned()),
         );
         assert!(state.live_jobs.iter().all(|job| job.call_id != "c1"));
-        // The cancel `x` stops its clock immediately, before the result lands.
+        // A confirmed cancel stops its clock before the tool result lands.
         assert!(state.job_elapsed("c1").is_some());
     }
 

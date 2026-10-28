@@ -133,6 +133,9 @@ pub struct WorkspaceState {
     /// Final runtimes of finished subagent calls, `(call_id, ms)`. A row
     /// looks its duration up here once the job left `live_jobs`.
     pub job_elapsed: Vec<(String, u64)>,
+    /// Terminal or individually stopped jobs in the current conversation.
+    /// Retiring a view or ending a turn alone does not finish yielded cells.
+    pub finished_jobs: std::collections::HashSet<String>,
     /// Call id of the subagent detail window, when open.
     pub subagent_window: Option<String>,
     /// Whether the full working-tree changes drawer is open.
@@ -467,7 +470,7 @@ pub enum FrontendAction {
     },
     /// Opens or closes the subagent detail window.
     SubagentWindowChanged(Option<String>),
-    /// The user closed one running subagent from its row.
+    /// The core acknowledged cancellation of one running subagent.
     SubagentDismissed(String),
     /// Opens or closes the full changes drawer.
     ChangesPanelToggled(bool),

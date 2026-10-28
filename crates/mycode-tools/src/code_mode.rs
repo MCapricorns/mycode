@@ -9,6 +9,7 @@ pub mod cell;
 pub mod dispatch;
 pub mod engine;
 pub mod journal;
+pub mod progress;
 
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -17,7 +18,7 @@ use futures_util::FutureExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::ctx::ToolCtx;
 use crate::registry::ToolRegistry;
@@ -29,6 +30,7 @@ pub use cell::{
     InnerCallSummary, MAX_HOST_CALLS, MAX_YIELD_MS, ScriptCell, ScriptEvent, ScriptOutcome,
 };
 pub use journal::{JournalEntry, ScriptEventKind, ScriptJournal};
+pub use progress::{CODE_MODE_PROGRESS_PREFIX, CodeModeProgress, InnerCallPhase};
 
 use self::dispatch::DispatchContext;
 
@@ -81,8 +83,9 @@ impl Tool for RunCodeTool {
 
     fn description(&self) -> &str {
         "Run a Rhai script that calls tools directly. `call(name, args)` invokes a registered \
-         tool and returns `{ content, is_error }` (or `{ __error__ }` when the dispatcher \
-         refused); `log(text)` reports progress; `complete(value)` ends the script and returns \
+         tool and returns `{ content, is_error }`; read a text block as `result.content[0].Text`. \
+         Dispatch refusals also include the legacy `__error__` message. `log(text)` reports \
+         progress; `complete(value)` ends the script and returns \
          value. `search_tool`, `use_tool`, `read`, `write`, `grep`, `find` and the rest are \
          ordinary tools reached through `call`. A long script returns a cell id to continue \
          with wait_code."
@@ -111,6 +114,11 @@ impl Tool for RunCodeTool {
         ctx: &ToolCtx,
         out: &mut ToolStream,
     ) -> Result<ToolResult, ToolError> {
+        if ctx.cancel.is_cancelled() {
+            return Err(ToolError::Execution(format!(
+                "run_code cancelled{INTERRUPTED_NOTE}"
+            )));
+        }
         let yield_ms = args
             .yield_time_ms
             .unwrap_or(DEFAULT_YIELD_MS)
@@ -131,15 +139,19 @@ impl Tool for RunCodeTool {
         // a clone of `out`: a clone held by the dispatcher would keep the
         // dispatcher's receiver open after `execute` returns and the turn
         // would wait for the script instead of receiving the cell id.
-        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+        let progress_tx = cell.progress_sender();
+        let mut progress_rx = cell.subscribe_progress();
         // Captured before the script starts: a `yield_control()` that lands
         // before the select below is polled must still settle this call.
         let yield_epoch = cell.yield_epoch();
+        // A cell owns a child token: stopping it cancels detached inner work
+        // without cancelling the turn or another cell.
+        let dispatch_cancel = ctx.cancel.child_token();
         let engine = engine::hardened_engine(
             host_tx.clone(),
             Arc::clone(&cell),
             engine::EngineLimits {
-                cancel: ctx.cancel.clone(),
+                cancel: dispatch_cancel.clone(),
             },
         );
         let script = args.script;
@@ -174,6 +186,9 @@ impl Tool for RunCodeTool {
                 drop(host_tx);
             });
         if let Err(error) = spawned {
+            cell.finish(ScriptOutcome::Failed(format!(
+                "failed to start the script thread: {error}"
+            )));
             return Err(ToolError::Execution(format!(
                 "failed to start the script thread: {error}"
             )));
@@ -186,7 +201,7 @@ impl Tool for RunCodeTool {
             cwd: ctx.cwd.clone(),
             extra_roots: ctx.extra_roots.clone(),
             read_roots: ctx.read_roots.clone(),
-            cancel: ctx.cancel.clone(),
+            cancel: dispatch_cancel,
             call_id: ctx.call_id.clone(),
         };
         tokio::spawn(async move {
@@ -224,14 +239,19 @@ impl Tool for RunCodeTool {
                 () = &mut settle => break Some(true),
                 () = &mut deadline => break Some(false),
                 item = progress_rx.recv(), if progress_open => match item {
-                    Some(message) => {
+                    Ok(message) => {
                         out.progress(message);
                     }
-                    // The dispatcher is gone; keep waiting for the cell.
-                    None => progress_open = false,
+                    // Snapshots preserve each inner call's current/terminal
+                    // state if the bounded live stream ever falls behind.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => progress_open = false,
                 },
             }
         };
+        // A ready cell may win the select before its final progress items.
+        // Forward the already queued tail before closing the outer stream.
+        drain_progress(&mut progress_rx, out);
         guard.disarm();
         match waited {
             None => Err(ToolError::Execution(format!(
@@ -246,8 +266,20 @@ impl Tool for RunCodeTool {
     }
 }
 
-/// Terminates the script when the `run_code` future is dropped mid-wait (a
-/// canceled turn), unless the call returned normally.
+fn drain_progress(progress: &mut broadcast::Receiver<String>, out: &ToolStream) {
+    loop {
+        match progress.try_recv() {
+            Ok(message) => {
+                out.progress(message);
+            }
+            Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(_) => return,
+        }
+    }
+}
+
+/// Terminates the script when a `run_code` or `wait_code` future is dropped
+/// mid-wait (a canceled turn), unless the call returned normally.
 struct TerminateOnDrop {
     cell: Arc<ScriptCell>,
     armed: bool,
@@ -354,18 +386,32 @@ impl Tool for WaitCodeTool {
                 cell.cell_id()
             ));
         }
-        let waited = tokio::select! {
-            biased;
-            () = ctx.cancel.cancelled() => None,
-            finished = tokio::time::timeout(Duration::from_millis(yield_ms), cell.wait_settled(yield_epoch)) => {
-                Some(finished.is_ok())
+        let mut guard = TerminateOnDrop::new(Arc::clone(&cell));
+        let mut progress = cell.subscribe_progress();
+        let settle = tokio::time::timeout(
+            Duration::from_millis(yield_ms),
+            cell.wait_settled(yield_epoch),
+        );
+        tokio::pin!(settle);
+        let waited = loop {
+            tokio::select! {
+                biased;
+                () = ctx.cancel.cancelled() => break None,
+                finished = &mut settle => break Some(finished.is_ok()),
+                item = progress.recv() => {
+                    if let Ok(message) = item {
+                        out.progress(message);
+                    }
+                }
             }
         };
+        drain_progress(&mut progress, out);
         if waited.is_none() {
             return Err(ToolError::Execution(format!(
                 "wait_code cancelled{INTERRUPTED_NOTE}"
             )));
         }
+        guard.disarm();
         if cell.phase() == CellPhase::Running {
             cell.mark_yielded();
         }
@@ -395,6 +441,10 @@ fn result_for(cell: &ScriptCell) -> ToolResult {
     }
 }
 
+#[cfg(test)]
+mod progress_tests;
+#[cfg(test)]
+mod regressions;
 /// Argument type used by tests that need a serialized form.
 #[cfg(test)]
 mod tests;

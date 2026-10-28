@@ -111,10 +111,20 @@ pub enum Effect {
 #[derive(Debug)]
 pub(crate) enum ReplyScope {
     Global,
+    /// Only the newest settings read may replace the editor's binding.
+    Settings {
+        generation: u64,
+    },
+    /// A manual refresh owns its toast; a concurrent lazy read does not.
+    CatalogRefresh,
     Open(String),
     Session {
         session: String,
         branch: Option<String>,
+    },
+    CancelSubagent {
+        session: String,
+        call_id: String,
     },
     Mention {
         session: String,
@@ -172,8 +182,14 @@ impl ReplyScope {
                 session: session.to_string(),
                 branch: Some(branch.to_string()),
             },
+            BridgeCommand::CancelSubagent {
+                session_id,
+                call_id,
+            } => Self::CancelSubagent {
+                session: session_id.clone(),
+                call_id: call_id.clone(),
+            },
             BridgeCommand::CancelChat { session_id }
-            | BridgeCommand::CancelSubagent { session_id, .. }
             | BridgeCommand::ListResources { session_id }
             | BridgeCommand::AskAnswer { session_id, .. }
             | BridgeCommand::AskDismiss { session_id } => Self::Session {
@@ -199,7 +215,7 @@ impl ReplyScope {
 
     fn applies(&self, vm: &WorkspaceState, pending_open: Option<&str>) -> bool {
         match self {
-            Self::Global => true,
+            Self::Global | Self::Settings { .. } | Self::CatalogRefresh => true,
             Self::Open(session) => pending_open == Some(session.as_str()),
             Self::Session { session, branch } => vm.active.as_ref().is_some_and(|active| {
                 &active.session_id == session
@@ -207,6 +223,10 @@ impl ReplyScope {
                         .as_ref()
                         .is_none_or(|branch| branch == &active.branch_id)
             }),
+            Self::CancelSubagent { session, .. } => vm
+                .active
+                .as_ref()
+                .is_some_and(|active| &active.session_id == session),
             Self::Mention { session, query } => {
                 vm.active
                     .as_ref()
@@ -217,7 +237,10 @@ impl ReplyScope {
             }
             // Delete, recall, and steer replies carry their own staleness
             // checks.
-            Self::DeletedSession(_) | Self::Recall(_) | Self::Steer { .. } | Self::RetractSteer { .. } => true,
+            Self::DeletedSession(_)
+            | Self::Recall(_)
+            | Self::Steer { .. }
+            | Self::RetractSteer { .. } => true,
         }
     }
 }
@@ -324,6 +347,8 @@ pub struct FrontendDriver {
     /// The frontend is holding a scroll anchor for a page still painting.
     /// `request_older` refuses to start another read on top of it.
     scroll_hold_pending: bool,
+    /// Invalidates settings reads started before a newer catalog arrived.
+    settings_load_generation: u64,
     /// Settings edit epoch captured when the in-flight save was dispatched.
     settings_save_epoch: u64,
     /// Bumped when a text-field save is scheduled or flushed, so a stale
@@ -338,11 +363,11 @@ pub struct FrontendDriver {
     /// Bumped on each file-fragment change so a stale mention tick does not
     /// search.
     mention_generation: u64,
-    /// `GetCatalog` was already sent this session. The catalog is loaded
-    /// lazily: nothing asks for it until a surface that needs the document
-    /// opens.
+    /// `GetCatalog` was already sent this session. Surface reads start
+    /// lazily; every published gateway update also reloads the cached list.
     catalog_requested: bool,
-    pending_catalog_refresh: bool,
+    /// A successful manual refresh awaits its matching settings projection.
+    catalog_refresh_toast_pending: bool,
     /// The in-flight check was started by the user, so its result may toast.
     manual_update_check: bool,
     /// The staged payload's exit swap is already armed; staging the same
@@ -441,6 +466,7 @@ impl FrontendDriver {
             pending_composer_prefill: None,
             conversation_at_tail: true,
             scroll_hold_pending: false,
+            settings_load_generation: 0,
             settings_save_epoch: 0,
             settings_text_save_generation: 0,
             settings_text_save_pending: false,
@@ -448,7 +474,7 @@ impl FrontendDriver {
             mention_query: None,
             mention_generation: 0,
             catalog_requested: false,
-            pending_catalog_refresh: false,
+            catalog_refresh_toast_pending: false,
             manual_update_check: false,
             update_armed: false,
             applied_update: None,
@@ -487,7 +513,7 @@ impl FrontendDriver {
     /// Initial loads every frontend issues at startup.
     pub fn bootstrap(&mut self, effects: &mut Vec<Effect>) {
         self.dispatch(BridgeCommand::ListSessions);
-        self.dispatch(BridgeCommand::LoadSettings);
+        self.reload_settings();
         self.dispatch(BridgeCommand::LoadUiState);
         let _ = effects;
     }
@@ -906,8 +932,7 @@ impl FrontendDriver {
         self.act(FrontendAction::McpLibraryLoaded { servers, error }, out);
     }
 
-    /// Loads the provider catalog the first time a surface needs it. The
-    /// document stays unparsed in the core until this request lands.
+    /// Loads the cached gateway catalog the first time a surface needs it.
     pub fn ensure_catalog(&mut self) {
         if self.catalog_requested || self.vm.catalog.is_some() || !self.catalog_needed() {
             return;
@@ -916,11 +941,9 @@ impl FrontendDriver {
         self.dispatch(BridgeCommand::GetCatalog);
     }
 
-    /// A manual catalog reload; the reply is marked by
-    /// `pending_catalog_refresh` so it can surface a refreshed toast.
+    /// A manual catalog reload; its reply scope owns the refreshed toast.
     pub fn refresh_catalog(&mut self) {
-        self.pending_catalog_refresh = true;
-        self.dispatch(BridgeCommand::RefreshCatalog);
+        self.dispatch_scoped(BridgeCommand::RefreshCatalog, ReplyScope::CatalogRefresh);
     }
 
     /// Whether a mounted surface reads the provider catalog document.
@@ -928,8 +951,8 @@ impl FrontendDriver {
     /// The composer chips and the context meter consult it on every chat
     /// paint — the model label, the thinking rungs, and the window that
     /// sizes the ring all resolve through it — so a selected model counts
-    /// as a need with no menu open. With nothing selected there is nothing
-    /// to resolve and the fetch stays lazy.
+    /// as a need with no menu open. An unsolicited `CatalogUpdated` always
+    /// reads the new document and binding, even before the first selection.
     fn catalog_needed(&self) -> bool {
         let vm = &self.vm;
         vm.model_menu_open

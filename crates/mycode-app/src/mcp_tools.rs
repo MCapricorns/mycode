@@ -1,7 +1,7 @@
 //! Bridges enabled MCP servers into the agent's tool registry.
 //!
-//! Connections are progressive: `resolve` reads secrets and merges the three
-//! server sources (a few milliseconds of disk I/O), `spawn_slots` starts one
+//! Connections are progressive: `resolve` reads magpie's Library settings,
+//! `spawn_slots` starts one
 //! handshake task per server and returns immediately, and `drain_mcp_ready`
 //! registers each server's tools as it finishes. The turn's first request
 //! therefore never waits for a handshake.
@@ -297,11 +297,7 @@ pub(crate) struct McpPool {
 }
 
 impl McpPool {
-    fn new(
-        fingerprint: u64,
-        servers: &[ResolvedServer],
-        warning: Option<String>,
-    ) -> Self {
+    fn new(fingerprint: u64, servers: &[ResolvedServer], warning: Option<String>) -> Self {
         let slots = servers
             .iter()
             .map(|server| McpSlot::Failed {
@@ -346,9 +342,9 @@ impl McpPool {
         self.slots
             .iter()
             .filter_map(|slot| match slot {
-                McpSlot::Failed {
-                    server, reason, ..
-                } => Some((Arc::clone(server), reason.clone())),
+                McpSlot::Failed { server, reason, .. } => {
+                    Some((Arc::clone(server), reason.clone()))
+                }
                 _ => None,
             })
             .collect()
@@ -418,46 +414,34 @@ impl McpConnect {
     }
 }
 
-/// Reads secrets and magpie's Library servers.
+/// Reads magpie's Library servers on the blocking pool.
 ///
-/// This is the only step that must finish before the first request (the
-/// turn cannot spawn slots for servers it does not know), and it is disk
-/// I/O on the blocking pool, not a handshake.
+/// Managed rows carry their own headers. Discovery must not depend on an
+/// unrelated provider vault being readable; this step does no handshake.
 pub(crate) async fn resolve(
     home: &mycode_agent::HomeLayout,
     _settings: &AppSettings,
     _project: Option<&std::path::Path>,
 ) -> ResolvedMcp {
     let read_home = home.clone();
-    let Ok((Ok(secrets), merged)) = tokio::task::spawn_blocking(move || {
-        (
-            mycode_agent::read_provider_secrets(&read_home),
-            merged_mcp_servers(&read_home),
-        )
-    })
-    .await
-    else {
-        return ResolvedMcp {
-            fingerprint: 0,
-            servers: Vec::new(),
-            warning: None,
-        };
+    let merged = match tokio::task::spawn_blocking(move || merged_mcp_servers(&read_home)).await {
+        Ok(merged) => merged,
+        Err(error) => {
+            return ResolvedMcp {
+                fingerprint: 0,
+                servers: Vec::new(),
+                warning: Some(format!("MCP config task failed: {error}")),
+            };
+        }
     };
-    let MergedServers {
-        servers,
-        magpie_ids,
-        warning,
-    } = merged;
-    let stored_key = |server: &mycode_agent::McpServerSettings| {
-        stored_mcp_key(&secrets, &magpie_ids, &server.id).map(str::to_owned)
-    };
-    let fingerprint = mcp_fingerprint(&servers, &stored_key);
+    let MergedServers { servers, warning } = merged;
+    let fingerprint = mcp_fingerprint(&servers);
     let enabled: Vec<ResolvedServer> = servers
         .iter()
         .filter(|server| server.enabled)
         .map(|server| ResolvedServer {
             settings: server.clone(),
-            api_key: stored_key(server),
+            api_key: None,
         })
         .collect();
     ResolvedMcp {
@@ -532,9 +516,9 @@ pub(crate) async fn spawn_slots(
             .slots
             .iter()
             .filter_map(|slot| match slot {
-                McpSlot::Failed {
-                    server, reason, ..
-                } => Some((server.id().to_owned(), reason.clone())),
+                McpSlot::Failed { server, reason, .. } => {
+                    Some((server.id().to_owned(), reason.clone()))
+                }
                 _ => None,
             })
             .collect(),
@@ -677,17 +661,21 @@ async fn handshake(
     String,
 > {
     let attempt = async {
-        let mut client = open_mcp_client(server, api_key.map(str::to_owned)).await.ok()?;
-        let listed = client.list_tools().await.ok()?;
-        Some((client, listed))
+        let mut client = open_mcp_client(server, api_key.map(str::to_owned)).await?;
+        let listed = client
+            .list_tools()
+            .await
+            .map_err(|error| format!("MCP tools/list failed: {error}"))?;
+        Ok::<_, String>((client, listed))
     };
-    let Some((client, listed)) = tokio::time::timeout(MCP_HANDSHAKE_TIMEOUT, attempt)
+    let (client, listed) = tokio::time::timeout(MCP_HANDSHAKE_TIMEOUT, attempt)
         .await
-        .ok()
-        .flatten()
-    else {
-        return Err("handshake or tools/list failed within the timeout".to_owned());
-    };
+        .map_err(|_| {
+            format!(
+                "MCP handshake or tools/list timed out after {} seconds",
+                MCP_HANDSHAKE_TIMEOUT.as_secs()
+            )
+        })??;
     let info = Arc::new(McpServerInfo::new(&server.id, client.instructions()));
     let client = Arc::new(Mutex::new(client));
     let broken = Arc::new(AtomicBool::new(false));
@@ -706,11 +694,10 @@ async fn handshake(
     Ok((info, tools, broken))
 }
 
-/// magpie's Library servers, plus the ids that came from that managed source.
+/// magpie's Library servers and any configuration warning.
 #[derive(Debug, Default)]
 struct MergedServers {
     servers: Vec<mycode_agent::McpServerSettings>,
-    magpie_ids: HashSet<String>,
     warning: Option<String>,
 }
 
@@ -725,30 +712,13 @@ fn merged_mcp_servers(home: &mycode_agent::HomeLayout) -> MergedServers {
             Vec::new()
         }
     };
-    for server in magpie.into_iter().filter(|server| server.enabled) {
-        merged.magpie_ids.insert(server.id.clone());
-        merged.servers.push(server);
-    }
+    merged
+        .servers
+        .extend(magpie.into_iter().filter(|server| server.enabled));
     merged
 }
 
-/// The vault key for one server. Managed rows never get one: their own file
-/// carries the headers they need.
-fn stored_mcp_key<'a>(
-    secrets: &'a mycode_agent::ProviderSecrets,
-    magpie_ids: &HashSet<String>,
-    id: &str,
-) -> Option<&'a str> {
-    if magpie_ids.contains(id) {
-        return None;
-    }
-    secrets.key(&format!("mcp-{id}"))
-}
-
-fn mcp_fingerprint(
-    servers: &[mycode_agent::McpServerSettings],
-    stored_key: &dyn Fn(&mycode_agent::McpServerSettings) -> Option<String>,
-) -> u64 {
+fn mcp_fingerprint(servers: &[mycode_agent::McpServerSettings]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for server in servers.iter().filter(|server| server.enabled) {
         server.id.hash(&mut hasher);
@@ -759,7 +729,6 @@ fn mcp_fingerprint(
         server.endpoint.hash(&mut hasher);
         server.key_header.hash(&mut hasher);
         server.headers.hash(&mut hasher);
-        stored_key(server).hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -779,6 +748,9 @@ pub(crate) struct McpCatalog {
     /// miss on it gets a "call the tool directly" nudge instead of the
     /// generic no-such-tool error.
     native: BTreeSet<String>,
+    /// The bridge is hidden from top-level dispatch and reached through
+    /// `call` inside `run_code`. Set when the bridge is registered.
+    code_mode: AtomicBool,
 }
 
 struct CatalogInner {
@@ -819,6 +791,7 @@ impl McpCatalog {
             }),
             warning,
             native,
+            code_mode: AtomicBool::new(false),
         })
     }
 
@@ -836,27 +809,40 @@ impl McpCatalog {
         inner.pending.remove(server.id());
         let mut keyed = Vec::new();
         for tool in tools {
+            // The meta tools register after the native snapshot. Reserve
+            // their names explicitly, and recheck the prefixed candidate so
+            // an MCP tool cannot replace a bridge or a native plugin.
+            let taken = |key: &str| {
+                inner.by_name.contains_key(key)
+                    || self.native.contains(&key.to_ascii_lowercase())
+                    || ["search_tool", "use_tool", "tool_search"]
+                        .iter()
+                        .any(|name| key.eq_ignore_ascii_case(name))
+            };
             let mut key = tool.spec.name.clone();
-            if inner.by_name.contains_key(&key) || self.native.contains(&key.to_ascii_lowercase()) {
-                key = format!("{}__{}", server.id(), tool.spec.name);
-                if inner.by_name.contains_key(&key) {
-                    continue;
+            if taken(&key) {
+                let base = format!("{}__{}", server.id(), tool.spec.name);
+                key.clone_from(&base);
+                let mut suffix = 2;
+                while taken(&key) {
+                    key = format!("{base}__{suffix}");
+                    suffix += 1;
                 }
             }
             inner.listed.push((key.clone(), tool.snippet.clone()));
             inner.by_name.insert(key.clone(), Arc::clone(&tool));
             keyed.push((key, tool));
         }
-        inner
-            .listed
-            .sort_by(|left, right| left.0.cmp(&right.0));
+        inner.listed.sort_by(|left, right| left.0.cmp(&right.0));
         match inner
             .servers
             .iter_mut()
             .find(|(existing, _)| existing.id == server.id())
         {
             Some((_, status)) => *status = ServerStatus::Ready(keyed.len()),
-            None => inner.servers.push((server, ServerStatus::Ready(keyed.len()))),
+            None => inner
+                .servers
+                .push((server, ServerStatus::Ready(keyed.len()))),
         }
         keyed
     }
@@ -911,20 +897,28 @@ impl McpCatalog {
                 }
                 note.push('\n');
             }
-            note.push_str(
+            note.push_str(if self.code_mode.load(Ordering::Relaxed) {
+                "Find schemas with `call(\"search_tool\", args)` or `call(\"tool_search\", args)` \
+                 inside `run_code`, then invoke `call(\"use_tool\", args)`. Never guess parameters.\n"
+            } else {
                 "Their tools are on the tool list; `search_tool` loads a schema by name and \
                  `use_tool` calls one. `tool_search` finds them by keyword. Never guess \
-                 parameters.\n",
-            );
+                 parameters.\n"
+            });
         }
         if !inner.pending.is_empty() {
             let ids: Vec<&str> = inner.pending.iter().map(String::as_str).collect();
             note.push_str(&format!(
-                "\nMCP servers connecting in the background: {}.\nTheir tools are not on the \
-                 tool list yet; once connected they appear there, or use search_tool + \
-                 use_tool to call them the moment they register.\n",
+                "\nMCP servers connecting in the background: {}.\n",
                 ids.join(", ")
             ));
+            note.push_str(if self.code_mode.load(Ordering::Relaxed) {
+                "Their tools are not ready yet; after connection, discover and call them \
+                 through `call` inside `run_code`.\n"
+            } else {
+                "Their tools are not on the tool list yet; once connected they appear there, \
+                 or use search_tool + use_tool to call them the moment they register.\n"
+            });
         }
         note
     }
@@ -952,6 +946,14 @@ impl McpCatalog {
                 lines.push(format!("{name} — {summary}"));
             }
         }
+        for (server, status) in &inner.servers {
+            if let ServerStatus::Failed(reason) = status {
+                lines.push(format!(
+                    "MCP server {} failed to connect: {reason}",
+                    server.id()
+                ));
+            }
+        }
         lines.join("\n")
     }
 
@@ -964,26 +966,33 @@ impl McpCatalog {
         if let Some((key, tool)) = inner.by_name.get_key_value(name) {
             return Some((key.clone(), Arc::clone(tool)));
         }
+        let exact: Vec<_> = inner
+            .by_name
+            .iter()
+            .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+            .collect();
+        if !exact.is_empty() {
+            return match exact.as_slice() {
+                [(key, tool)] => Some(((*key).clone(), Arc::clone(tool))),
+                _ => None,
+            };
+        }
         let (prefix, bare) = name
             .rsplit_once("__")
             .or_else(|| name.rsplit_once(['.', ':', '/']))
             .map_or((None, name), |(head, tail)| (Some(head), tail));
         // `mcp__docs__lookup` names the server as the last prefix segment.
         let server = prefix.and_then(|head| head.rsplit("__").next());
-        let unique = |on_server: bool| {
-            let mut found = inner.by_name.iter().filter(|(key, tool)| {
-                key.eq_ignore_ascii_case(name)
-                    || (tool.tool_name.eq_ignore_ascii_case(bare)
-                        && (!on_server
-                            || server
-                                .is_some_and(|server| tool.server.id.eq_ignore_ascii_case(server))))
-            });
-            match (found.next(), found.next()) {
-                (Some((key, tool)), None) => Some((key.clone(), Arc::clone(tool))),
-                _ => None,
-            }
-        };
-        unique(true).or_else(|| unique(false))
+        let mut found = inner.by_name.iter().filter(|(_, tool)| {
+            tool.tool_name.eq_ignore_ascii_case(bare)
+                && server.is_none_or(|server| tool.server.id.eq_ignore_ascii_case(server))
+        });
+        // A qualified miss must never execute the same tool on a different
+        // server, even when that is the only currently connected match.
+        match (found.next(), found.next()) {
+            (Some((key, tool)), None) => Some((key.clone(), Arc::clone(tool))),
+            _ => None,
+        }
     }
 
     /// Tools whose key, server, or description contains every keyword
@@ -1023,6 +1032,17 @@ impl McpCatalog {
     /// insensitive, aligned with [`McpCatalog::get`]'s fuzzy layer.
     fn native_hint(&self, name: &str) -> Option<String> {
         self.native.contains(&name.to_ascii_lowercase()).then(|| {
+            if self.code_mode.load(Ordering::Relaxed)
+                && !["run_code", "wait_code"]
+                    .iter()
+                    .any(|tool| name.eq_ignore_ascii_case(tool))
+            {
+                return format!(
+                    "{name} is a registered native tool. Use call(\"{}\", args) inside run_code \
+                     with its own parameters.",
+                    name.to_ascii_lowercase()
+                );
+            }
             format!(
                 "{name} is not an MCP tool; it is already on the tool list. Call {name} \
                  directly with its own parameters."
@@ -1075,8 +1095,7 @@ impl McpCatalog {
                         .native_hint(name)
                         .or_else(|| self.connecting_hint())
                         .unwrap_or_else(|| {
-                            "no MCP tool has this name; call search_tool with keywords"
-                                .to_owned()
+                            "no MCP tool has this name; call search_tool with keywords".to_owned()
                         });
                     format!("name: {name}\nerror: {error}")
                 }
@@ -1151,12 +1170,17 @@ pub(crate) fn register_meta_tools(
     catalog: &Arc<McpCatalog>,
     index: Arc<ToolSearchIndex>,
 ) {
+    catalog.code_mode.store(
+        registry
+            .exposed_names()
+            .iter()
+            .any(|name| name == "run_code")
+            && !registry.is_exposed("search_tool"),
+        Ordering::Relaxed,
+    );
     registry.register(Arc::new(SearchTool::new(Arc::clone(catalog))));
     registry.register(Arc::new(UseTool::new(Arc::clone(catalog))));
-    registry.register(Arc::new(ToolSearchTool::new(
-        Arc::clone(catalog),
-        index,
-    )));
+    registry.register(Arc::new(ToolSearchTool::new(Arc::clone(catalog), index)));
 }
 
 /// Writes one ready server to the catalog, then to the registry.
@@ -1172,12 +1196,13 @@ pub(crate) fn register_ready_server(
     tools: Vec<Arc<DynamicMcpTool>>,
 ) {
     let keyed = catalog.insert_ready(server, tools);
-    index.insert_many(keyed.iter().map(|(key, tool)| (key.as_str(), tool.as_ref())));
+    index.insert_many(
+        keyed
+            .iter()
+            .map(|(key, tool)| (key.as_str(), tool.as_ref())),
+    );
     for (key, tool) in keyed {
-        registry.register(Arc::new(RegisteredMcpTool {
-            key,
-            inner: tool,
-        }));
+        registry.register(Arc::new(RegisteredMcpTool { key, inner: tool }));
     }
 }
 
@@ -1197,6 +1222,10 @@ impl ToolDyn for RegisteredMcpTool {
 
     fn prompt_snippet_dyn(&self) -> Option<&str> {
         self.inner.prompt_snippet_dyn()
+    }
+
+    fn schema_on_demand(&self) -> bool {
+        true
     }
 
     fn parallel_safe(&self) -> bool {
@@ -1364,9 +1393,9 @@ impl ToolDyn for UseTool {
                     // the MCP bridge; teach it to call the tool itself.
                     Some(hint) => ToolError::InvalidArgs(hint),
                     None => match self.catalog.connecting_hint() {
-                        Some(hint) => ToolError::InvalidArgs(format!(
-                            "no MCP tool named {name} yet. {hint}"
-                        )),
+                        Some(hint) => {
+                            ToolError::InvalidArgs(format!("no MCP tool named {name} yet. {hint}"))
+                        }
                         None => ToolError::InvalidArgs(format!(
                             "no MCP tool named {name}. Call search_tool with name \"list\"."
                         )),
@@ -1537,5 +1566,7 @@ pub(crate) fn stub_catalog_tool_with_read_only(
     ))
 }
 
+#[cfg(test)]
+mod regressions;
 #[cfg(test)]
 mod tests;

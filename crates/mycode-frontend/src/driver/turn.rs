@@ -12,11 +12,37 @@ fn failed_start(message: String) -> FrontendAction {
     }
 }
 
+/// Resolve exactly the model shown in the picker. A stale session pin must
+/// never silently spend a request on another provider or model.
+pub(super) fn selected_route(
+    vm: &crate::view_model::WorkspaceState,
+) -> Result<(String, String), &'static str> {
+    let Some((provider_id, model)) = vm
+        .selected_provider
+        .as_ref()
+        .zip(vm.selected_model.as_ref())
+    else {
+        return Err(crate::i18n::t(
+            "Choose a model in magpie, then refresh models in Settings.",
+            "请在 magpie 中选择模型，然后在设置中刷新模型目录。",
+        ));
+    };
+    let available = vm.settings.as_ref().is_some_and(|settings| {
+        settings.providers.iter().any(|provider| {
+            provider.enabled && &provider.id == provider_id && provider.models.contains(model)
+        })
+    });
+    if !available {
+        return Err(crate::i18n::t(
+            "The selected model is unavailable. Choose an available model or refresh magpie in Settings.",
+            "当前选择的模型不可用。请选择可用模型，或在设置中刷新 magpie。",
+        ));
+    }
+    Ok((provider_id.clone(), model.clone()))
+}
+
 impl FrontendDriver {
-    /// Compacts the active conversation with the picked provider and model.
-    ///
-    /// A model missing from that provider's list uses the provider's first
-    /// model. Unlike a chat turn, this does not fall back to another provider.
+    /// Compacts the active conversation with exactly the picked model.
     pub fn compact(&mut self, out: &mut Vec<Effect>) {
         if self.vm.sending {
             self.toast(
@@ -53,33 +79,13 @@ impl FrontendDriver {
         let Some((session, branch, expected_head)) = self.open_turn_target() else {
             return;
         };
-        let Some(settings) = self.vm.settings.as_ref() else {
-            return;
+        let (provider_id, model) = match selected_route(&self.vm) {
+            Ok(route) => route,
+            Err(message) => {
+                self.toast(message, ToastKind::Info, out);
+                return;
+            }
         };
-        let provider = settings.providers.iter().find(|provider| {
-            provider.enabled && Some(&provider.id) == self.vm.selected_provider.as_ref()
-        });
-        let Some(provider) = provider else {
-            self.toast(
-                crate::i18n::t(
-                    "Choose a model before compacting.",
-                    "压缩前先选择一个模型。",
-                ),
-                ToastKind::Info,
-                out,
-            );
-            return;
-        };
-        let Some(model) = self
-            .vm
-            .selected_model
-            .clone()
-            .filter(|model| provider.models.contains(model))
-            .or_else(|| provider.models.first().cloned())
-        else {
-            return;
-        };
-        let provider_id = provider.id.clone();
         // Locks the composer and shows the waiting card until
         // `CompactFinished` lands (success, failure, or a cancelled run).
         self.act(FrontendAction::CompactArmed, out);
@@ -104,50 +110,12 @@ impl FrontendDriver {
             );
             return;
         };
-        let selected_provider = self.vm.selected_provider.clone();
-        let selected_model = self.vm.selected_model.clone();
-        let provider_id = self
-            .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| {
-                settings
-                    .providers
-                    .iter()
-                    .find(|provider| {
-                        provider.enabled && Some(&provider.id) == selected_provider.as_ref()
-                    })
-                    .or_else(|| settings.providers.iter().find(|provider| provider.enabled))
-            })
-            .map(|provider| (provider.id.clone(), provider.models.clone()));
-        let Some((provider_id, provider_models)) = provider_id else {
-            self.act(
-                failed_start(
-                    crate::i18n::t(
-                        "No enabled provider. Add one with its API key in Settings.",
-                        "没有启用的服务商。请在设置中添加服务商和 API 密钥。",
-                    )
-                    .to_owned(),
-                ),
-                out,
-            );
-            return;
-        };
-        let model = selected_model
-            .filter(|model| provider_models.contains(model))
-            .or_else(|| provider_models.first().cloned());
-        let Some(model) = model else {
-            self.act(
-                failed_start(
-                    crate::i18n::t(
-                        "The provider has no models configured.",
-                        "该服务商没有配置模型。",
-                    )
-                    .to_owned(),
-                ),
-                out,
-            );
-            return;
+        let (provider_id, model) = match selected_route(&self.vm) {
+            Ok(route) => route,
+            Err(message) => {
+                self.act(failed_start(message.to_owned()), out);
+                return;
+            }
         };
         let reasoning = self
             .vm
@@ -324,11 +292,7 @@ impl FrontendDriver {
     }
 
     /// Sends the draft held by an interrupt now that its turn is gone.
-    pub(crate) fn send_held_interrupt(
-        &mut self,
-        held: HeldInterrupt,
-        out: &mut Vec<Effect>,
-    ) {
+    pub(crate) fn send_held_interrupt(&mut self, held: HeldInterrupt, out: &mut Vec<Effect>) {
         if let Some(text) = held.send {
             // The composer was cleared when the interrupt was armed; a
             // draft typed since must survive the send.
@@ -338,11 +302,7 @@ impl FrontendDriver {
 
     /// Hands a held draft back when the turn ended on its own: nothing was
     /// interrupted, so the message was never sent.
-    pub(crate) fn restore_held_interrupt(
-        &mut self,
-        held: HeldInterrupt,
-        out: &mut Vec<Effect>,
-    ) {
+    pub(crate) fn restore_held_interrupt(&mut self, held: HeldInterrupt, out: &mut Vec<Effect>) {
         if let Some(text) = held.send {
             self.restore_above_draft(text, out);
         }
@@ -562,9 +522,9 @@ impl FrontendDriver {
         if call_id.is_empty() {
             return;
         }
-        // Rows and jobs key on the ledger identity; the core publishes the
-        // child token under the provider id. Resolve before the dismiss
-        // drops the job that carries it.
+        // Keep the row until cancellation is acknowledged or the child ends.
+        // The core may not have registered its token when Started first arrives.
+        // Rows use the ledger id; cancellation uses the exact provider id.
         let cancel_id = self
             .vm
             .live_jobs
@@ -573,7 +533,7 @@ impl FrontendDriver {
             .map(|job| job.provider_call_id.clone())
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| call_id.to_owned());
-        self.act(FrontendAction::SubagentDismissed(call_id.to_owned()), out);
+        let _ = out;
         self.dispatch(BridgeCommand::CancelSubagent {
             session_id,
             call_id: cancel_id,

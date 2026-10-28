@@ -32,25 +32,88 @@ fn edit_hint(shell_tool: &str) -> &'static str {
     }
 }
 
-/// The tool rules when every non-shell tool goes through `run_code`. Only
-/// three names are ever directly callable; `call(name, args)` reaches the
-/// rest inside a script.
-fn tool_calling(shell_tool: &str) -> String {
-    let hint = edit_hint(shell_tool);
-    format!(
-        "<tool_calling>\n\
-- Only `{shell_tool}`, `run_code`, and `wait_code` are directly callable. Every other tool — `read`, `write`, `edit`, `grep`, `find`, `ask_user`, `agent`, and the MCP bridge (`search_tool`, `use_tool`, `tool_search`) — is invoked inside a `run_code` script as `call(\"name\", args)`.\n\
-- Batch inside one script instead of emitting many calls: a `call` in `run_code` returns `{{ content, is_error }}`, so one script can read, grep, and edit in order and `complete` with the summary.\n\
-- Use the dedicated tools first through `call`: `find` lists and locates files and directories (pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n\
-- Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, git, package managers, and running programs. Never use it to list directories, read files, or search text.\n\
-- A `{shell_tool}` call waits for its command to exit. Do not start one that waits for input or never exits (a dev server, a watcher, an interactive prompt): it holds the turn until the timeout. Pass non-interactive flags instead.\n\
-- Read existing content before changing it. Change files by `call(\"write\", …)` and `call(\"edit\", …)`. {hint}\n\
-- `{shell_tool}` `mode` `program` runs one executable with an explicit `args` vector and no shell parsing. Prefer it when a command string would need fragile quoting.\n\
-- Never use `{shell_tool}` to talk to the user.\n\
-- A `run_code` script cannot call `run_code` or `wait_code` itself.\n\
-- Editing or recalling a chat message does not restore or delete workspace files.\n\
-</tool_calling>"
-    )
+/// Calling rules follow the exposed registry. Child roles may expose tools
+/// directly, or expose only code mode without a shell.
+fn tool_calling(tools: &ToolRegistry, code_mode: bool) -> String {
+    let mut rules = String::from("<tool_calling>\n");
+    if code_mode {
+        rules.push_str(
+            "- Only names under Available tools are directly callable. Tools under \
+Tools inside run_code are called from a Rhai script as `call(\"name\", #{ argument: value })`; \
+use their argument schemas below. Rhai maps use `#{ ... }`, not JavaScript object syntax.\n\
+- Batch related operations in one script. A `call` returns `{ content, is_error }`, or \
+`{ __error__ }` if dispatch was refused. Inspect errors before continuing dependent work; \
+use `complete(value)` to return the result. Calls are synchronous inside the script.\n\
+- A `run_code` script cannot call `run_code` or `wait_code` itself.\n",
+        );
+    }
+    if ["find", "grep", "read"]
+        .iter()
+        .all(|name| tools.get(name).is_some())
+    {
+        rules.push_str(
+            "- Use the dedicated tools first: `find` lists and locates files and directories \
+(pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n",
+        );
+    }
+    if let Some(shell_tool) = shell_tool_name(tools) {
+        let hint = edit_hint(&shell_tool);
+        let changes = if tools.get("write").is_some() && tools.get("edit").is_some() {
+            let names = if code_mode {
+                "`call(\"write\", …)` and `call(\"edit\", …)`"
+            } else {
+                "the registered `write` and `edit` tools"
+            };
+            format!("- Read existing content before changing it. Change files by {names}. {hint}\n")
+        } else {
+            String::new()
+        };
+        let _ = writeln!(
+            rules,
+            "- Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, \
+git, package managers, and running programs. Never use it to list directories, read files, or search text.\n\
+- A `{shell_tool}` call waits for its command to exit. Do not start one that waits for \
+input or never exits (a dev server, a watcher, an interactive prompt): it holds the turn \
+until the timeout. Pass non-interactive flags instead.\n{changes}\
+- `{shell_tool}` `mode` `program` runs one executable with an explicit `args` vector and \
+no shell parsing. Prefer it when a command string would need fragile quoting.\n\
+- Never use `{shell_tool}` to talk to the user."
+        );
+    }
+    rules.push_str(
+        "- Editing or recalling a chat message does not restore or delete workspace files.\n</tool_calling>",
+    );
+    rules
+}
+
+/// Native and bridge schemas hidden from Request.tools still reach the
+/// model. Remote catalogs have discovery tools and stay on demand.
+fn push_code_tools(prompt: &mut String, tools: &ToolRegistry) {
+    let hidden: Vec<_> = tools
+        .names()
+        .into_iter()
+        .filter(|name| !tools.is_exposed(name))
+        .filter(|name| !matches!(name.as_str(), "run_code" | "wait_code"))
+        .collect();
+    if hidden.is_empty() {
+        return;
+    }
+    prompt.push_str("\n\nTools inside run_code (use call(name, args)):");
+    for name in hidden {
+        let Some(tool) = tools.get(&name) else {
+            continue;
+        };
+        if tool.schema_on_demand() {
+            continue;
+        }
+        let spec = tool.spec();
+        let _ = write!(
+            prompt,
+            "\n- {name}: {description}\n  Arguments JSON Schema: {schema}",
+            description = spec.description,
+            schema = spec.params_schema,
+        );
+    }
 }
 
 /// Builds the compact default prompt from the currently registered tools.
@@ -79,9 +142,13 @@ pub fn build_system_prompt(tools: &ToolRegistry) -> String {
         }
     }
 
-    if let Some(shell_tool) = shell_tool_name(tools) {
+    let code_mode = tools.get("run_code").is_some() && tools.is_exposed("run_code");
+    if !tools.is_empty() {
         prompt.push_str("\n\n");
-        prompt.push_str(&tool_calling(&shell_tool));
+        prompt.push_str(&tool_calling(tools, code_mode));
+    }
+    if code_mode {
+        push_code_tools(&mut prompt, tools);
     }
     prompt
 }
@@ -97,13 +164,130 @@ mod tests {
 
     use super::build_system_prompt;
 
-    fn registry_with(shell: ShellKind, program: &str) -> ToolRegistry {
-        let registry = ToolRegistry::new();
+    fn registry_with(shell: ShellKind, program: &str) -> Arc<ToolRegistry> {
+        let registry = Arc::new(ToolRegistry::new());
+        let builtins = ToolRegistry::new();
+        register_builtins(&builtins);
+        for name in builtins.names() {
+            if !ShellKind::is_tool_name(&name) {
+                registry.register(builtins.get(&name).unwrap());
+            }
+        }
         registry.register(Arc::new(ShellTool::forcing(DetectedShell {
             kind: shell,
             program: PathBuf::from(program),
         })));
+        expose_code_mode(&registry, &[shell.tool_name(), "run_code", "wait_code"]);
         registry
+    }
+
+    fn expose_code_mode(registry: &Arc<ToolRegistry>, exposed: &[&str]) {
+        let cells = Arc::new(mycode_tools::CodeCells::new());
+        registry.register(Arc::new(mycode_tools::RunCodeTool::new(
+            Arc::clone(registry),
+            Arc::clone(&cells),
+            "prompt-test".to_owned(),
+        )));
+        registry.register(Arc::new(mycode_tools::WaitCodeTool::new(
+            cells,
+            "prompt-test".to_owned(),
+        )));
+        registry.expose_only(exposed);
+    }
+
+    #[test]
+    fn code_mode_carries_hidden_tool_schemas_without_exposing_them_to_the_provider() {
+        let registry = registry_with(ShellKind::Bash, "/bin/bash");
+        let prompt = build_system_prompt(&registry);
+        let (direct, hidden) = prompt
+            .split_once("\n\nTools inside run_code")
+            .expect("hidden catalog");
+        assert!(direct.contains("\n- run_code:"));
+        assert!(!direct.contains("\n- read:"));
+        assert!(
+            !direct.contains("ask_user"),
+            "unregistered tools must not be advertised"
+        );
+        assert!(!registry.specs().iter().any(|spec| spec.name == "read"));
+        for name in ["read", "write", "edit", "find", "grep"] {
+            let spec = registry.get(name).unwrap().spec();
+            assert!(hidden.contains(&format!("\n- {name}:")));
+            assert!(hidden.contains(&format!("Arguments JSON Schema: {}", spec.params_schema)));
+        }
+        assert!(direct.contains("Rhai maps use `#{ ... }`"));
+        assert!(direct.contains("Inspect errors before continuing dependent work"));
+    }
+
+    struct DiscoveredTool(String);
+
+    impl mycode_tools::ToolDyn for DiscoveredTool {
+        fn spec(&self) -> mycode_tools::ToolSpec {
+            mycode_tools::ToolSpec {
+                name: self.0.clone(),
+                description: "discovered remote capability".into(),
+                params_schema: serde_json::json!({
+                    "type": "object", "description": "remote_schema".repeat(300)
+                }),
+            }
+        }
+
+        fn schema_on_demand(&self) -> bool {
+            true
+        }
+
+        fn execute_dyn<'a>(
+            &'a self,
+            _: serde_json::Value,
+            _: &'a mycode_tools::ToolCtx,
+            _: &'a mut mycode_tools::ToolStream,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<mycode_tools::ToolResult, mycode_tools::ToolError>,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { unreachable!("prompt construction never executes a tool") })
+        }
+    }
+
+    #[test]
+    fn ready_remote_catalogs_do_not_expand_the_fixed_prompt() {
+        let registry = registry_with(ShellKind::Bash, "/bin/bash");
+        let before = build_system_prompt(&registry);
+        for index in 0..100 {
+            registry.register(Arc::new(DiscoveredTool(format!("remote_{index}"))));
+        }
+        assert_eq!(build_system_prompt(&registry), before);
+        assert!(
+            registry.get("remote_0").is_some(),
+            "discovery keeps dispatch available"
+        );
+    }
+
+    #[test]
+    fn shellless_code_mode_still_explains_call_and_the_read_schema() {
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register(Arc::new(mycode_tools::builtin::ReadTool));
+        expose_code_mode(&registry, &["run_code", "wait_code"]);
+        let prompt = build_system_prompt(&registry);
+        assert!(prompt.contains("call(\"name\", #{ argument: value })"));
+        assert!(prompt.contains("\n- read:"));
+        assert!(prompt.contains("Arguments JSON Schema:"));
+        assert!(!prompt.contains("`powershell`"));
+        assert!(!prompt.contains("`bash`"));
+        assert!(!prompt.contains("`agent`"));
+    }
+
+    #[test]
+    fn directly_exposed_tools_do_not_teach_an_unregistered_code_tool() {
+        let registry = ToolRegistry::new();
+        register_builtins(&registry);
+        let prompt = build_system_prompt(&registry);
+        assert!(prompt.contains("\n- read:"));
+        assert!(!prompt.contains("run_code"));
+        assert!(!prompt.contains("call(\"write\""));
     }
 
     #[test]

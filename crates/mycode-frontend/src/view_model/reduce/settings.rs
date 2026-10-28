@@ -3,25 +3,37 @@
 
 use super::super::{SettingsState, WorkspaceState};
 
-pub(super) fn settings_loaded(state: &mut WorkspaceState, settings: SettingsState) {
+pub(super) fn settings_loaded(state: &mut WorkspaceState, mut settings: SettingsState) {
+    let empty_catalog = mycode_app::catalog::CatalogDocument::default();
+    settings.providers = mycode_app::magpie_provider_row(
+        &settings.magpie,
+        state.catalog.as_deref().unwrap_or(&empty_catalog),
+    )
+    .into_iter()
+    .collect();
+    // A session's model is its own choice. An unpinned composer that still
+    // follows the previous gateway default follows magpie's new default.
+    let pinned = state.active.as_ref().is_some_and(|active| {
+        mycode_app::session_model(&state.session_models, &active.session_id).is_some()
+    });
+    if !pinned
+        && let Some(current) = state.settings.as_ref()
+        && current.magpie.model != settings.magpie.model
+        && state.selected_provider.as_deref() == Some(mycode_app::MAGPIE_PROVIDER_ID)
+        && state.selected_model.as_deref() == Some(current.magpie.model.as_str())
+    {
+        state.selected_model = Some(settings.magpie.model.clone());
+    }
     match state.settings.as_mut() {
         Some(current) if current.dirty || current.saving => {
-            // MCP key badges live outside the settings document. Refresh
-            // them even while a save is in flight. A newer revision is
-            // adopted so a save that lands afterwards does not trip CAS.
+            // The binding and model rows are managed by magpie, never local
+            // editor fields. Refresh them even while saving, preserving the
+            // draft, edit epoch, live effort, and save handshake.
+            current.magpie = settings.magpie;
+            current.providers = settings.providers;
             current.mcp_with_keys = settings.mcp_with_keys;
             if !current.saving {
                 current.revision = settings.revision;
-                // A reload after a failed save also re-syncs the magpie
-                // binding: magpie's plugin may have rewritten the document
-                // underneath the editor. `providers` is derived from the
-                // binding (never user-edited), so it moves with it —
-                // without this, a connected gateway shows "no provider"
-                // until the next full reload.
-                if current.magpie.is_default() {
-                    current.magpie = settings.magpie.clone();
-                    current.providers = settings.providers.clone();
-                }
             }
         }
         _ => {

@@ -14,8 +14,8 @@ use crate::tool_search::{ToolSearchIndex, ToolSearchTool};
 
 /// The catalog comes only from magpie's `~/.mycode/mcp.json` now: a project
 /// file or a settings row can no longer add or shadow a server.
-#[test]
-fn only_the_magpie_library_feeds_the_catalog() {
+#[tokio::test]
+async fn only_the_magpie_library_feeds_the_catalog() {
     let root = std::env::temp_dir().join(format!(
         "mycode-magpie-only-{}-{}",
         std::process::id(),
@@ -39,17 +39,15 @@ fn only_the_magpie_library_feeds_the_catalog() {
     .unwrap();
     let home = mycode_agent::HomeLayout::from_root(&root).unwrap();
     let merged = super::merged_mcp_servers(&home);
+    let resolved = super::resolve(&home, &mycode_agent::AppSettings::default(), Some(&root)).await;
     let _ = std::fs::remove_dir_all(&root);
     assert_eq!(merged.servers.len(), 1, "{:?}", merged.servers);
     assert_eq!(merged.servers[0].id, "docs");
-    assert_eq!(merged.magpie_ids.iter().next().map(String::as_str), Some("docs"));
-
-    // A magpie row never takes a vault key: its file carries the headers.
-    let secrets =
-        mycode_agent::ProviderSecrets::new().with_key("mcp-docs", Some("stale-key"));
-    assert_eq!(
-        super::stored_mcp_key(&secrets, &merged.magpie_ids, "docs"),
-        None
+    assert_eq!(resolved.servers.len(), 1);
+    assert_eq!(resolved.servers[0].settings.id, "docs");
+    assert!(
+        resolved.servers[0].api_key.is_none(),
+        "managed rows carry their own headers"
     );
 }
 
@@ -186,7 +184,10 @@ fn list_names_tools_without_schemas() {
     );
     assert!(!listed.contains("inputSchema"));
     let note = catalog.prompt_note();
-    assert!(note.contains("\"list\"") || note.contains("search_tool"), "{note}");
+    assert!(
+        note.contains("\"list\"") || note.contains("search_tool"),
+        "{note}"
+    );
     assert!(!note.contains("create_issue"), "{note}");
 }
 
@@ -405,7 +406,11 @@ fn tool_on(
     ))
 }
 
-fn catalog_tool(server: &str, name: &str, description: &str) -> Arc<super::DynamicMcpTool> {
+pub(super) fn catalog_tool(
+    server: &str,
+    name: &str,
+    description: &str,
+) -> Arc<super::DynamicMcpTool> {
     tool_on(&server_info(server, None), name, description)
 }
 
@@ -668,7 +673,9 @@ fn register_level_collision_keeps_the_server_prefix() {
         catalog.get("files__read").is_some(),
         "the catalog holds the key"
     );
-    let registered = registry.get("files__read").expect("registry mirrors the key");
+    let registered = registry
+        .get("files__read")
+        .expect("registry mirrors the key");
     assert_eq!(registered.spec().name, "files__read");
     // The builtin keeps its own name.
     assert_eq!(registry.get("read").expect("builtin").spec().name, "read");
@@ -717,7 +724,7 @@ async fn tool_search_returns_ready_schemas() {
     );
 }
 
-fn server_row(id: &str) -> mycode_agent::McpServerSettings {
+pub(super) fn server_row(id: &str) -> mycode_agent::McpServerSettings {
     mycode_agent::McpServerSettings {
         id: id.to_owned(),
         enabled: true,
@@ -749,7 +756,11 @@ async fn a_pool_reuses_ready_slots_across_turns() {
     let pool = Arc::new(tokio::sync::Mutex::new(None));
     let dir = Arc::new(std::env::temp_dir());
     let first = super::spawn_slots(resolved(7), &pool, Arc::clone(&dir)).await;
-    assert_eq!(first.connecting, ["gh"], "the first call starts a handshake");
+    assert_eq!(
+        first.connecting,
+        ["gh"],
+        "the first call starts a handshake"
+    );
 
     // Pretend the handshake finished.
     let info = server_info("gh", Some("GitHub."));

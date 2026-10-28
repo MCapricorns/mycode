@@ -26,6 +26,9 @@ use crate::agent::{AgentConfig, AgentState};
 use crate::env::TurnEnv;
 use crate::prompt::build_system_prompt;
 
+#[cfg(test)]
+mod cancel_tests;
+
 /// Why an in-flight response cycle ended unsuccessfully.
 pub(crate) enum TurnFailure {
     /// The turn's cancellation token fired (`env.cancel` or a child of it).
@@ -95,7 +98,11 @@ pub(crate) async fn stream_assistant(
         reasoning_token: config.reasoning_token.clone(),
         prompt_cache_key: config.prompt_cache_key.clone(),
     };
-    let mut request = env.hooks.prepare_request(request).await;
+    let mut request = tokio::select! {
+        biased;
+        () = token.cancelled() => return Err(TurnFailure::Aborted),
+        request = env.hooks.prepare_request(request) => request,
+    };
     state.messages.clone_from(&request.messages);
     // A replayed ledger can end a turn on calls nothing answered (a crash,
     // a closed window). Repair the request copy only: the history keeps its
@@ -136,7 +143,12 @@ pub(crate) async fn stream_assistant(
         let mut draft_text = String::new();
         let mut draft_thinking = String::new();
         let mut streamed = false;
-        let mut stream = match env.provider.stream(&request, request_cancel).await {
+        let opening = tokio::select! {
+            biased;
+            () = token.cancelled() => return Err(TurnFailure::Aborted),
+            stream = env.provider.stream(&request, request_cancel) => stream,
+        };
+        let mut stream = match opening {
             Ok(stream) => stream,
             Err(error) if error.is_cancelled() => return Err(TurnFailure::Aborted),
             Err(error) => {
@@ -270,7 +282,11 @@ async fn shrink_overflowed(
         reasoning_token: refused.reasoning_token.clone(),
         prompt_cache_key: refused.prompt_cache_key.clone(),
     };
-    let smaller = env.hooks.shrink_overflowed(retry).await;
+    let smaller = tokio::select! {
+        biased;
+        () = token.cancelled() => return Err(TurnFailure::Aborted),
+        smaller = env.hooks.shrink_overflowed(retry) => smaller,
+    };
     if token.is_cancelled() {
         return Err(TurnFailure::Aborted);
     }

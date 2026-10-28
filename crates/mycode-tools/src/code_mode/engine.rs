@@ -175,7 +175,10 @@ fn register_host_functions(
     let budget_cell = Arc::clone(&cell);
     engine.register_fn("budget", move || -> rhai::Map {
         let mut map = rhai::Map::new();
-        map.insert("calls_used".into(), Dynamic::from(budget_cell.calls() as i64));
+        map.insert(
+            "calls_used".into(),
+            Dynamic::from(budget_cell.calls() as i64),
+        );
         map.insert(
             "max_calls".into(),
             Dynamic::from(super::cell::MAX_HOST_CALLS as i64),
@@ -184,7 +187,10 @@ fn register_host_functions(
             "operations".into(),
             Dynamic::from(budget_cell.operations() as i64),
         );
-        map.insert("max_operations".into(), Dynamic::from(MAX_OPERATIONS as i64));
+        map.insert(
+            "max_operations".into(),
+            Dynamic::from(MAX_OPERATIONS as i64),
+        );
         map.insert(
             "max_output_bytes".into(),
             Dynamic::from(budget_cell.max_output_bytes() as i64),
@@ -210,17 +216,12 @@ fn register_host_functions(
         },
     );
 
-    // yield_control() → hand control back to the model without stopping.
+    // yield_control() → hand control back after earlier queued requests.
+    let yield_tx = host_tx.clone();
     let yield_cell = Arc::clone(&cell);
     engine.register_fn("yield_control", move || {
         let seq = yield_cell.next_seq();
-        yield_cell.record(
-            seq,
-            super::journal::ScriptEventKind::Yield,
-            &Value::Null,
-            None,
-        );
-        yield_cell.mark_yielded();
+        let _ = yield_tx.send(HostRequest::Yield { seq });
     });
 
     // Anything that would leave the journal's view of the run incomplete.
@@ -234,10 +235,14 @@ fn register_host_functions(
         Err(runtime_error("sleep is not available in code mode"))
     });
     engine.register_fn("exit", || -> Result<(), Box<EvalAltResult>> {
-        Err(runtime_error("exit is not available in code mode; call complete(value)"))
+        Err(runtime_error(
+            "exit is not available in code mode; call complete(value)",
+        ))
     });
     engine.register_fn("exit", |_: Dynamic| -> Result<(), Box<EvalAltResult>> {
-        Err(runtime_error("exit is not available in code mode; call complete(value)"))
+        Err(runtime_error(
+            "exit is not available in code mode; call complete(value)",
+        ))
     });
     engine.register_fn("timestamp", || -> Result<(), Box<EvalAltResult>> {
         Err(runtime_error("timestamp is not available in code mode"))
@@ -256,9 +261,8 @@ pub(crate) fn dynamic_to_json(value: &Dynamic) -> Result<Value, Box<EvalAltResul
     if value.is_unit() {
         return Ok(Value::Null);
     }
-    serde_json::to_value(value).map_err(|error| {
-        runtime_error(format!("cannot convert a script value to JSON: {error}"))
-    })
+    serde_json::to_value(value)
+        .map_err(|error| runtime_error(format!("cannot convert a script value to JSON: {error}")))
 }
 
 /// Converts a JSON value back to a script value.

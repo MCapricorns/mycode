@@ -100,6 +100,16 @@ impl TurnControl {
     }
 }
 
+impl Drop for TurnControl {
+    fn drop(&mut self) {
+        // A task dropped before end_turn never retires its controls. Stop
+        // its tools and children before the guards unpublish the handles.
+        if self.cancel_guard.is_some() {
+            self.cancel.cancel();
+        }
+    }
+}
+
 /// Removes one session's turn token from the cancel registry on scope exit.
 struct CancelGuard {
     cancels: Arc<parking_lot::Mutex<HashMap<String, LiveWork>>>,
@@ -181,5 +191,52 @@ impl Drop for SteerGuard {
         {
             map.remove(&self.session_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dropping_unretired_controls_cancels_children_and_preserves_successor_handles() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-control-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        let home = mycode_agent::HomeLayout::from_root(root.clone()).unwrap();
+        let state = CoreState::new(home, Vec::new());
+        let first = TurnControl::register(&state, "session");
+        let child = first.cancel.child_token();
+        let mut successor = TurnControl::register(&state, "session");
+        drop(first);
+        assert!(child.is_cancelled());
+        assert!(!successor.cancel.is_cancelled());
+        assert!(state.turn_cancels.lock().contains_key("session"));
+        assert!(Arc::ptr_eq(
+            state.steer_inboxes.lock().get("session").unwrap(),
+            &successor.steer
+        ));
+        successor.steer.push("unread steer".to_owned());
+        let late_child = successor.cancel.child_token();
+        assert_eq!(successor.retire(), ["unread steer"]);
+        drop(successor);
+        assert!(
+            !late_child.is_cancelled(),
+            "a normally retired turn keeps late results"
+        );
+        assert!(state.turn_cancels.lock().is_empty());
+        assert!(state.steer_inboxes.lock().is_empty());
+        let service = state.service.clone();
+        drop(state);
+        service.shutdown().await;
+        for _ in 0..100 {
+            if !root.exists() || std::fs::remove_dir_all(&root).is_ok() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the session actor kept the temporary home open");
     }
 }
