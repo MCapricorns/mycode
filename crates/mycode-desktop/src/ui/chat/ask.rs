@@ -49,7 +49,7 @@ pub(crate) fn render_ask_card(
         // Matches the composer card under it, so the pair reads as one stack.
         .rounded(px(18.))
         .bg(skin::ask_glass(theme))
-        .border_color(crate::ui::desk::primary_edge(theme.primary).opacity(0.35))
+        .border_color(skin::border_subtle(theme))
         .child(
             div()
                 .flex()
@@ -264,12 +264,12 @@ fn ask_choice_row(
     theme: &Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
     let border = if selected {
-        crate::ui::desk::primary_edge(theme.primary)
+        theme.primary
     } else {
         skin::border_subtle(theme)
     };
     let (fill, hover) = if selected {
-        (theme.accent.opacity(0.85), theme.accent)
+        (theme.accent, theme.accent)
     } else {
         (skin::frost(theme), skin::frost_hover(theme))
     };

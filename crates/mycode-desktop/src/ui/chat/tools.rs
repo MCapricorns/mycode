@@ -583,7 +583,7 @@ pub(super) fn tool_status(
     if text.starts_with("failed:") {
         return t("failed", "失败").to_owned();
     }
-    if tool == "run_code" {
+    if matches!(tool, "run_code" | "wait_code") {
         // The summary names how many real tools the script called; the
         // breakdown itself is one click away in the expanded body.
         let calls = code_call_count(text);

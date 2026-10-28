@@ -100,7 +100,8 @@ pub(super) fn render_title_bar(
             .project_dir
             .as_deref()
             .map(super::project_label)
-            .unwrap_or_else(|| t("No folder", "未打开目录").to_owned())
+            .map(|project| format!("{} / {project}", t("Workbench", "工作台")))
+            .unwrap_or_else(|| t("Local workbench", "本地代码工作台").to_owned())
             .into(),
         MainView::Settings => t("Settings", "设置").into(),
     };
@@ -114,8 +115,6 @@ pub(super) fn render_title_bar(
         .h(px(BAR_HEIGHT))
         .w_full()
         .flex_shrink_0()
-        .border_b_1()
-        .border_color(skin::glass_border(theme))
         .bg(skin::glass(theme))
         .child(drag_region(subtitle, window, cx))
         .child(title_controls(
@@ -180,7 +179,7 @@ fn drag_region(
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(img("brand/icon.ico").size(px(16.)))
+                .child(img("brand/icon.ico").size(px(22.)))
                 .child(
                     div()
                         .text_sm()

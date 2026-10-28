@@ -1,7 +1,8 @@
-//! The Desk colors in dark and light. Spec colors stay opaque; chrome applies
-//! its own alpha in `ui/skin` over the window blur. The page is a neutral
-//! graphite (dark) or warm-neutral (light) canvas with an indigo accent and a
-//! faint accent wash.
+//! Paper, ink, and red accents for the MYCode workspace.
+//!
+//! The palette takes Cindy's paper and charcoal surfaces as a reference,
+//! with quieter reading ink and accessible red actions in both modes.
+//! Every surface is opaque so its contrast is independent of the desktop.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
 //! `Theme::change`, including the button tokens GPUI actually paints.
@@ -22,11 +23,9 @@ pub struct SemanticTokens {
     pub text_1: Hsla,
     pub text_2: Hsla,
     pub text_3: Hsla,
-    /// Assistant reply body. A cool tint instead of the chrome's near-white,
-    /// so a long answer reads as prose rather than glare.
+    /// Assistant prose uses the same warm neutral family as the chrome.
     pub reply: Hsla,
-    /// Thinking trace body. A muted lavender that pairs with the violet
-    /// "Thinking" header and stays a step quieter than the reply.
+    /// Reasoning stays quieter than the reply without a competing hue.
     pub thinking: Hsla,
     pub accent: Hsla,
     pub accent_soft: Hsla,
@@ -180,30 +179,6 @@ pub(crate) fn deepen(mut color: Hsla) -> Hsla {
     color
 }
 
-/// How far a primary fill moves from the quiet tint toward the bright accent.
-///
-/// The tint alone sits almost on the card. A short step toward the accent
-/// keeps the body soft and still lifts it off that surface.
-const PRIMARY_FILL_MIX: f32 = 0.16;
-
-/// Accent-edge alpha on a primary control.
-///
-/// Composited on a dark card, this clears a 3:1 boundary without painting a
-/// solid accent ring.
-const PRIMARY_EDGE_ALPHA: f32 = 0.66;
-
-/// Primary body. Light ink stays readable; the fill stays a tint.
-#[must_use]
-pub(crate) fn primary_fill(tint: Hsla, accent: Hsla) -> Hsla {
-    soften(tint, accent, PRIMARY_FILL_MIX)
-}
-
-/// Thin accent edge for a primary control.
-#[must_use]
-pub(crate) fn primary_edge(accent: Hsla) -> Hsla {
-    accent.opacity(PRIMARY_EDGE_ALPHA)
-}
-
 /// Moves `from` toward `toward` by `amount` (0 keeps `from`, 1 is `toward`).
 fn soften(from: Hsla, toward: Hsla, amount: f32) -> Hsla {
     Hsla {
@@ -267,51 +242,51 @@ pub fn semantic_tokens(light: bool) -> SemanticTokens {
 
 fn dark_spec() -> Spec {
     Spec {
-        bg: 0x0E0F12,
-        wash: 0x11131B,
-        surface: 0x15171B,
-        card: 0x1C1F24,
-        hover: 0x24282E,
-        ink: 0xECEDEE,
-        dim: 0xA1A4AB,
-        faint: 0x6B6F78,
-        reply: 0xCDD5E4,
-        thinking: 0xA59FCB,
-        line: 0x22252B,
-        line_strong: 0x2E323B,
-        accent: 0x7C8CFF,
-        accent_ink: 0x0B0E1A,
-        tint: 0x1B2036,
-        green: 0x34D399,
-        amber: 0xF5B544,
-        red: 0xF87171,
-        info: 0x60A5FA,
-        violet: 0xA78BFA,
+        bg: 0x141316,
+        wash: 0x141316,
+        surface: 0x1B1A1E,
+        card: 0x242328,
+        hover: 0x302E33,
+        ink: 0xF3EDE2,
+        dim: 0xB5B0AC,
+        faint: 0xA39D99,
+        reply: 0xE9E3D9,
+        thinking: 0xB5B0AC,
+        line: 0x302E33,
+        line_strong: 0x514B50,
+        accent: 0xF46A6C,
+        accent_ink: 0x1E1115,
+        tint: 0x392326,
+        green: 0x82C6A4,
+        amber: 0xE8BD77,
+        red: 0xF38B94,
+        info: 0xA9C6E8,
+        violet: 0xB5B0AC,
     }
 }
 
 fn light_spec() -> Spec {
     Spec {
-        bg: 0xFAFAF9,
-        wash: 0xF6F7FB,
-        surface: 0xFFFFFF,
-        card: 0xF4F4F3,
-        hover: 0xEAEAE8,
-        ink: 0x18181B,
-        dim: 0x52525B,
-        faint: 0x71717A,
-        reply: 0x283044,
-        thinking: 0x625A93,
-        line: 0xE4E4E2,
-        line_strong: 0xD4D4D0,
-        accent: 0x4353D8,
-        accent_ink: 0xFFFFFF,
-        tint: 0xE5E8FC,
-        green: 0x0F7A4D,
-        amber: 0xB45309,
-        red: 0xB91C1C,
-        info: 0x1D4ED8,
-        violet: 0x6D28D9,
+        bg: 0xFAF6EE,
+        wash: 0xFAF6EE,
+        surface: 0xF3EDE2,
+        card: 0xFFFCF7,
+        hover: 0xEAE2D6,
+        ink: 0x14131B,
+        dim: 0x5D5B66,
+        faint: 0x716A6B,
+        reply: 0x29262B,
+        thinking: 0x666068,
+        line: 0xE3DCCF,
+        line_strong: 0xB6ACA3,
+        accent: 0xC72E38,
+        accent_ink: 0xFFFCF7,
+        tint: 0xF9E4E1,
+        green: 0x256C50,
+        amber: 0x85560F,
+        red: 0xA62642,
+        info: 0x365E8A,
+        violet: 0x666068,
     }
 }
 
@@ -385,7 +360,7 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
     theme.sidebar = surface;
     theme.sidebar_foreground = dim;
     theme.sidebar_border = line;
-    theme.sidebar_accent = tint;
+    theme.sidebar_accent = hover;
     theme.sidebar_accent_foreground = ink;
     theme.sidebar_primary = accent;
     theme.sidebar_primary_foreground = accent_ink;
@@ -394,7 +369,7 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
     theme.popover_foreground = ink;
     theme.title_bar = surface;
     theme.title_bar_border = line;
-    // Gradient end. The painted title bar uses `title_bar`, not this field.
+    // Status bars share the reading surface.
     theme.status_bar = wash;
     theme.status_bar_border = line;
     theme.tab_bar = surface;
@@ -407,7 +382,7 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
     theme.colors.list_head = surface;
     theme.table = surface;
     theme.table_hover = hover;
-    theme.table_even = soften(surface, hover, 0.55);
+    theme.table_even = surface;
     theme.table_head = card;
     theme.table_head_foreground = ink;
     theme.scrollbar = bg;
@@ -433,16 +408,16 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
 /// `Theme::change` resets button tokens to the stock theme. Copy the
 /// Desk colors into both the legacy fields and `tokens`.
 fn sync_controls(theme: &mut Theme) {
-    let primary = primary_fill(theme.accent, theme.primary);
+    let primary = theme.primary;
     let primary_hover = deepen(primary);
     theme.button_primary = primary;
     theme.button_primary_hover = primary_hover;
     theme.button_primary_active = primary_hover;
-    theme.button_primary_foreground = theme.foreground;
+    theme.button_primary_foreground = theme.primary_foreground;
     theme.tokens.button_primary = primary.into();
     theme.tokens.button_primary_hover = primary_hover.into();
     theme.tokens.button_primary_active = primary_hover.into();
-    theme.tokens.button_primary_foreground = theme.foreground.into();
+    theme.tokens.button_primary_foreground = theme.primary_foreground.into();
 
     theme.button = theme.transparent;
     theme.button_hover = theme.secondary_hover;
@@ -554,45 +529,29 @@ mod tests {
         );
     }
 
-    /// Primary controls stay a tint: readable ink, a body that lifts off the
-    /// card, and an edge that still meets a 3:1 boundary.
+    /// Red actions remain legible at rest and on hover in both appearances.
     #[test]
-    fn primary_fill_stays_soft_and_readable_in_dark_mode() {
-        let spec = super::dark_spec();
-        let tint = super::hex(spec.tint);
-        let accent = super::hex(spec.accent);
-        let ink = super::hex(spec.ink);
-        let card = super::hex(spec.card);
-        let fill = super::primary_fill(tint, accent);
-        let edge = super::primary_edge(accent);
-        let text = contrast(ink, fill);
-        let body = contrast(fill, card);
-        let boundary = contrast(over(edge, card), card);
-        assert!(
-            text >= 4.5,
-            "ink on the primary fill is {text:.2}, want >= 4.5"
-        );
-        assert!(
-            (1.1..=2.2).contains(&body),
-            "fill against the card is {body:.2}, want a soft 1.1..=2.2"
-        );
-        assert!(
-            boundary >= 3.0,
-            "primary edge against the card is {boundary:.2}, want >= 3"
-        );
+    fn primary_actions_have_accessible_ink_and_boundaries() {
+        for light in [false, true] {
+            let tokens = super::semantic_tokens(light);
+            for fill in [tokens.accent, super::deepen(tokens.accent)] {
+                assert!(contrast(tokens.accent_ink, fill) >= 4.5);
+                assert!(contrast(fill, tokens.surface_2) >= 3.0);
+            }
+        }
     }
 
     #[test]
     fn semantic_tokens_keep_neutral_canvas_and_distinct_accessible_status_colors() {
         let dark = super::semantic_tokens(false);
         let light = super::semantic_tokens(true);
-        assert_eq!(dark.bg, super::hex(0x0E0F12));
-        assert_eq!(dark.surface_1, super::hex(0x15171B));
-        assert_eq!(dark.surface_2, super::hex(0x1C1F24));
-        assert_eq!(dark.surface_3, super::hex(0x24282E));
-        assert_eq!(light.bg, super::hex(0xFAFAF9));
-        assert_eq!(light.surface_1, super::hex(0xFFFFFF));
-        assert_eq!(light.surface_2, super::hex(0xF4F4F3));
+        assert_eq!(dark.bg, super::hex(0x141316));
+        assert_eq!(dark.surface_1, super::hex(0x1B1A1E));
+        assert_eq!(dark.surface_2, super::hex(0x242328));
+        assert_eq!(dark.surface_3, super::hex(0x302E33));
+        assert_eq!(light.bg, super::hex(0xFAF6EE));
+        assert_eq!(light.surface_1, super::hex(0xF3EDE2));
+        assert_eq!(light.surface_2, super::hex(0xFFFCF7));
 
         assert_ne!(
             dark.warning, dark.accent,
@@ -633,10 +592,9 @@ mod tests {
         );
     }
 
-    /// The reply and thinking inks are tinted, not white or black, and stay
-    /// readable; the thinking trace sits a step quieter than the reply.
+    /// Reading ink stays neutral and legible; reasoning is one step quieter.
     #[test]
-    fn reading_inks_are_tinted_readable_and_ordered() {
+    fn reading_inks_are_readable_and_ordered() {
         for (mode, tokens) in [
             ("dark", super::semantic_tokens(false)),
             ("light", super::semantic_tokens(true)),
@@ -649,7 +607,6 @@ mod tests {
                 "{mode} thinking ink is {thinking:.2}, want >= 4.5"
             );
             assert!(thinking < reply, "{mode} thinking must be quieter");
-            assert!(tokens.reply.s >= 0.15 && tokens.thinking.s >= 0.15);
             assert_ne!(tokens.reply, tokens.text_1);
         }
     }

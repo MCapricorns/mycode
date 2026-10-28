@@ -2,6 +2,7 @@
 //! captions a tool row renders under its status line.
 
 use super::*;
+use mycode_frontend::InnerCallPhase;
 pub(super) fn tool_paints_diff(tool: &str) -> bool {
     matches!(tool, "edit" | "write")
 }
@@ -191,7 +192,21 @@ pub(super) fn file_preview(
 pub(super) struct CodeCall<'a> {
     pub label: &'a str,
     pub failed: bool,
+    pub phase: InnerCallPhase,
     pub body: Vec<&'a str>,
+}
+
+fn code_call_label(line: &str) -> (&str, InnerCallPhase) {
+    for (suffix, phase) in [
+        (" (running)", InnerCallPhase::Running),
+        (" (cancelled)", InnerCallPhase::Cancelled),
+        (" (failed)", InnerCallPhase::Failed),
+    ] {
+        if let Some(label) = line.strip_suffix(suffix) {
+            return (label, phase);
+        }
+    }
+    (line, InnerCallPhase::Completed)
 }
 
 /// Splits a projected `run_code` result into the script's own output and
@@ -224,16 +239,14 @@ pub(super) fn split_code_calls(text: &str) -> Option<(String, Vec<CodeCall<'_>>)
                 .push(line);
             continue;
         }
-        let (label, failed) = match line.strip_suffix(" (failed)") {
-            Some(label) => (label, true),
-            None => (*line, false),
-        };
+        let (label, phase) = code_call_label(line);
         if label.is_empty() {
             continue;
         }
         calls.push(CodeCall {
             label,
-            failed,
+            failed: phase == InnerCallPhase::Failed,
+            phase,
             body: Vec::new(),
         });
     }
@@ -263,7 +276,7 @@ pub(super) fn code_call_count(text: &str) -> usize {
         if continuation {
             continue;
         }
-        let label = line.strip_suffix(" (failed)").unwrap_or(line);
+        let (label, _) = code_call_label(line);
         if !label.is_empty() {
             count += 1;
         }
@@ -312,7 +325,16 @@ pub(super) fn code_calls_body(
 /// One inner call of a code-mode script, as a compact tool row.
 fn code_call_row(call: &CodeCall<'_>, theme: &Theme, desk: &Desk) -> gpui_kit::AnyElement {
     let inner = tool_name(call.label);
-    let (verb, target) = tool_call_parts(call.label, true, false, call.failed);
+    let running = call.phase == InnerCallPhase::Running;
+    let cancelled = call.phase == InnerCallPhase::Cancelled;
+    let completed = !running && !cancelled;
+    let (verb, target) = tool_call_parts(call.label, completed, running, call.failed);
+    // This is a durable snapshot, not the child's current live status.
+    let verb = if running {
+        format!("{inner} · {}", t("running when returned", "返回时仍在运行"))
+    } else {
+        verb
+    };
     let mut column = div().w_full().min_w_0().flex().flex_col().child(
         div()
             .flex()
@@ -323,7 +345,7 @@ fn code_call_row(call: &CodeCall<'_>, theme: &Theme, desk: &Desk) -> gpui_kit::A
             .min_w_0()
             .px(skin::space(2))
             .py(px(2.))
-            .child(status_dot(call.failed, false, false, theme))
+            .child(status_dot(call.failed, !completed, running, theme))
             .child(
                 Icon::new(tool_icon(inner))
                     .xsmall()
@@ -335,7 +357,7 @@ fn code_call_row(call: &CodeCall<'_>, theme: &Theme, desk: &Desk) -> gpui_kit::A
                     .flex_shrink_0()
                     .text_xs()
                     .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                    .text_color(if call.failed {
+                    .text_color(if call.failed || cancelled {
                         theme.danger
                     } else {
                         theme.foreground
@@ -391,7 +413,7 @@ pub(super) fn result_body(
     // repeated in front of the first output line (`failed: True` read like a
     // command output of its own). Keep it only to drive the status.
     let text = raw.strip_prefix("failed: ").unwrap_or(raw);
-    if tool == "run_code"
+    if matches!(tool, "run_code" | "wait_code")
         && let Some((head, calls)) = split_code_calls(text)
     {
         return code_calls_body(&head, &calls, theme, desk).into_any_element();

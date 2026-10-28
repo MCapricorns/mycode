@@ -1,9 +1,5 @@
-//! Sidebar: an action strip, folders, then sessions.
-//!
-//! New task and session search stay in the strip on top. Folders are their
-//! own block; sessions scroll in the block below them. A session binds one
-//! folder as its working directory; the others stay visible to tools as
-//! absolute paths.
+//! The session notebook: a searchable ledger with a stable short session ID.
+//! Project scope lives on the workbench shelf above this column.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::{Input, InputState};
@@ -15,7 +11,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use super::{element_id, project_label, skin};
+use super::{project_label, skin};
 use crate::i18n::t;
 use crate::view_model::{MainView, SessionSummary};
 use crate::workspace::Workspace;
@@ -25,67 +21,25 @@ mod time;
 pub(super) use self::menus::render_project_menu_layer;
 use self::time::{DateGroup, classify_session_group, format_session_relative_time};
 
-/// Sidebar width. Compact rail with room for session titles and folder paths.
-pub(super) const WIDTH_PX: f32 = 248.;
-const WIDTH: gpui_kit::Pixels = px(WIDTH_PX);
-
-/// Height of the New task button in the action strip.
-const NEW_TASK_H: f32 = 34.;
+/// The notebook gives narrow native windows more room for the work.
+pub(super) const WIDTH_PX: f32 = 232.;
+const NEW_TASK_H: f32 = 32.;
 const SEARCH_H: f32 = 32.;
-const ACTION_PAD_Y: f32 = 8.;
-const ACTION_GAP: f32 = 6.;
-/// Label row of the Folders and Sessions sections. Add folder lives in the
-/// Folders one, not in the session list.
-const SECTION_HEAD_H: f32 = 28.;
-/// Share of the space left between the fixed rows that the folder block may
-/// take. The list only uses what its rows need, so a short list leaves the
-/// space to sessions; a long one scrolls inside this share instead of pushing
-/// sessions off screen.
-const FOLDERS_BODY_SHARE: f32 = 0.5;
-/// Floor for the folder block in a window too short to divide by share.
-const FOLDERS_BODY_MIN_H: f32 = 148.;
-/// Settings and version row at the bottom of the sidebar, its top border
-/// included.
-const SIDEBAR_FOOTER_H: f32 = 47.;
-/// Borders under the action strip and above the sessions block.
-const SIDEBAR_ROW_BORDERS: f32 = 2.;
+const ACTION_PAD_Y: f32 = 12.;
+const ACTION_GAP: f32 = 8.;
+const SECTION_HEAD_H: f32 = 36.;
 
-fn action_strip_h(has_folder: bool, has_search: bool) -> f32 {
-    let mut fields = 0.;
-    let mut rows = 0.;
-    if has_folder {
-        fields += NEW_TASK_H;
-        rows += 1.;
-    }
-    if has_search {
-        fields += SEARCH_H;
-        rows += 1.;
-    }
-    let gaps = if rows > 1. {
-        ACTION_GAP * (rows - 1.)
+pub(super) fn width(window: &Window) -> f32 {
+    if f32::from(window.viewport_size().width) < 1100. {
+        196.
     } else {
-        0.
-    };
-    ACTION_PAD_Y + fields + gaps + ACTION_PAD_Y
+        WIDTH_PX
+    }
 }
 
-/// Project menu top, measured from the window origin (title bar included).
-fn project_menu_top(has_folder: bool, has_search: bool) -> gpui_kit::Pixels {
-    px(super::title_bar::BAR_HEIGHT + action_strip_h(has_folder, has_search) + SECTION_HEAD_H + 4.)
-}
-
-/// Height the folder list may use in a window of `window_h` logical pixels.
-///
-/// The cap follows the space left between the fixed rows (action strip, two
-/// section headings, footer), so the folder block shows more rows in a taller
-/// window while the session list keeps the other half below it.
-fn folders_body_max_h(window_h: f32, has_folder: bool, has_search: bool) -> f32 {
-    let sidebar = (window_h - super::title_bar::BAR_HEIGHT).max(0.);
-    let fixed = action_strip_h(has_folder, has_search)
-        + SECTION_HEAD_H * 2.
-        + SIDEBAR_FOOTER_H
-        + SIDEBAR_ROW_BORDERS;
-    ((sidebar - fixed).max(0.) * FOLDERS_BODY_SHARE).max(FOLDERS_BODY_MIN_H)
+/// The add-folder control lives in the project shelf, above the ledger.
+fn project_menu_top(_has_folder: bool, _has_search: bool) -> gpui_kit::Pixels {
+    px(super::title_bar::BAR_HEIGHT + super::workbench::SHELF_HEIGHT - 4.)
 }
 
 pub(super) fn render_sidebar(
@@ -93,7 +47,6 @@ pub(super) fn render_sidebar(
     window: &Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let roots = workspace.vm().workspace_roots.clone();
     let cwd = workspace.vm().project_dir.clone();
     let view = workspace.vm().view;
     // Every session lists here; the project binding only decorates the row.
@@ -115,39 +68,25 @@ pub(super) fn render_sidebar(
         .collect();
     let filter_miss = !filter.trim().is_empty() && visible_sessions.is_empty() && session_count > 0;
     let filter_input = workspace.session_filter_input();
-    let has_search = filter_input.is_some();
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
     let has_folder = crate::view_model::has_open_folder(workspace.vm());
     let armed_delete = workspace.armed_session_delete().map(str::to_owned);
-    let armed_root = workspace.armed_root_delete().map(str::to_owned);
-    let folders_max_h = folders_body_max_h(
-        f32::from(window.viewport_size().height),
-        has_folder,
-        has_search,
-    );
 
     div()
         .id("sidebar")
-        .w(WIDTH)
+        .w(px(width(window)))
         .h_full()
         .flex()
         .flex_col()
         .flex_shrink_0()
         .bg(skin::glass_sidebar(theme))
         .child(action_strip(has_folder, filter_input, cx))
-        .child(folders_section(
-            cx,
-            &roots,
-            cwd.as_deref(),
-            armed_root.as_deref(),
-            folders_max_h,
-        ))
         .child(sessions_section(
             cx,
             &visible_sessions,
             cwd.as_deref(),
-            session_count,
+            visible_sessions.len(),
             filter_miss,
             desk.faint,
             armed_delete.as_deref(),
@@ -204,99 +143,6 @@ fn section_label(text: &str, theme: &Theme) -> impl IntoElement {
         .child(text.to_owned())
 }
 
-/// Folders for the workspace the sidebar shows. Add folder stays in the
-/// heading so it is not a session row.
-fn folders_section(
-    cx: &mut Context<Workspace>,
-    roots: &[String],
-    cwd: Option<&str>,
-    armed_root: Option<&str>,
-    max_h: f32,
-) -> impl IntoElement + use<> {
-    let theme = cx.theme();
-    let empty = roots.is_empty();
-    div()
-        .id("sidebar-folders")
-        .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .child(
-            div()
-                .id("sidebar-folders-head")
-                .h(px(SECTION_HEAD_H))
-                // Labels line up with the row text below (list + row inset);
-                // the add button's own `px_1` brings its text to the same
-                // right edge as the session count.
-                .pl_4()
-                .pr_3()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(section_label(t("Folders", "目录"), theme))
-                .child(
-                    div()
-                        .id("workspace-add")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_1()
-                        .h(px(22.))
-                        .px_1()
-                        .flex_shrink_0()
-                        .rounded(skin::radius_control())
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .cursor_pointer()
-                        .hover(|this| {
-                            this.bg(skin::frost_hover(theme))
-                                .text_color(theme.foreground)
-                        })
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            let open = !workspace.vm().project_menu_open;
-                            workspace.on_toggle_project_menu(open, cx);
-                        }))
-                        .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
-                        .child(t("Add folder", "添加目录")),
-                ),
-        )
-        .child(
-            div()
-                .id("workspace-roots")
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .px_2()
-                .pb_2()
-                .when(!empty, |list| {
-                    list.max_h(px(max_h)).overflow_y_scroll()
-                })
-                .when(empty, |list| {
-                    list.child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .whitespace_normal()
-                            .text_color(theme.muted_foreground)
-                            .child(t(
-                                "Add the folders sessions can work in. Removing a folder deletes its sessions.",
-                                "添加会话可以工作的目录。移除目录会同时删除其中的会话。",
-                            )),
-                    )
-                })
-                .children(
-                    roots
-                        .iter()
-                        .enumerate()
-                        .map(|(index, root)| {
-                            root_row(index, root, cwd, armed_root == Some(root.as_str()), cx)
-                        }),
-                ),
-        )
-}
-
 /// Sessions of the workspace the sidebar shows. Separate from folders.
 fn sessions_section(
     cx: &mut Context<Workspace>,
@@ -329,13 +175,13 @@ fn sessions_section(
                 .items_center()
                 .justify_between()
                 .gap_2()
-                .child(section_label(t("Sessions", "会话"), theme))
+                .child(section_label(t("Session ledger", "会话账本"), theme))
                 .child(
                     div()
                         .text_xs()
                         .flex_shrink_0()
                         .text_color(faint)
-                        .child(session_count.to_string()),
+                        .child(format!("{} {}", session_count, t("pages", "页"))),
                 ),
         )
         .child(
@@ -433,116 +279,6 @@ fn date_group_header(group: DateGroup, first: bool, theme: &Theme) -> impl IntoE
         .child(group.label())
 }
 
-fn root_row(
-    index: usize,
-    root: &str,
-    cwd: Option<&str>,
-    armed: bool,
-    cx: &Context<Workspace>,
-) -> impl IntoElement {
-    let theme = cx.theme();
-    let is_cwd = cwd.is_some_and(|current| crate::view_model::same_project_path(current, root));
-    let path = root.to_owned();
-    let remove = path.clone();
-    let label: SharedString = project_label(root).into();
-    div()
-        .id(format!("workspace-root-{}", element_id(root)))
-        .relative()
-        .group("workspace-root")
-        .flex()
-        .flex_row()
-        .items_start()
-        .gap_2()
-        .px_2()
-        .py(px(6.))
-        .rounded(skin::radius_control())
-        .when(is_cwd, |this| this.bg(theme.secondary_hover))
-        .cursor_pointer()
-        .hover(|this| this.bg(skin::frost_hover(theme)))
-        .on_click({
-            let path = path.clone();
-            cx.listener(move |workspace, _, _, cx| {
-                workspace.on_open_workspace_folder(&path, cx);
-            })
-        })
-        .when(is_cwd, |this| {
-            this.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(px(6.))
-                    .bottom(px(6.))
-                    .w(px(2.))
-                    .rounded_full()
-                    .bg(theme.primary),
-            )
-        })
-        .child(div().mt(px(3.)).flex_shrink_0().child(
-            Icon::new(IconName::Folder).xsmall().text_color(if is_cwd {
-                theme.primary
-            } else {
-                theme.muted_foreground
-            }),
-        ))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(1.))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_1()
-                        .min_h(px(20.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .truncate()
-                                .text_color(theme.foreground)
-                                .child(label),
-                        )
-                        .map(|row| {
-                            let id = format!("workspace-root-remove-{index}");
-                            let on_remove = cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_remove_workspace_root(&remove, cx);
-                            });
-                            if armed {
-                                // Removing the folder deletes its sessions.
-                                row.child(armed_delete_button(
-                                    id,
-                                    t("Delete sessions?", "删除会话？"),
-                                    on_remove,
-                                    theme,
-                                ))
-                            } else {
-                                row.child(super::hover_delete_button(
-                                    id,
-                                    IconName::X,
-                                    "workspace-root",
-                                    on_remove,
-                                    cx,
-                                ))
-                            }
-                        }),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis_start()
-                        .child(path),
-                ),
-        )
-}
-
 fn displayed_session_title(summary: &SessionSummary, project: Option<&str>) -> String {
     if summary.corrupt {
         t("Unreadable session", "无法读取的会话").to_owned()
@@ -575,7 +311,12 @@ fn session_row(
         .then(|| project.map(project_label))
         .flatten()
         .map(Into::into);
-    let time_label: Option<SharedString> = relative_time.map(Into::into);
+    let metadata = [relative_time, folder.map(|folder| folder.to_string())]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let page_id = super::workbench::session_page_id(&summary.session_id);
     let session_id = summary.session_id.clone();
     let open_listener = {
         let session_id = session_id.clone();
@@ -602,7 +343,7 @@ fn session_row(
         .gap_2()
         .group("session-row")
         .px_2()
-        .py(px(6.))
+        .py(px(10.))
         .rounded(skin::radius_control())
         .when(is_open, |this| this.bg(theme.secondary_hover))
         .cursor_pointer()
@@ -614,30 +355,14 @@ fn session_row(
         })
         .when(summary.corrupt, |this| this.on_click(corrupt_listener))
         .when(!summary.corrupt, |this| this.on_click(open_listener))
-        .when(is_open, |this| {
-            this.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(px(6.))
-                    .bottom(px(6.))
-                    .w(px(2.))
-                    .rounded_full()
-                    .bg(theme.primary),
-            )
-        })
         .child(
             div()
+                .w(px(44.))
                 .flex_shrink_0()
-                .child(
-                    Icon::new(IconName::MessageSquare)
-                        .xsmall()
-                        .text_color(if is_open {
-                            theme.primary
-                        } else {
-                            theme.muted_foreground
-                        }),
-                ),
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(11.))
+                .text_color(theme.muted_foreground)
+                .child(page_id),
         )
         .child(
             div()
@@ -645,26 +370,15 @@ fn session_row(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .child(div().text_sm().truncate().child(title))
-                .when_some(folder, |this, folder| {
-                    this.child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .truncate()
-                            .child(folder),
-                    )
-                }),
+                .child(div().text_sm().line_clamp(2).child(title))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(desk.faint)
+                        .truncate()
+                        .child(metadata),
+                ),
         )
-        .when_some(time_label, |this, label| {
-            this.child(
-                div()
-                    .flex_shrink_0()
-                    .text_xs()
-                    .text_color(desk.faint)
-                    .child(label),
-            )
-        })
         .map(|row| {
             let on_delete = cx.listener(move |workspace, _, _, cx| {
                 workspace.on_delete_session(&session_id, cx);
@@ -690,7 +404,7 @@ fn session_row(
 
 /// A delete control after its first click: always visible, red, and
 /// labeled, so the second click is a choice and not a slip.
-fn armed_delete_button(
+pub(super) fn armed_delete_button(
     id: String,
     label: &'static str,
     on_click: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App) + 'static,
@@ -752,55 +466,4 @@ fn render_sidebar_footer(view: MainView, cx: &mut Context<Workspace>) -> impl In
                     .child(format!("v{}", mycode_frontend::current_version())),
             ),
         )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        FOLDERS_BODY_MIN_H, FOLDERS_BODY_SHARE, SECTION_HEAD_H, SIDEBAR_FOOTER_H,
-        SIDEBAR_ROW_BORDERS, action_strip_h, folders_body_max_h,
-    };
-
-    /// The block follows the leftover space, half each with sessions, so the
-    /// third folder row is not clipped by a fixed cap.
-    #[test]
-    fn the_folder_block_follows_the_window_and_shares_with_sessions() {
-        let available = |window: f32| {
-            window
-                - crate::ui::title_bar::BAR_HEIGHT
-                - action_strip_h(true, true)
-                - SECTION_HEAD_H * 2.
-                - SIDEBAR_FOOTER_H
-                - SIDEBAR_ROW_BORDERS
-        };
-        let default_window = folders_body_max_h(900., true, true);
-        let small_window = folders_body_max_h(600., true, true);
-
-        assert!((default_window - available(900.) * FOLDERS_BODY_SHARE).abs() < 0.01);
-        assert!((small_window - available(600.) * FOLDERS_BODY_SHARE).abs() < 0.01);
-        assert!(default_window > small_window, "a taller window shows more");
-        // Default 14 px type: a folder row is 12 px padding, a 22.6 px title
-        // line, a 1 px gap and a 19.4 px path line (~55 px), plus the list's
-        // 2 px row gap and 8 px bottom padding.
-        const ROW: f32 = 55.;
-        const GAP: f32 = 2.;
-        const PAD: f32 = 8.;
-        assert!(
-            default_window >= 5. * ROW + 4. * GAP + PAD,
-            "a 900 px window shows five folder rows, got {default_window}"
-        );
-        assert!(
-            small_window >= 3. * ROW + 2. * GAP + PAD,
-            "the smallest window still shows three rows, got {small_window}"
-        );
-        assert!(
-            default_window < available(900.) * 0.6,
-            "sessions keep their half of the leftover space"
-        );
-        assert_eq!(
-            folders_body_max_h(0., true, true),
-            FOLDERS_BODY_MIN_H,
-            "a window too short to divide keeps the old block height"
-        );
-    }
 }
