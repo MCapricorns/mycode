@@ -3,7 +3,7 @@
 <img src="wiki/images/banner.svg" alt="MYCode：本地编码代理" width="100%">
 
 <p>
-  <a href="https://github.com/MCapricorns/mycode/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/MCapricorns/mycode?style=flat-square&label=%E7%89%88%E6%9C%AC&color=7c8cff"></a>
+  <a href="https://github.com/MCapricorns/mycode/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/MCapricorns/mycode?style=flat-square&label=%E7%89%88%E6%9C%AC&color=c72e38"></a>
   <a href="https://github.com/MCapricorns/mycode/releases"><img alt="下载量" src="https://img.shields.io/github/downloads/MCapricorns/mycode/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD"></a>
   <a href="https://github.com/MCapricorns/mycode/actions"><img alt="构建" src="https://img.shields.io/github/actions/workflow/status/MCapricorns/mycode/ci.yml?branch=main&style=flat-square&label=%E6%9E%84%E5%BB%BA"></a>
   <img alt="平台" src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS-555?style=flat-square">
@@ -34,11 +34,12 @@ MYCode 是一个本地编码代理桌面应用。
 | **模型** | 只通过本机 [magpie](https://usemagpie.ai) 网关请求模型。模型列表实时读取网关的 `GET /v1/models`；在 magpie 的 Agents 页给 MCode 选模型，密钥和地址由 magpie 的 agent 插件写进 `~/.mycode/settings.json`。 |
 | **思考强度** | 只列模型实际公布的档位。每个会话单独记住自己的模型和强度，不影响别的会话。 |
 | **附件** | 拖入文件或粘贴图片即附加到下一条消息：最多 4 张图、8 个文本文件。拖入文件夹则绑定为工作目录。 |
-| **子代理** | `scout` 只读，适合宽范围代码搜索和查文档（可用 magpie 下发的只读 MCP 工具）；`artisan` 在独立的 git worktree 里改代码，结束时回传 diff，不自动合回、不提交。每个回合最多同时跑 8 个，没有超时；取消回合、单独停止或删除对话都会结束它们。也可以在 `agents/` 里加自定义角色。 |
-| **技能** | 从 `.agents`、`.agents/skills` 和 magpie Library 的 `~/.mycode/skills` 发现 `SKILL.md`，`/` 菜单可插入；设置里每个技能可以单独关闭。 |
-| **MCP** | 支持 stdio 和 Streamable HTTP，最多 64 台服务器。MCP 工具一律不进模型工具表：先 `search_tool` 取 schema，再 `use_tool` 调用；系统提示词的 `<mcp>` 段逐行列出本轮连上的服务器、工具数和服务器自述的首句，模型据此知道去哪里找。把内置工具名误送给 `search_tool` / `use_tool` 会得到直接调用的纠正。magpie Library 写入的 `~/.mycode/mcp.json` 会自动合并。 |
+| **子代理** | `scout` 只读，适合代码搜索和查文档；`artisan` 在独立 git worktree 中改代码，结束时回传 diff，不自动合回或提交。每轮最多并发 8 个，支持逐个停止。含修改、未跟踪或忽略文件的 worktree 会保留，并在结果中给出路径；取消不会丢弃已有改动。可在 `agents/` 中添加自定义角色。 |
+| **代码模式** | 顶层提供当前系统 shell、`run_code` 和 `wait_code`。在 Rhai 脚本中通过 `call("read", #{ path: "src/lib.rs" })` 等调用内置工具、子代理和 MCP；长任务返回 cell id 后可继续收集。每个内层调用有独立进度与终态，子代理有自己的停止按钮。 |
+| **技能** | 从 magpie Library 的 `~/.mycode/skills` 发现 `SKILL.md`，`/` 菜单可插入；设置里每个技能可以单独关闭。 |
+| **MCP** | 支持 stdio 和 Streamable HTTP，最多 64 台服务器，读取 magpie Library 的 `~/.mycode/mcp.json`。在 `run_code` 内先 `call("search_tool", …)` 或 `call("tool_search", …)` 按需取得 schema，再 `call("use_tool", …)` 执行。提示词展示服务器与连接状态；远程 schema 不会全部塞进固定提示词。 |
 | **网页** | 没有内置搜索；联网检索由 magpie Library 下发的 MCP 服务提供（例如 anysearch）。 |
-| **界面** | 中英双语、深色/浅色、四档字号，`Ctrl-K` / `Cmd-K` 打开命令面板。 |
+| **界面** | 顶部项目书架、会话账本与工作页组成原生工作台；在同一页查看工具操作和代码改动。提供中英双语、深色/浅色和四档字号，`Ctrl-K` / `Cmd-K` 打开命令面板。 |
 | **代理** | 跟随系统代理，或手动填写 `http` / `socks5` 地址。设置页的「测试」会请求 `google.com/generate_204` 并显示线路、状态码和耗时。 |
 
 ## 安装
@@ -73,7 +74,7 @@ cargo build --release -p mycode-desktop
 ## 快速开始
 
 1. 安装 [magpie](https://usemagpie.ai)，在本仓库运行 `magpie plugin add github:MCapricorns/magpie-mycode`（或在 magpie 的 Plugins 页填同样的 `github:` 地址）。
-2. 在 magpie 的 Agents 页给 **MCode** 选一个模型。MCode 启动新会话时读取网关地址和密钥。
+2. 在 magpie 的 Agents 页给 **MCode** 选一个模型。MYCode 首次启动读取绑定；运行中改选模型后，在设置页刷新模型目录即可同步，无需重启。
 3. 打开一个目录。
 4. 在输入框里描述你要做的事。
 
@@ -84,7 +85,7 @@ cargo build --release -p mycode-desktop
 | 附加图片 | `Ctrl-V`（macOS `Cmd-V`）粘贴剪贴板图片；粘贴内容是单个图片路径时附加该文件 |
 | 切换模型 / 思考强度 | 输入框旁的两个菜单 |
 | 命令面板 | `Ctrl-K`（Windows）/ `Cmd-K`（macOS），搜索会话、模型、命令和设置页 |
-| 回合进行中继续输入 | `Enter`（或 `Ctrl-G`）引导：不停止回合，模型在下一步之前读到这条消息，没读到就回到输入框；`Ctrl-Enter` 停止当前回合并立即发送；停止时会连同正在跑的工具和它派生的进程一起结束。macOS 上用 `Cmd` |
+| 回合进行中继续输入 | `Enter` 打开「引导 / 打断并发送」选择；`Ctrl-G` 直接引导，模型在下一步之前读到这条消息，没读到就回到输入框；`Ctrl-Enter` 停止当前回合并立即发送；`Esc` 关闭选择并保留草稿。停止会连同正在跑的工具和它派生的进程一起结束。macOS 上用 `Cmd` |
 | 快捷键一览 | 「设置 → 快捷键」 |
 
 ## 数据与配置
@@ -93,7 +94,7 @@ cargo build --release -p mycode-desktop
 
 ```text
 ~/.mycode/
-├─ settings.json        magpie 网关、MCP、外观、代理、子代理、技能开关（密钥在 magpie 里）
+├─ settings.json        magpie 网关绑定（含本地网关凭据）、外观、代理、子代理、技能开关
 ├─ AGENTS.md            magpie Library 写入的全局规则（也可手写）
 ├─ mcp.json             magpie Library 写入的 MCP 服务器
 ├─ skills/              magpie Library 写入的技能
@@ -109,7 +110,9 @@ cargo build --release -p mycode-desktop
 └─ update/              自动更新暂存
 ```
 
-设置、密钥和界面状态是严格 JSON。写坏的文档会备份到旁边的 `*.broken-*`，能救的字段会保留，救不回来的回到默认值。会话账本用 `sessions.db` 作为提交权威，事件写在 JSONL 里；崩溃留下的半截写入会被截掉，索引和日志对不上则明确报损坏，不猜。
+设置、密钥和界面状态是严格 JSON。magpie 首次创建、尚无版本元数据的有效绑定会规范导入，不产生损坏备份；临时访问错误也不会重置配置。真正损坏的文档会备份到旁边的 `*.broken-*`，能救的字段会保留，救不回来的回到默认值。会话账本用 `sessions.db` 作为提交权威，事件写在 JSONL 里；崩溃留下的半截写入会被截掉，索引和日志对不上则明确报损坏，不猜。
+
+全局规则来自 `~/.mycode/AGENTS.md`，随后读取项目里的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md` 和 `.agents/AGENTS.md`。提示词标明每份规则的来源路径；项目规则覆盖全局默认，同一项目按上述顺序由后面的文件覆盖前面的冲突。用户当前明确指令优先。
 
 工具以当前用户权限运行。环境变量白名单只是过滤，不是沙箱。
 

@@ -12,11 +12,47 @@
   ],
   "nodes": [
     {
+      "id": "code-mode",
+      "label": "code mode",
+      "group": "module",
+      "lane": 6,
+      "summary": "run_code 在 OS 线程执行 Rhai，Tokio dispatcher 顺序调用 registry 工具。超过等待时限或 yield_control 后脚本继续运行，由同 session 的 wait_code 收集或终止；取消与 drop 会结束 cell。",
+      "links": ["tools", "agent", "tool-discovery", "code-progress"],
+      "files": ["crates/mycode-tools/src/code_mode.rs", "crates/mycode-tools/src/code_mode/cell.rs", "crates/mycode-tools/src/code_mode/engine.rs", "crates/mycode-tools/src/code_mode/dispatch.rs"]
+    },
+    {
+      "id": "code-progress",
+      "label": "code progress",
+      "group": "data",
+      "lane": 4,
+      "summary": "code_mode|JSON 包裹 started / progress / completed。外层事件保留父 call_id，envelope 携带真实子调用 call_id 和终态 phase；原始 agent 消息保持完整，最终 inner_calls 快照补齐离线期间的 UI 状态。",
+      "links": ["code-mode", "frontend", "view_model"],
+      "files": ["crates/mycode-tools/src/code_mode/progress.rs", "crates/mycode-frontend/src/view_model/reduce/jobs.rs", "crates/mycode-frontend/src/view_model/reduce/jobs/code_mode.rs", "crates/mycode-frontend/src/stream.rs"]
+    },
+    {
+      "id": "tool-discovery",
+      "label": "tool discovery",
+      "group": "module",
+      "lane": 4,
+      "summary": "search_tool 按确切 name / names 加载 schema 或列工具；tool_search 用 BM25 最多返回 8 个完整 schema；use_tool 校验参数并执行 catalog key 对应的 MCP 工具。",
+      "links": ["mcp", "code-mode"],
+      "files": ["crates/mycode-app/src/tool_search.rs", "crates/mycode-app/src/mcp_tools.rs"]
+    },
+    {
+      "id": "prompt-resources",
+      "label": "prompt resources",
+      "group": "data",
+      "lane": 7,
+      "summary": "全局 AGENTS.md 作为 defaults，随后加载带源路径的 workspace 规则并赋予覆盖优先级。skill 从 MYCode home 的 magpie Library skills/ 目录发现；每份文件与总 prompt 都有大小上限。",
+      "links": ["config", "agent", "home"],
+      "files": ["crates/mycode-config/src/resources.rs", "crates/mycode-agent/src/prompt.rs", "crates/mycode-app/src/turn/prompt.rs"]
+    },
+    {
       "id": "desktop",
       "label": "mycode-desktop",
       "group": "crate",
       "lane": 0,
-      "summary": "GPUI 桌面应用：窗口、标题栏、会话侧栏、聊天列、右侧详情与设置页。它只读视图模型、发动作，不碰会话或模型。",
+      "summary": "GPUI 原生工作台：顶部项目书架、会话索引、带改动轨迹的会话页与设置。它只读视图模型、发动作，不碰会话或模型。",
       "links": [
         "frontend",
         "launch",
@@ -46,7 +82,8 @@
       ],
       "files": [
         "crates/mycode-desktop/src/workspace.rs",
-        "crates/mycode-desktop/src/workspace/window.rs"
+        "crates/mycode-desktop/src/workspace/window.rs",
+        "crates/mycode-desktop/src/ui/workbench.rs"
       ]
     },
     {
@@ -54,7 +91,7 @@
       "label": "composer",
       "group": "module",
       "lane": 1,
-      "summary": "底部输入卡片：草稿、附件芯片、模型与思考档位、发送/停止/引导。回合进行中回车是引导，Ctrl+Enter 停下并紧接着发送。粘贴图片经 on_paste 进入附件而不是正文。",
+      "summary": "底部输入区：草稿、附件、模型与思考档位、发送/停止/引导。回合中 Enter 打开引导或打断选择，Ctrl+Enter 停下并紧接着发送。粘贴图片经 on_paste 进入附件而不是正文。",
       "links": [
         "workspace",
         "clipboard",
@@ -230,7 +267,7 @@
       "label": "MCP",
       "group": "module",
       "lane": 3,
-      "summary": "stdio 与 Streamable HTTP 两种通道，最多 64 台服务器，magpie Library 的 mcp.json 一并合并。所有工具都不进模型工具表，统一经 search_tool 取 schema、use_tool 调用；系统提示词逐行列出本轮连上的服务器、工具数与服务器自述，误送的内置工具名会得到直接调用的纠正。",
+      "summary": "stdio 与 Streamable HTTP；共享连接池后台握手，ready 工具先进入 catalog，再发布搜索索引与 registry。remote schemas 仅按需披露：在 run_code 内经 search_tool / tool_search 取 schema，再用 use_tool 调用。冲突名加 server 前缀和必要的数字后缀，带 server 的查找不会误投其他服务器。",
       "links": [
         "app",
         "tools",
@@ -295,7 +332,7 @@
       "label": "子代理",
       "group": "flow",
       "lane": 5,
-      "summary": "scout 只读搜索与查文档；artisan 在独立 git worktree 里改代码，结束回传 diff，不自动合回也不提交。每回合最多同时 8 个。",
+      "summary": "scout 只读搜索与查文档；artisan 在独立 git worktree 里改代码，结束回传 diff，不自动合回也不提交。清理只移除干净 checkout；tracked、untracked 和 ignored 文件都会保留工作树与恢复记录。",
       "links": [
         "agent",
         "tools",
@@ -343,7 +380,7 @@
       "label": "mycode-tools",
       "group": "crate",
       "lane": 6,
-      "summary": "内置工具：读写与编辑文件、glob、grep、shell、进程、ask。工具以当前用户权限运行，环境变量白名单只是过滤。",
+      "summary": "工具 registry 与执行：文件读写编辑、find、grep、平台 shell，以及 Rhai run_code / wait_code。主回合的其余工具在脚本内通过同步 call(name, args) 到达同一份实现，文本结果读取 result.content[0].Text。",
       "links": [
         "agent",
         "core",
@@ -377,7 +414,7 @@
       "label": "mycode-config",
       "group": "crate",
       "lane": 7,
-      "summary": "家目录与设置：严格 JSON 的设置、密钥、界面状态；写坏的文档备份成 *.broken-*，能救的字段留下。",
+      "summary": "家目录、严格 JSON 设置、资源发现与 owned-file 写入。合法且完全没有 envelope metadata 的 magpie bootstrap 直接导入 revision 1，不报 repair；损坏文档才进入备份与恢复流程。",
       "links": [
         "core",
         "home",

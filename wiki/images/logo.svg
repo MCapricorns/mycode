@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="MYCode">
-  <rect x="8" y="8" width="240" height="240" rx="58" fill="#ffffff"/>
-  <path d="M76 182V82l52 56 52-56v100" fill="none" stroke="#000000" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">MYCode bracket M</title>
+  <desc id="desc">A paper M with square-bracket stems on a flat red stamp. The open central notch evokes code chevrons. The canvas outside the stamp is transparent.</desc>
+  <rect id="tile" x="16" y="16" width="224" height="224" rx="48" fill="#C72E38"/>
+  <polygon id="mark" fill="#FAF6EE" points="48,64 96,64 128,104 160,64 208,64 208,96 192,96 192,160 208,160 208,192 160,192 160,120 128,160 96,120 96,192 48,192 48,160 64,160 64,96 48,96"/>
 </svg>
