@@ -62,6 +62,7 @@ impl Drop for Repository {
 #[test]
 fn worktree_handoff_and_recovery_preserve_modified_untracked_and_ignored_files() {
     let fixture = Repository::new();
+    git(&fixture.repo, &["config", "core.autocrlf", "true"]);
     for fail in [false, true] {
         let lease = WorktreeLease::acquire(&fixture.home, &fixture.repo).unwrap();
         let path = lease.path.clone();
@@ -106,8 +107,17 @@ fn worktree_handoff_and_recovery_preserve_modified_untracked_and_ignored_files()
             std::fs::read_to_string(fixture.repo.join("tracked.txt")).unwrap(),
             "original\n"
         );
-        // The isolated test owns these files; once clean, the lease is reclaimable.
-        std::fs::write(path.join("tracked.txt"), "original\n").unwrap();
+        // Restore Git's checkout bytes, including configured line-ending conversion.
+        git(
+            &path,
+            &[
+                "restore",
+                "--source=HEAD",
+                "--worktree",
+                "--",
+                "tracked.txt",
+            ],
+        );
         std::fs::remove_file(path.join("untracked.bin")).unwrap();
         std::fs::remove_file(path.join("ignored.txt")).unwrap();
         assert!(

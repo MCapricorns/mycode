@@ -437,7 +437,7 @@ mod tests {
         write_private(
             &home,
             "ui.json",
-            br#"{"formatVersion":1,"kind":"mycode-ui-state","autoUpdate":false,"workspaceRoots":["/legacy/root"]}"#,
+            br#"{"formatVersion":1,"kind":"mycode-ui-state","autoUpdate":false,"trustedProjects":["/legacy/root"]}"#,
         );
         let (ui, repair) = read_ui_state_with_repair(&home).unwrap();
         assert!(!ui.auto_update, "the valid field survived the reset");
@@ -446,6 +446,40 @@ mod tests {
         assert!(backup.windows(7).any(|window| window == b"/legacy"));
         // The republished file parses, so the next launch is quiet.
         assert!(read_ui_state_with_repair(&home).unwrap().1.is_none());
+    }
+
+    #[test]
+    fn supported_legacy_workspaces_migrate_without_repair() {
+        let (_guard, home) = home("legacy-workspaces");
+        let root = home.root().join("root").to_str().unwrap().to_owned();
+        let legacy_root = home.root().join("legacy").to_str().unwrap().to_owned();
+        let document = serde_json::json!({
+            "formatVersion": 1,
+            "kind": "mycode-ui-state",
+            "workspaceRoots": [root],
+            "workspaces": [{
+                "id": "ws1-legacy",
+                "name": "Legacy",
+                "folders": [root, legacy_root]
+            }],
+            "sessionWorkspaces": [["legacy-session", "ws1-legacy"]],
+            "activeWorkspace": "ws1-legacy",
+            "sessionProjects": [["legacy-session", legacy_root]]
+        });
+        let bytes = serde_json::to_vec(&document).unwrap();
+        write_private(&home, "ui.json", &bytes);
+
+        let (ui, repair) = read_ui_state_with_repair(&home).unwrap();
+        assert!(repair.is_none(), "supported legacy fields are not damage");
+        assert_eq!(ui.workspace_roots, [root, legacy_root.clone()]);
+        assert!(ui.workspaces.is_empty());
+        assert!(ui.session_workspaces.is_empty());
+        assert!(ui.active_workspace.is_none());
+        assert_eq!(
+            ui.session_projects,
+            [("legacy-session".to_owned(), legacy_root)]
+        );
+        assert_eq!(std::fs::read(home.root().join("ui.json")).unwrap(), bytes);
     }
 
     fn names_in(home: &HomeLayout) -> Vec<String> {
