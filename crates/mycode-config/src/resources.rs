@@ -1,10 +1,9 @@
 //! Workspace and global resource files feeding the system prompt.
 //!
-//! Bounded markdown files discovered at fixed locations: the session
-//! workspace (`AGENTS.md`, `MYCODE.md`, `.mycode/agents.md`,
-//! `.agents/AGENTS.md`), the MYCode home (`AGENTS.md`), and the OS user home
-//! (`.agents/AGENTS.md`). Each file becomes one system prompt contribution.
-//! Nothing enters the prompt unbounded or from arbitrary paths.
+//! Bounded markdown files discovered at fixed locations: the MYCode home
+//! (`AGENTS.md`), then the session workspace (`AGENTS.md`, `MYCODE.md`,
+//! `.mycode/agents.md`, `.agents/AGENTS.md`). Each file becomes one system
+//! prompt contribution. Nothing enters the prompt unbounded or from arbitrary paths.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -31,7 +30,9 @@ pub struct ResourceFile {
 
 /// Discovers resource files for one session workspace.
 ///
-/// Order is stable: the workspace files first, then the global files.
+/// Order is stable: global defaults first, then workspace overrides in the
+/// order AGENTS.md, MYCODE.md, .mycode/agents.md, .agents/AGENTS.md. Later
+/// workspace contributions win conflicts at the same directory scope.
 /// Duplicates (the workspace root equal to the home root) are collapsed.
 #[must_use]
 pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<ResourceFile> {
@@ -48,6 +49,9 @@ pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<Resou
             });
         }
     };
+    // magpie's Library writes the home-level instructions file; the user
+    // home's own `.agents` tree is not a source.
+    push("AGENTS.md", home.root().join("AGENTS.md"), true);
     push("AGENTS.md", workspace_root.join("AGENTS.md"), false);
     push("MYCODE.md", workspace_root.join("MYCODE.md"), false);
     push(
@@ -60,9 +64,6 @@ pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<Resou
         workspace_root.join(".agents").join("AGENTS.md"),
         false,
     );
-    // magpie's Library writes the home-level instructions file; the user
-    // home's own `.agents` tree is not a source.
-    push("AGENTS.md", home.root().join("AGENTS.md"), true);
     files
 }
 
@@ -371,10 +372,14 @@ pub fn render_resource_prompt(files: &[ResourceFile]) -> Vec<String> {
             continue;
         };
         let scope = if file.global { "global" } else { "workspace" };
-        let rendered = format!("# {name} ({scope})\n\n{text}", name = file.name);
+        let rendered = format!(
+            "# {name} ({scope})\nSource: {path}\n\n{text}",
+            name = file.name,
+            path = file.path.display(),
+        );
         let chars = rendered.chars().count();
         if total + chars > MAX_TOTAL_PROMPT_CHARS {
-            break;
+            continue;
         }
         total += chars;
         parts.push(rendered);
@@ -394,8 +399,8 @@ pub fn render_skill_catalog(files: &[SkillFile]) -> Option<String> {
     }
     let mut out = String::from(
         "<skills>\nSkills (on demand). Scan this list before you act. When a \
-task matches one, read the matching SKILL.md by path with `read` and follow \
-it before building or answering. Do not wait for the user to name the skill; a \
+task matches one, read the matching SKILL.md by path with the `read` tool using the \
+calling convention above and follow it before building or answering. Do not wait for the user to name the skill; a \
 message that starts with `/slug` asks for that skill. Read a skill once per task, and \
 open the files it references only when a step needs them. Do not paste skill bodies \
 into the prompt.",
@@ -445,6 +450,77 @@ mod tests {
         let path = dir.join(slug);
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("SKILL.md"), format!("# {title}\n")).unwrap();
+    }
+
+    #[test]
+    fn global_rules_precede_project_overrides_and_name_every_source() {
+        let root = temp("instructions");
+        let home_root = root.0.join("home");
+        let workspace = root.0.join("project");
+        fs::create_dir_all(&home_root).unwrap();
+        fs::create_dir_all(workspace.join(".mycode")).unwrap();
+        fs::create_dir_all(workspace.join(".agents")).unwrap();
+        let paths = [
+            home_root.join("AGENTS.md"),
+            workspace.join("AGENTS.md"),
+            workspace.join("MYCODE.md"),
+            workspace.join(".mycode").join("agents.md"),
+            workspace.join(".agents").join("AGENTS.md"),
+        ];
+        for (index, path) in paths.iter().enumerate() {
+            fs::write(path, format!("instruction-{index}")).unwrap();
+        }
+        let home = crate::HomeLayout::from_root(&home_root).unwrap();
+        let resources = super::discover_resources(&home, &workspace);
+        assert_eq!(
+            resources.iter().map(|file| &file.path).collect::<Vec<_>>(),
+            paths.iter().collect::<Vec<_>>()
+        );
+        assert!(resources[0].global);
+        assert!(resources[1..].iter().all(|file| !file.global));
+        let rendered = super::render_resource_prompt(&resources);
+        assert_eq!(rendered.len(), paths.len());
+        for (index, part) in rendered.iter().enumerate() {
+            assert!(part.contains(&format!("Source: {}", paths[index].display())));
+            assert!(part.ends_with(&format!("instruction-{index}")));
+        }
+        let shared_root = super::discover_resources(&home, &home_root);
+        assert_eq!(shared_root.len(), 1);
+        assert!(shared_root[0].global);
+        fs::write(&paths[0], "updated global rule").unwrap();
+        assert!(
+            super::render_resource_prompt(&super::discover_resources(&home, &workspace))[0]
+                .ends_with("updated global rule")
+        );
+    }
+
+    #[test]
+    fn prompt_budget_preserves_global_rules_and_skips_only_the_part_that_does_not_fit() {
+        let root = temp("instruction-budget");
+        let home_root = root.0.join("home");
+        let workspace = root.0.join("project");
+        fs::create_dir_all(&home_root).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(
+            home_root.join("AGENTS.md"),
+            "g".repeat(super::MAX_RESOURCE_BYTES),
+        )
+        .unwrap();
+        fs::write(
+            workspace.join("AGENTS.md"),
+            "p".repeat(super::MAX_RESOURCE_BYTES),
+        )
+        .unwrap();
+        fs::write(workspace.join("MYCODE.md"), "small project rule").unwrap();
+        let home = crate::HomeLayout::from_root(&home_root).unwrap();
+        let parts = super::render_resource_prompt(&super::discover_resources(&home, &workspace));
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].starts_with("# AGENTS.md (global)"));
+        assert!(parts[1].ends_with("small project rule"));
+        assert!(
+            parts.iter().map(|part| part.chars().count()).sum::<usize>()
+                <= super::MAX_TOTAL_PROMPT_CHARS
+        );
     }
 
     #[test]

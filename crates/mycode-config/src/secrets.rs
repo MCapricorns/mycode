@@ -1,7 +1,8 @@
 //! Strict provider secret store: `secrets.json`.
 //!
-//! API keys never enter `settings.json`. This document holds one bounded key
-//! per configured provider id under the same owned-file transaction and
+//! MCP credentials live here; the magpie gateway binding, including its key,
+//! lives in `settings.json`. This document holds one bounded key per id under
+//! the same owned-file transaction and
 //! revision CAS discipline as settings. Debug output is redacted so keys can
 //! never leak into logs.
 
