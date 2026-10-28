@@ -734,7 +734,7 @@ mod tests {
         for document in [
             &br#"{"formatVersion":1,"kind":"mycode-ui-state","state":{"starredModels":[{"provider":"openai","model":"gpt"}]}}"#[..],
             &br#"{"formatVersion":1,"kind":"mycode-ui-state","trustedProjects":["/legacy/project"],"autoUpdate":false}"#[..],
-            &br#"{"formatVersion":1,"kind":"mycode-ui-state","workspaceRoots":["/legacy/root"]}"#[..],
+            &br#"{"formatVersion":1,"kind":"mycode-ui-state","starredModels":[{"provider":"openai","model":"gpt"}]}"#[..],
         ] {
             assert!(
                 decode_ui_state(document).is_err(),
@@ -742,12 +742,22 @@ mod tests {
             );
         }
         // The salvage still keeps the fields that are still known.
-        let damaged: serde_json::Value = serde_json::from_slice(
-            br#"{"formatVersion":1,"kind":"mycode-ui-state","trustedProjects":["/x"],"autoUpdate":false,"workspaceRoots":["/legacy/root"],"selectedModel":"gpt-4o"}"#,
-        )
-        .expect("fixture");
+        let root = std::env::temp_dir()
+            .join("mycode-legacy-root")
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let damaged = serde_json::json!({
+            "formatVersion": 1,
+            "kind": "mycode-ui-state",
+            "trustedProjects": ["/x"],
+            "autoUpdate": false,
+            "workspaceRoots": [root],
+            "selectedModel": "gpt-4o"
+        });
         let state = salvage_ui_state(&damaged).expect("salvage");
         assert!(!state.auto_update);
+        assert_eq!(state.workspace_roots, [root]);
         assert_eq!(state.selected_model.as_deref(), Some("gpt-4o"));
     }
 
