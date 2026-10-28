@@ -146,12 +146,16 @@ fn attach_inner_calls(mut text: String, details: Option<&serde_json::Value>) -> 
             .unwrap_or("");
         text.push('\n');
         text.push_str(&mycode_agent::tool_label(name, target));
-        if call
+        let failed = call
             .get("is_error")
             .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
-            text.push_str(" (failed)");
+            .unwrap_or(false);
+        match call.get("phase").and_then(serde_json::Value::as_str) {
+            Some("running") => text.push_str(" (running)"),
+            Some("cancelled") => text.push_str(" (cancelled)"),
+            Some("failed") => text.push_str(" (failed)"),
+            _ if failed => text.push_str(" (failed)"),
+            _ => {}
         }
         if let Some(diff) = call
             .get("diff")
@@ -286,6 +290,8 @@ mod tests {
                     {"seq": 0, "name": "read", "target": "src/lib.rs", "is_error": false},
                     {"seq": 1, "name": "edit", "target": "src/main.rs", "is_error": true,
                      "diff": "+ new\n- old"},
+                    {"seq": 2, "name": "agent", "target": "artisan", "is_error": true, "phase": "cancelled"},
+                    {"seq": 3, "name": "agent", "target": "scout", "is_error": false, "phase": "running"},
                 ],
             })),
         };
@@ -296,6 +302,8 @@ mod tests {
         assert!(text.contains("read  src/lib.rs"), "{text}");
         assert!(text.contains("edit  src/main.rs (failed)"), "{text}");
         assert!(text.contains("+ new\n- old"), "{text}");
+        assert!(text.contains("agent  artisan (cancelled)"), "{text}");
+        assert!(text.contains("agent  scout (running)"), "{text}");
         // A result without inner calls gains no heading.
         let plain = mycode_agent::ToolResultMessage {
             details: None,

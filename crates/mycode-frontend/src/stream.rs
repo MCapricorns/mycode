@@ -2,9 +2,9 @@
 //!
 //! The core sends `ChatText` and `ChatThinking` as they arrive, then
 //! `ChatDone`. A UI task that drains that whole queue before the next frame
-//! paints only the finished message. A frame takes a short slice of deltas,
-//! leaves the closing event for the next frame, and the pump waits about
-//! one frame so the slice can paint.
+//! paints only the finished message. Small bursts keep a frame between live
+//! text and its commit. Large backlogs catch up without a typewriter delay,
+//! and failure/cancellation terminals bypass cosmetic pacing entirely.
 
 use std::collections::VecDeque;
 
@@ -30,6 +30,17 @@ pub fn split_stream_frame(
     queued: impl IntoIterator<Item = BridgeEvent>,
 ) -> (Vec<BridgeEvent>, VecDeque<BridgeEvent>) {
     let mut queued: VecDeque<BridgeEvent> = queued.into_iter().collect();
+    // A stop must never wait behind seconds of already-received text. Keep
+    // every event in order, including partial commits and tool results, but
+    // close the failed turn in this paint. Leave a successor turn queued.
+    if let Some(terminal) = queued
+        .iter()
+        .position(|event| matches!(event, BridgeEvent::ChatFailed { .. }))
+    {
+        return (queued.drain(..=terminal).collect(), queued);
+    }
+    let catch_up = queued.len() > STREAM_DELTAS_PER_FRAME * 8
+        || queued.iter().filter_map(stream_delta_chars).sum::<usize>() > STREAM_CHARS_PER_FRAME * 8;
     let mut slice = Vec::new();
     let mut chars = 0usize;
     let mut deltas = 0usize;
@@ -47,7 +58,8 @@ pub fn split_stream_frame(
             queued.push_front(event);
             break;
         }
-        if delta_chars.is_some()
+        if !catch_up
+            && delta_chars.is_some()
             && saw_delta
             && (chars >= STREAM_CHARS_PER_FRAME || deltas >= STREAM_DELTAS_PER_FRAME)
         {
@@ -68,6 +80,17 @@ pub fn split_stream_frame(
         }
     }
     (slice, queued)
+}
+
+/// Hidden sessions do not render text. Drop only their cosmetic deltas;
+/// terminal and control events still reach the driver to settle held sends.
+pub fn retain_active_deltas(queued: &mut VecDeque<BridgeEvent>, active_session: Option<&str>) {
+    queued.retain(|event| match event {
+        BridgeEvent::ChatText { session_id, .. } | BridgeEvent::ChatThinking { session_id, .. } => {
+            active_session == Some(session_id.as_ref())
+        }
+        _ => true,
+    });
 }
 
 pub fn is_stream_delta(event: &BridgeEvent) -> bool {
@@ -193,6 +216,57 @@ mod tests {
         assert_eq!(delta_text(&slice), "Hello");
         assert!(rest.iter().any(closes_live_text));
         assert!(!rest.iter().any(is_stream_delta));
+    }
+
+    #[test]
+    fn cancellation_flushes_backlog_without_losing_partial_work() {
+        let mut queued: VecDeque<_> = (0..500).map(|_| text("partial 世界")).collect();
+        queued.push_back(tool_start());
+        queued.push_back(tool_done());
+        queued.push_back(BridgeEvent::ChatFailed {
+            session_id: "s".into(),
+            message: mycode_app::CHAT_CANCELLED.into(),
+            head: "partial-head".into(),
+        });
+        queued.push_back(text("next turn"));
+        let (slice, rest) = split_stream_frame(queued);
+        assert_eq!(delta_text(&slice), "partial 世界".repeat(500));
+        assert!(slice.iter().any(is_tool_finished));
+        assert!(matches!(slice.last(), Some(BridgeEvent::ChatFailed { .. })));
+        assert_eq!(rest.len(), 1);
+        assert_eq!(
+            delta_text(&rest.into_iter().collect::<Vec<_>>()),
+            "next turn"
+        );
+    }
+
+    #[test]
+    fn large_backlog_catches_up_before_committing() {
+        let mut queued: VecDeque<_> = (0..2_000).map(|_| text("hello 世界")).collect();
+        queued.push_back(done());
+        let (slice, rest) = split_stream_frame(queued);
+        assert_eq!(delta_text(&slice), "hello 世界".repeat(2_000));
+        assert_eq!(rest.len(), 1);
+        assert!(matches!(rest.front(), Some(BridgeEvent::ChatDone { .. })));
+    }
+
+    #[test]
+    fn hidden_session_text_does_not_delay_visible_work_or_drop_control_events() {
+        let mut queued = VecDeque::from([text("hidden"), done(), tool_done()]);
+        queued.push_back(BridgeEvent::ChatText {
+            session_id: "visible".into(),
+            delta: "current".into(),
+        });
+        retain_active_deltas(&mut queued, Some("visible"));
+        assert_eq!(queued.len(), 3);
+        assert!(matches!(queued.front(), Some(BridgeEvent::ChatDone { .. })));
+        assert_eq!(
+            delta_text(&queued.iter().cloned().collect::<Vec<_>>()),
+            "current"
+        );
+        retain_active_deltas(&mut queued, None);
+        assert_eq!(queued.len(), 2);
+        assert!(queued.iter().all(|event| !is_stream_delta(event)));
     }
 
     #[test]

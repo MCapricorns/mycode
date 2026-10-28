@@ -240,10 +240,10 @@ impl FrontendDriver {
                 FrontendAction::SessionTitled { session_id, title }
             }
             BridgeEvent::CatalogUpdated { .. } => {
-                if self.catalog_requested || self.vm.catalog.is_some() || self.catalog_needed() {
-                    self.catalog_requested = true;
-                    self.dispatch(BridgeCommand::GetCatalog);
-                }
+                // The first binding may have been written after bootstrap,
+                // before any model chip or catalog surface existed.
+                self.catalog_requested = true;
+                self.dispatch(BridgeCommand::GetCatalog);
                 return;
             }
             BridgeEvent::UpdateAvailable { offer } => {
@@ -343,8 +343,8 @@ impl FrontendDriver {
     /// Takes the held interrupt this terminal event ends, if any. A held
     /// interrupt for another session stays put.
     fn take_held_interrupt(&mut self, event: &BridgeEvent) -> Option<HeldInterrupt> {
-        let (BridgeEvent::ChatDone { session_id, .. }
-        | BridgeEvent::ChatFailed { session_id, .. }) = event
+        let (BridgeEvent::ChatDone { session_id, .. } | BridgeEvent::ChatFailed { session_id, .. }) =
+            event
         else {
             return None;
         };

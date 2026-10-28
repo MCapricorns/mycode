@@ -22,7 +22,15 @@ impl FrontendDriver {
         reply: BridgeReply,
         out: &mut Vec<Effect>,
     ) {
+        let cancel_id = match &scope {
+            ReplyScope::CancelSubagent { call_id, .. } => Some(call_id.clone()),
+            _ => None,
+        };
+        let catalog_refresh = matches!(scope, ReplyScope::CatalogRefresh);
         match scope {
+            ReplyScope::Settings { generation } if generation != self.settings_load_generation => {
+                return;
+            }
             ReplyScope::Recall(request) => {
                 self.resolve_recall_reply(*request, reply, out);
                 return;
@@ -216,6 +224,13 @@ impl FrontendDriver {
                     out.push(Effect::SyncProxyField);
                 }
                 self.act(FrontendAction::SettingsLoaded(Box::new(state)), out);
+                if std::mem::take(&mut self.catalog_refresh_toast_pending) {
+                    self.toast(
+                        crate::i18n::t("Provider catalog refreshed", "服务商目录已刷新").to_owned(),
+                        ToastKind::Info,
+                        out,
+                    );
+                }
                 // magpie's Library servers come from its own file; the
                 // settings document never carries them.
                 self.reload_mcp_library(out);
@@ -223,6 +238,7 @@ impl FrontendDriver {
                 self.toast_applied_update(out);
             }
             BridgeReply::Settings(Err(message)) => {
+                self.catalog_refresh_toast_pending = false;
                 self.act(FrontendAction::Failed(message), out);
                 self.toast_applied_update(out);
             }
@@ -240,7 +256,7 @@ impl FrontendDriver {
                 self.import_request = None;
                 // Reload everything the bundle replaced: settings, key
                 // markers, and UI state. Sessions were not touched.
-                self.dispatch(BridgeCommand::LoadSettings);
+                self.reload_settings();
                 self.dispatch(BridgeCommand::LoadUiState);
                 let message = if summary.secrets > 0 {
                     format!(
@@ -338,7 +354,18 @@ impl FrontendDriver {
             BridgeReply::SubagentCancelled(Err(message)) => {
                 self.toast(message, ToastKind::Info, out);
             }
-            BridgeReply::SubagentCancelled(Ok(())) => {}
+            BridgeReply::SubagentCancelled(Ok(())) => {
+                if let Some(cancel_id) = cancel_id {
+                    let call_id = self
+                        .vm
+                        .live_jobs
+                        .iter()
+                        .find(|job| job.provider_call_id == cancel_id)
+                        .map(|job| job.call_id.clone())
+                        .unwrap_or(cancel_id);
+                    self.act(FrontendAction::SubagentDismissed(call_id), out);
+                }
+            }
             BridgeReply::McpTools {
                 server_id,
                 outcome: Ok(tools),
@@ -358,8 +385,6 @@ impl FrontendDriver {
                 self.act(FrontendAction::McpProbeFailed { server_id, message }, out);
             }
             BridgeReply::Catalog(Ok(info)) => {
-                let refreshed = self.pending_catalog_refresh;
-                self.pending_catalog_refresh = false;
                 self.act(
                     FrontendAction::CatalogLoaded {
                         document: info.document,
@@ -367,21 +392,17 @@ impl FrontendDriver {
                     },
                     out,
                 );
-                if refreshed {
-                    self.toast(
-                        crate::i18n::t("Provider catalog refreshed", "服务商目录已刷新").to_owned(),
-                        ToastKind::Info,
-                        out,
-                    );
-                }
+                // Refresh reads settings on the core side, independently of
+                // bootstrap. Re-read that binding before deriving model rows.
+                self.catalog_refresh_toast_pending |= catalog_refresh;
+                self.reload_settings();
             }
             BridgeReply::Catalog(Err(message)) => {
                 // A failed lazy load clears the flag so the next surface
                 // open retries; a failed manual refresh also toasts.
                 self.catalog_requested = false;
                 self.prompt_magpie_install(out);
-                if self.pending_catalog_refresh {
-                    self.pending_catalog_refresh = false;
+                if catalog_refresh {
                     self.act(FrontendAction::Failed(message), out);
                 }
             }
@@ -535,7 +556,7 @@ impl FrontendDriver {
                 // document so the next save compares against the store's
                 // actual revision. The reducer keeps unsaved edits while a
                 // reload lands (see `settings_loaded`).
-                self.dispatch(BridgeCommand::LoadSettings);
+                self.reload_settings();
                 self.act(FrontendAction::SettingsSaveFailed(message), out);
             }
             BridgeReply::SessionDeleted(Err(message)) => {

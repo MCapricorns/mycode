@@ -10,16 +10,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::registry::ToolRegistry;
 use crate::stream::{ToolStream, ToolStreamItem};
-use crate::tool::{ToolDyn, ToolError, ToolResult};
+use crate::tool::{ToolDyn, ToolResult};
 use crate::{ToolCtx, prepare_tool_ctx};
 
 use super::cell::{InnerCallSummary, ScriptCell, ScriptOutcome};
 use super::journal::ScriptEventKind;
+use super::progress::{CodeModeProgress, InnerCallPhase};
 
 /// One request from the script thread.
 pub enum HostRequest {
@@ -40,6 +41,11 @@ pub enum HostRequest {
         seq: u64,
         /// Rendered text.
         text: String,
+    },
+    /// `yield_control()`; ordered with the preceding log/call requests.
+    Yield {
+        /// Journal sequence.
+        seq: u64,
     },
     /// `complete(value)`; recorded, then the script stops.
     Complete {
@@ -80,41 +86,47 @@ pub(crate) async fn drive_cell(
     mut done: oneshot::Receiver<ScriptOutcome>,
     registry: Arc<ToolRegistry>,
     base: DispatchContext,
-    progress: mpsc::UnboundedSender<String>,
+    progress: broadcast::Sender<String>,
 ) {
     let terminate = cell.terminate_token();
-    loop {
-        tokio::select! {
-            biased;
-            // Termination drops `host_rx` on return, which unblocks a parked
-            // script thread (its reply sender or request sender is gone).
-            () = terminate.cancelled() => return,
-            outcome = &mut done => {
-                // The script thread sends `done` and closes its host sender
-                // in that order; a `log`/`complete` it queued may still be
-                // buffered. Drain it before settling so the journal keeps
-                // the script's tail.
-                drain_queued(&cell, &registry, &base, &progress, &mut host_rx).await;
-                cell.finish(outcome.unwrap_or_else(|_| {
-                    ScriptOutcome::Failed("the script thread ended without a result".to_owned())
-                }));
-                return;
-            }
-            request = host_rx.recv() => match request {
-                Some(request) => handle(&cell, &registry, &base, &progress, request).await,
-                // The script thread dropped its sender: its outcome was
-                // already sent on `done` (or the thread panicked).
-                None => {
-                    let outcome = (&mut done).await.unwrap_or_else(|_| {
-                        ScriptOutcome::Failed(
-                            "the script thread ended without a result".to_owned(),
-                        )
-                    });
-                    cell.finish(outcome);
+    // Also cancel detached work when this task is dropped or panics. This
+    // is a cell-owned child token, never the parent turn's token.
+    let _cancel_on_drop = base.cancel.clone().drop_guard();
+    let drive = async {
+        loop {
+            tokio::select! {
+                biased;
+                outcome = &mut done => {
+                    // Drain the script's queued tail before settling.
+                    drain_queued(&cell, &registry, &base, &progress, &mut host_rx).await;
+                    cell.finish(outcome.unwrap_or_else(|_| {
+                        ScriptOutcome::Failed("the script thread ended without a result".to_owned())
+                    }));
                     return;
                 }
-            },
+                request = host_rx.recv() => match request {
+                    Some(request) => handle(&cell, &registry, &base, &progress, request).await,
+                    None => {
+                        let outcome = (&mut done).await.unwrap_or_else(|_| {
+                            ScriptOutcome::Failed(
+                                "the script thread ended without a result".to_owned(),
+                            )
+                        });
+                        cell.finish(outcome);
+                        return;
+                    }
+                },
+            }
         }
+    };
+    // Race the entire dispatcher, including preflight and tool execution.
+    // A tool that ignores its token cannot keep a cancelled cell alive.
+    // Dropping execution preserves the builtins' process/worker Drop cleanup.
+    tokio::select! {
+        biased;
+        () = terminate.cancelled() => {}
+        () = base.cancel.cancelled() => cell.terminate(),
+        () = drive => {}
     }
 }
 
@@ -126,7 +138,7 @@ async fn drain_queued(
     cell: &Arc<ScriptCell>,
     registry: &Arc<ToolRegistry>,
     base: &DispatchContext,
-    progress: &mpsc::UnboundedSender<String>,
+    progress: &broadcast::Sender<String>,
     host_rx: &mut mpsc::UnboundedReceiver<HostRequest>,
 ) {
     while let Ok(request) = host_rx.try_recv() {
@@ -138,19 +150,17 @@ async fn handle(
     cell: &Arc<ScriptCell>,
     registry: &Arc<ToolRegistry>,
     base: &DispatchContext,
-    progress: &mpsc::UnboundedSender<String>,
+    progress: &broadcast::Sender<String>,
     request: HostRequest,
 ) {
     match request {
         HostRequest::Log { seq, text } => {
-            let text = bound_progress(&text);
-            cell.record(
-                seq,
-                ScriptEventKind::Log,
-                &json!({ "text": text }),
-                None,
-            );
-            let _ = progress.send(text);
+            cell.record(seq, ScriptEventKind::Log, &json!({ "text": text }), None);
+            let _ = progress.send(bound_progress(&text));
+        }
+        HostRequest::Yield { seq } => {
+            cell.record(seq, ScriptEventKind::Yield, &Value::Null, None);
+            cell.mark_yielded();
         }
         HostRequest::Complete { seq, value } => {
             cell.record(seq, ScriptEventKind::Complete, &value, None);
@@ -162,6 +172,7 @@ async fn handle(
             reply,
         } => {
             let call_args = json!({ "name": name, "arguments": args });
+            let mut lifecycle = InnerCallLifecycle::new(cell, base, seq, &name, &args);
             // The engine rejects this before it leaves the script; the check
             // here keeps the property true for any other host path too.
             let outcome = if name == "run_code" || name == "wait_code" {
@@ -169,7 +180,7 @@ async fn handle(
                     "call(\"{name}\") is not allowed: code mode cannot invoke itself"
                 ))
             } else {
-                run_tool(cell, registry, base, progress, &name, &args, seq).await
+                run_tool(registry, base, progress, &name, &args, &lifecycle.call_id).await
             };
             // The UI summary rides beside the journal entry: the journal
             // hashes the call, this names it, so a frontend can render the
@@ -187,22 +198,111 @@ async fn handle(
                 ),
                 Err(_) => (true, None),
             };
-            cell.record_inner_call(InnerCallSummary {
-                seq,
-                target: crate::tool_target(&name, &args),
-                name: name.clone(),
-                is_error,
-                diff,
-            });
+            lifecycle.finish(&outcome, is_error, diff);
             let response = match outcome {
                 Ok(result) => json!({
                     "content": serde_json::to_value(&result.content).unwrap_or(Value::Null),
                     "is_error": result.is_error,
                 }),
-                Err(message) => json!({ "__error__": message }),
+                Err(message) => json!({
+                    "content": ToolResult::error(&message).content,
+                    "is_error": true,
+                    "__error__": message,
+                }),
             };
             cell.record(seq, ScriptEventKind::Call, &call_args, Some(&response));
             let _ = reply.send(HostReply::Value(response));
+        }
+    }
+}
+
+/// Owns an inner call's identity and terminal event through cancellation
+/// and unwinding. Snapshots retain the same state even after run_code yields
+/// and no live progress receiver is attached.
+struct InnerCallLifecycle {
+    cell: Arc<ScriptCell>,
+    cancel: CancellationToken,
+    call_id: String,
+    summary: InnerCallSummary,
+    finished: bool,
+}
+
+impl InnerCallLifecycle {
+    fn new(
+        cell: &Arc<ScriptCell>,
+        base: &DispatchContext,
+        seq: u64,
+        name: &str,
+        args: &Value,
+    ) -> Self {
+        let call_id = format!("{}.{seq}", base.call_id);
+        let summary = InnerCallSummary {
+            seq,
+            call_id: Some(call_id.clone()),
+            phase: Some(InnerCallPhase::Running),
+            name: name.to_owned(),
+            target: crate::tool_target(name, args),
+            is_error: false,
+            diff: None,
+        };
+        cell.publish_inner_call(summary.clone());
+        Self {
+            cell: Arc::clone(cell),
+            cancel: base.cancel.clone(),
+            call_id,
+            summary,
+            finished: false,
+        }
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cell.terminated() || self.cancel.is_cancelled()
+    }
+
+    fn finish(
+        &mut self,
+        outcome: &Result<ToolResult, String>,
+        is_error: bool,
+        diff: Option<String>,
+    ) {
+        // The legacy AgentHost API reports an independently stopped child
+        // as `Execution("subagent <role> cancelled")`. Preserve that state
+        // even though its parent cell's token was deliberately not cancelled.
+        let cancelled = self.cancelled()
+            || outcome.as_ref().err().is_some_and(|message| {
+                message.contains(crate::tool::INTERRUPTED_NOTE)
+                    || (self.summary.name == "agent"
+                        && message.starts_with("subagent ")
+                        && message.ends_with(" cancelled"))
+            });
+        let phase = if cancelled {
+            InnerCallPhase::Cancelled
+        } else if is_error {
+            InnerCallPhase::Failed
+        } else {
+            InnerCallPhase::Completed
+        };
+        self.publish(phase, is_error || cancelled, diff);
+    }
+
+    fn publish(&mut self, phase: InnerCallPhase, is_error: bool, diff: Option<String>) {
+        self.finished = true;
+        self.summary.phase = Some(phase);
+        self.summary.is_error = is_error;
+        self.summary.diff = diff;
+        self.cell.publish_inner_call(self.summary.clone());
+    }
+}
+
+impl Drop for InnerCallLifecycle {
+    fn drop(&mut self) {
+        if !self.finished {
+            let phase = if self.cancelled() {
+                InnerCallPhase::Cancelled
+            } else {
+                InnerCallPhase::Failed
+            };
+            self.publish(phase, true, None);
         }
     }
 }
@@ -223,13 +323,12 @@ fn bound_progress(text: &str) -> String {
 
 /// Runs one tool through the shared preflight and returns its result.
 async fn run_tool(
-    cell: &Arc<ScriptCell>,
     registry: &Arc<ToolRegistry>,
     base: &DispatchContext,
-    progress: &mpsc::UnboundedSender<String>,
+    progress: &broadcast::Sender<String>,
     name: &str,
     args: &Value,
-    seq: u64,
+    call_id: &str,
 ) -> Result<ToolResult, String> {
     let Some(tool) = registry.get(name) else {
         return Err(format!(
@@ -242,67 +341,73 @@ async fn run_tool(
         &base.extra_roots,
         &base.read_roots,
         base.cancel.clone(),
-        format!("{}.{seq}", base.call_id),
+        call_id,
         tool.as_ref(),
         args,
     )
     .await?;
-    let _ = progress.send(format!("call {name}"));
-    execute_with_progress(cell, progress, name, tool.as_ref(), args.clone(), ctx).await
+    execute_with_progress(progress, name, tool.as_ref(), args.clone(), ctx).await
 }
 
 async fn execute_with_progress(
-    cell: &Arc<ScriptCell>,
-    progress: &mpsc::UnboundedSender<String>,
+    progress: &broadcast::Sender<String>,
     name: &str,
     tool: &dyn ToolDyn,
     args: Value,
     ctx: ToolCtx,
 ) -> Result<ToolResult, String> {
     let (mut inner_tx, mut inner_rx) = ToolStream::channel();
+    let terminal_pusher = inner_tx.clone();
     let mut execute = std::pin::pin!(tool.execute_dyn(args, &ctx, &mut inner_tx));
-    let mut finished: Option<Result<ToolResult, ToolError>> = None;
-    let mut inner_open = true;
-    let terminate = cell.terminate_token();
-    while finished.is_none() {
+    let mut streamed_terminal = None;
+    let result = loop {
         tokio::select! {
             biased;
-            () = terminate.cancelled() => {
-                return Err("terminated before the tool answered".to_owned());
-            }
-            result = &mut execute => {
-                finished = Some(result);
-            }
-            item = inner_rx.recv(), if inner_open => match item {
-                Some(ToolStreamItem::Progress(update)) => {
-                    // Subagent progress is a protocol line
-                    // (`agent|role|phase|detail`) whose readers match the
-                    // first field exactly; prefixing it with the tool name
-                    // corrupted the line, so a subagent spawned inside a
-                    // script never registered as a live job in the UI.
-                    // Protocol lines cross verbatim; anything else keeps
-                    // its tool-name context.
-                    let message = if update
-                        .message
-                        .split_once('|')
-                        .is_some_and(|(prefix, _)| prefix == crate::builtin::AGENT_PROGRESS_PREFIX)
-                    {
-                        update.message
-                    } else {
-                        format!("{name}: {}", update.message)
-                    };
-                    let _ = progress.send(message);
+            result = &mut execute => break result,
+            item = inner_rx.recv() => {
+                if let Some(item) = item {
+                    forward_item(item, progress, name, &ctx.call_id, &mut streamed_terminal);
                 }
-                Some(ToolStreamItem::Terminal(_)) => {}
-                None => inner_open = false,
-            },
+            }
         }
+    };
+    // A synchronously finishing tool may have queued both progress and its
+    // terminal in the same poll. Claim the fallback, then drain the FIFO;
+    // the stream enforces that the first terminal wins across all clones.
+    let error = result.as_ref().err().map(ToString::to_string);
+    let claimed_fallback = terminal_pusher.terminal(match result {
+        Ok(result) => result,
+        Err(error) => ToolResult::error(error.to_string()),
+    });
+    while let Some(item) = inner_rx.try_recv() {
+        forward_item(item, progress, name, &ctx.call_id, &mut streamed_terminal);
     }
-    finished
-        .unwrap_or_else(|| {
-            Err(ToolError::Execution(
-                "tool ended without a result".to_owned(),
-            ))
-        })
-        .map_err(|error| error.to_string())
+    // Keep legacy dispatcher failures (`__error__`) unless the tool already
+    // claimed an explicit terminal result before returning its error.
+    if claimed_fallback && let Some(error) = error {
+        return Err(error);
+    }
+    streamed_terminal.ok_or_else(|| "tool ended without a result".to_owned())
+}
+
+fn forward_item(
+    item: ToolStreamItem,
+    progress: &broadcast::Sender<String>,
+    name: &str,
+    call_id: &str,
+    terminal: &mut Option<ToolResult>,
+) {
+    match item {
+        ToolStreamItem::Progress(update) => {
+            let _ = progress.send(
+                CodeModeProgress::Progress {
+                    call_id: call_id.to_owned(),
+                    name: name.to_owned(),
+                    message: update.message,
+                }
+                .encode(),
+            );
+        }
+        ToolStreamItem::Terminal(result) => *terminal = Some(result),
+    }
 }

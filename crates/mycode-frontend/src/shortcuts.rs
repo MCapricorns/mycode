@@ -168,7 +168,12 @@ mod tests {
         let list = shortcuts();
         let paste = list
             .iter()
-            .find(|shortcut| shortcut.action.contains("clipboard picture"))
+            .find(|shortcut| {
+                matches!(
+                    shortcut.action,
+                    "Attach the clipboard picture" | "附加剪贴板里的图片"
+                )
+            })
             .expect("the picture paste is a documented key");
         assert!(paste.keys.ends_with('V'));
     }

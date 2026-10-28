@@ -106,7 +106,10 @@ fn mycode_app_time() -> u64 {
 /// The gateway list wins; with no list yet (offline), the selected model is
 /// still offered so the request fails with the gateway's own connection
 /// error instead of "model not offered".
-pub(crate) fn provider_row(
+///
+/// Frontends use the same projection after loading the binding and catalog.
+#[must_use]
+pub fn provider_row(
     magpie: &MagpieSettings,
     catalog: &CatalogDocument,
 ) -> Option<ProviderSettings> {

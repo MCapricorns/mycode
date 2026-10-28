@@ -563,3 +563,4 @@ impl mycode_tools::ToolDyn for NoteTool {
 }
 
 mod dispatch;
+mod lifecycle;

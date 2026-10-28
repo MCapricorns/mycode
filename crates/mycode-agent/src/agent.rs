@@ -20,7 +20,6 @@
 //! the provider's detail on the interruption line, but the turn completes.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use mycode_tools::MycodeError;
 use mycode_tools::events::{AgentEvent, TurnOutcome};
@@ -171,7 +170,14 @@ impl Agent {
         // Child token: a cancelled child never leaks into the parent or
         // the next turn.
         let token = env.cancel.child_token();
-        run_turn(&self.config, &mut self.state, msg, env, &token).await
+        // A dropped prompt must cancel detached work started by its tools.
+        // Completed turns deliberately keep yielded code cells collectible.
+        let cancel_on_drop = token.clone().drop_guard();
+        let outcome = run_turn(&self.config, &mut self.state, msg, env, &token).await;
+        if matches!(outcome, Ok(TurnOutcome::Completed)) {
+            cancel_on_drop.disarm();
+        }
+        outcome
     }
 }
 
@@ -376,10 +382,7 @@ async fn dispatch_response_calls(
         .filter(|(_, call)| !is_agent_call(call))
         .map(|(index, _)| index)
         .collect();
-    // Set on the first poll of the agent batch. Dispatch emits ToolStarted
-    // before its first await, so a polled batch must not emit ToolStarted again.
-    let agent_polled = Arc::new(AtomicBool::new(false));
-    let polled = Arc::clone(&agent_polled);
+    let agent_started: Mutex<Vec<bool>> = Mutex::new(vec![false; agent_indexes.len()]);
     // Each `agent` result, stored in the poll that emits its ToolCompleted.
     // A cancel can stop the batch right after that poll; the call keeps its
     // result then, because completing it again closes its ledger call twice.
@@ -392,14 +395,15 @@ async fn dispatch_response_calls(
         Mutex::new(vec![None; other_indexes.len()]);
     let other_started: Mutex<Vec<bool>> = Mutex::new(vec![false; other_indexes.len()]);
     let results = &agent_results;
+    let agent_polled = &agent_started;
     let agent_ids = agent_indexes.clone();
     let other_ids = other_indexes.clone();
     let agents = async move {
-        polled.store(true, Ordering::SeqCst);
         let futures = agent_ids
             .iter()
             .enumerate()
             .map(|(slot, index)| async move {
+                agent_polled.lock()[slot] = true;
                 let message = turn::run_tool_call(env, token, calls[*index]).await;
                 results.lock()[slot] = Some(message);
                 // Yield so a ToolCompleted subscriber can commit the result
@@ -445,8 +449,8 @@ async fn dispatch_response_calls(
             next += batch_len;
         }
     };
-    tokio::pin!(agents);
-    tokio::pin!(others);
+    let mut agents = Box::pin(agents);
+    let mut others = Box::pin(others);
     let mut agents_done = false;
     let mut others_done = false;
     loop {
@@ -473,15 +477,19 @@ async fn dispatch_response_calls(
             }
         }
     }
+    // Stop tool drivers before publishing their synthetic closing rows.
+    // In particular, this runs a child's abort guard before its result is out.
+    drop(agents);
+    drop(others);
     let mut slots: Vec<Option<SharedMessage>> = Vec::with_capacity(calls.len());
     slots.resize_with(calls.len(), || None);
     // A finished batch filled every result; only an abandoned one has gaps.
-    let discard = agent_polled.load(Ordering::SeqCst);
     let finished = std::mem::take(&mut *agent_results.lock());
-    for (index, result) in agent_indexes.into_iter().zip(finished) {
+    let started = std::mem::take(&mut *agent_started.lock());
+    for ((index, result), started) in agent_indexes.into_iter().zip(finished).zip(started) {
         slots[index] = Some(match result {
             Some(message) => message,
-            None if discard => turn::discard_running_call(env, calls[index]),
+            None if started => turn::discard_running_call(env, calls[index]),
             None => turn::fail_cancelled_call(env, calls[index]),
         });
     }

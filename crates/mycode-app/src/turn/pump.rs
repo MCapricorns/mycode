@@ -507,7 +507,11 @@ fn relay(
     let (tx, rx) = mpsc::unbounded_channel();
     tokio::spawn(async move {
         loop {
-            let item = agent_rx.recv().await;
+            let item = tokio::select! {
+                biased;
+                () = tx.closed() => return,
+                item = agent_rx.recv() => item,
+            };
             let closed = matches!(item, Err(RecvError::Closed));
             if tx.send(item).is_err() || closed {
                 return;
@@ -575,6 +579,149 @@ pub(super) fn plain_user_text(user: &UserMessage) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dropping_the_pump_queue_releases_its_bus_receiver() {
+        let (bus, rx) = broadcast::channel(8);
+        let queue = relay(rx);
+        assert_eq!(bus.receiver_count(), 1);
+        drop(queue);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while bus.receiver_count() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("an idle relay must stop when its pump disappears");
+    }
+
+    #[tokio::test]
+    async fn an_aborted_turn_persists_its_partial_text_and_thinking() {
+        use mycode_agent::session::SessionService;
+        use mycode_agent::{
+            Agent, AgentConfig, EventStream, HookRunner, Provider, ProviderError, Request,
+            StopReason, StreamEvent, ThinkingBlock,
+        };
+
+        struct Interrupted;
+        impl Provider for Interrupted {
+            fn stream<'a>(
+                &'a self,
+                _request: &'a Request,
+                cancel: CancellationToken,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<EventStream, ProviderError>>
+                        + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(async move {
+                    let (sender, stream) = EventStream::channel(cancel);
+                    sender
+                        .send(StreamEvent::ThinkingDelta("kept thinking".to_owned()))
+                        .await;
+                    sender
+                        .send(StreamEvent::TextDelta("kept partial".to_owned()))
+                        .await;
+                    sender
+                        .send(StreamEvent::Error(ProviderError::new(
+                            mycode_agent::ProviderErrorKind::Cancelled,
+                        )))
+                        .await;
+                    Ok(stream)
+                })
+            }
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "mycode-pump-partial-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        let home = mycode_agent::HomeLayout::from_root(root.clone()).unwrap();
+        let service = SessionService::new(&home);
+        let created = service.create(None).await.unwrap();
+        let head = crate::ledger::branch_head(&service, &created.session_id, &created.branch_id)
+            .await
+            .unwrap();
+        let writer = HeadWriter::new(
+            service.clone(),
+            created.session_id.clone(),
+            created.branch_id.clone(),
+            head,
+        );
+        writer.write(EventKind::Message, b"start").await.unwrap();
+        let final_head = writer.clone();
+        let (events, mut frontend) = mpsc::unbounded_channel();
+        let (bus, rx) = broadcast::channel(32);
+        let cancel = CancellationToken::new();
+        let pump = tokio::spawn(
+            LedgerPump {
+                events,
+                writer,
+                session_id: Arc::from(created.session_id.as_str()),
+                deferred: DeferredSummaries::default(),
+                cancel: cancel.clone(),
+                usage_model: "test".to_owned(),
+                started: std::time::Instant::now(),
+            }
+            .run(rx),
+        );
+        let tools = mycode_agent::ToolRegistry::new();
+        let hooks = HookRunner::new();
+        let env = mycode_agent::TurnEnv::new(&Interrupted, &tools, &hooks)
+            .with_events(bus)
+            .with_cancel(cancel);
+        let mut agent = Agent::new(AgentConfig::new());
+        assert_eq!(
+            agent
+                .prompt(Message::User(UserMessage::text("start")), &env)
+                .await
+                .unwrap(),
+            TurnOutcome::Aborted
+        );
+        drop(env);
+        let terminal = pump.await.unwrap();
+        assert!(
+            matches!(terminal, BridgeEvent::ChatFailed { ref message, .. } if message == CHAT_CANCELLED)
+        );
+        let memory = crate::ledger::ledger_history(
+            &service,
+            &created.session_id,
+            &created.branch_id,
+            &final_head.stamp().await,
+        )
+        .await
+        .unwrap();
+        let Some(Message::Assistant(assistant)) = memory.last().map(AsRef::as_ref) else {
+            panic!("missing durable partial")
+        };
+        assert!(assistant.text().contains("kept partial"));
+        assert!(assistant.text().contains("interrupted by user"));
+        assert_eq!(assistant.stop_reason, StopReason::Error);
+        assert!(assistant.blocks.iter().any(|block| matches!(block, ContentBlock::Thinking(ThinkingBlock { text, .. }) if text == "kept thinking")));
+        let mut persisted = 0;
+        while let Ok(event) = frontend.try_recv() {
+            if let BridgeEvent::AssistantStep { entry, .. } = event {
+                persisted += 1;
+                assert!(entry.text.contains("kept partial"));
+                assert_eq!(entry.thinking, "kept thinking");
+            }
+        }
+        assert_eq!(persisted, 1);
+        drop(final_head);
+        service.shutdown().await;
+        for _ in 0..100 {
+            if !root.exists() || std::fs::remove_dir_all(&root).is_ok() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the session actor kept the temporary home open");
+    }
+
     #[test]
     fn an_agent_card_names_its_role_and_brief_while_the_call_streams() {
         let mut preparing = super::PreparingCalls::default();

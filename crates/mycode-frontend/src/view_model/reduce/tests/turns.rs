@@ -4,6 +4,42 @@ use super::*;
 use crate::view_model::{ComposerSubmit, composer_submit};
 
 #[test]
+fn queued_tool_events_do_not_duplicate_a_reopened_snapshot() {
+    let call = ConversationEntry {
+        event_id: "ledger-call".into(),
+        kind: EntryKind::ToolCall,
+        text: "agent  scout inspect code".into(),
+        call_id: Some("call-1".into()),
+        thinking: String::new(),
+    };
+    let result = ConversationEntry {
+        event_id: "ledger-result".into(),
+        kind: EntryKind::ToolResult,
+        text: "found the entry point".into(),
+        call_id: Some("call-1".into()),
+        thinking: String::new(),
+    };
+    let started = || FrontendAction::ToolStarted {
+        call_id: "call-1".into(),
+        provider_call_id: "provider-call".into(),
+        name: "agent".into(),
+        target: "scout inspect code".into(),
+    };
+    let mut state = open(vec![call], None);
+    reduce(&mut state, FrontendAction::TurnArmed);
+    reduce(&mut state, started());
+    assert_eq!(state.active.as_ref().unwrap().entries.len(), 1);
+    reduce(
+        &mut state,
+        FrontendAction::ToolResultAppended(result.clone()),
+    );
+    reduce(&mut state, FrontendAction::ToolResultAppended(result));
+    reduce(&mut state, started());
+    assert_eq!(state.active.as_ref().unwrap().entries.len(), 2);
+    assert!(state.live_jobs.is_empty());
+}
+
+#[test]
 fn a_finished_turn_promotes_its_live_meter_to_last_turn() {
     let mut state = open(Vec::new(), None);
     reduce(&mut state, FrontendAction::TurnArmed);
@@ -430,10 +466,7 @@ fn reopened(session: &str, running: bool) -> ActiveConversation {
 #[test]
 fn parked_steers_stay_with_their_chat() {
     let mut state = open(Vec::new(), None);
-    reduce(
-        &mut state,
-        FrontendAction::ConversationParked,
-    );
+    reduce(&mut state, FrontendAction::ConversationParked);
     reduce(
         &mut state,
         FrontendAction::SteersParked {

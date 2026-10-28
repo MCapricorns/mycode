@@ -366,7 +366,7 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                 refresh_subagent_status(state);
             }
             if let Some(conversation) = state.active.as_mut() {
-                conversation.entries.push(entry);
+                push_entry_once(conversation, entry);
             }
         }
         FrontendAction::ResourcesLoaded(files) => state.resources = files,

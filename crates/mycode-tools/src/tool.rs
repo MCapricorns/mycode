@@ -217,6 +217,11 @@ pub trait ToolDyn: Send + Sync {
     fn prompt_snippet_dyn(&self) -> Option<&str> {
         None
     }
+    /// Whether discovery supplies this schema on demand. Remote catalogs
+    /// stay out of the fixed code-mode prompt even after they connect.
+    fn schema_on_demand(&self) -> bool {
+        false
+    }
     /// Access mode for a retained local search root.
     fn search_access(&self) -> Option<SearchAccess> {
         None

@@ -5,11 +5,23 @@
 use mycode_app::BridgeCommand;
 use mycode_app::{AuthorityRevision, ProxyPreference};
 
-use super::{DriverMsg, Effect, FrontendDriver, SETTINGS_TEXT_SAVE_DEBOUNCE};
+use super::{DriverMsg, Effect, FrontendDriver, ReplyScope, SETTINGS_TEXT_SAVE_DEBOUNCE};
 use crate::forms;
 use crate::view_model::{FrontendAction, ProxyTestState};
 
 impl FrontendDriver {
+    /// Re-reads magpie's binding after a catalog update. Late startup reads
+    /// must not replace a binding loaded for a newer catalog.
+    pub(crate) fn reload_settings(&mut self) {
+        self.settings_load_generation = self.settings_load_generation.wrapping_add(1);
+        self.dispatch_scoped(
+            BridgeCommand::LoadSettings,
+            ReplyScope::Settings {
+                generation: self.settings_load_generation,
+            },
+        );
+    }
+
     // ---- the save pipeline ----
 
     /// Waits out the text-field debounce, then writes `settings.json`.

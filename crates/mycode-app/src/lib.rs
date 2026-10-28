@@ -24,6 +24,7 @@ mod projection;
 pub mod protocol;
 
 // Chain re-export: successors see every lower layer through this crate only.
+pub use magpie::provider_row as magpie_provider_row;
 pub use mycode_agent::*;
 
 pub use compaction::{

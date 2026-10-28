@@ -12,10 +12,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 
 use super::journal::{ScriptEventKind, ScriptJournal};
+use super::progress::{CodeModeProgress, InnerCallPhase};
 
 /// The journal entry type, as seen from the cell module's vocabulary.
 pub use super::journal::JournalEntry as ScriptEvent;
@@ -84,6 +85,13 @@ pub enum ScriptOutcome {
 pub struct InnerCallSummary {
     /// Journal sequence of the call.
     pub seq: u64,
+    /// Exact ToolCtx id used to dispatch this call. Absent in older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
+    /// Current or terminal call state. Absent in older records, which only
+    /// stored summaries after completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<InnerCallPhase>,
     /// Registry tool name the script called.
     pub name: String,
     /// One-line target (`tool_target` of the call's arguments).
@@ -93,6 +101,26 @@ pub struct InnerCallSummary {
     /// The call's UI-only diff (edits and writes), when it made one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,
+}
+
+impl InnerCallSummary {
+    fn progress_event(&self) -> Option<CodeModeProgress> {
+        let call_id = self.call_id.clone()?;
+        Some(match self.phase? {
+            InnerCallPhase::Running => CodeModeProgress::Started {
+                call_id,
+                name: self.name.clone(),
+                seq: self.seq,
+                target: self.target.clone(),
+            },
+            phase => CodeModeProgress::Completed {
+                call_id,
+                name: self.name.clone(),
+                phase,
+                is_error: self.is_error,
+            },
+        })
+    }
 }
 
 struct CellInner {
@@ -109,6 +137,27 @@ struct CellInner {
     /// from, so a stale `Yielded` phase does not wake the next `wait_code`
     /// immediately.
     yield_epoch: u64,
+}
+
+impl CellInner {
+    fn push_output(&mut self, text: &str, cap: usize) {
+        if self.truncated {
+            return;
+        }
+        if !self.output.is_empty() {
+            if self.output.len() == cap {
+                self.truncated = true;
+                return;
+            }
+            self.output.push('\n');
+        }
+        let mut end = text.len().min(cap.saturating_sub(self.output.len()));
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.output.push_str(&text[..end]);
+        self.truncated = end < text.len();
+    }
 }
 
 /// One code-mode script execution.
@@ -128,6 +177,10 @@ pub struct ScriptCell {
     max_output_bytes: usize,
     inner: RwLock<CellInner>,
     notify: Notify,
+    /// Bounded live progress. Each run/wait caller subscribes without
+    /// keeping a ToolStream alive after that call returns. Snapshots retain
+    /// inner-call ids and terminal states even when no caller is listening.
+    progress: broadcast::Sender<String>,
     terminate: CancellationToken,
 }
 
@@ -150,6 +203,7 @@ impl ScriptCell {
                 yield_epoch: 0,
             }),
             notify: Notify::new(),
+            progress: broadcast::channel(256).0,
             terminate: CancellationToken::new(),
         }
     }
@@ -212,20 +266,7 @@ impl ScriptCell {
 
     /// Appends text to the model-visible output, truncating at the cap.
     pub fn push_output(&self, text: &str) {
-        let mut inner = self.inner.write();
-        if !inner.output.is_empty() {
-            inner.output.push('\n');
-        }
-        inner.output.push_str(text);
-        let cap = self.max_output_bytes;
-        if inner.output.len() > cap {
-            let mut end = cap;
-            while !inner.output.is_char_boundary(end) {
-                end -= 1;
-            }
-            inner.output.truncate(end);
-            inner.truncated = true;
-        }
+        self.inner.write().push_output(text, self.max_output_bytes);
     }
 
     /// Appends one journalled step under the sequence the script reserved.
@@ -245,9 +286,50 @@ impl ScriptCell {
         self.inner.read().journal.clone()
     }
 
-    /// Records one inner call for the UI, beside its journal entry.
+    /// Records or updates one inner call without changing its script order.
     pub fn record_inner_call(&self, summary: InnerCallSummary) {
-        self.inner.write().inner_calls.push(summary);
+        let mut inner = self.inner.write();
+        if let Some(existing) = inner
+            .inner_calls
+            .iter_mut()
+            .find(|call| call.seq == summary.seq)
+        {
+            *existing = summary;
+        } else {
+            inner.inner_calls.push(summary);
+        }
+    }
+
+    /// Publishes the lifecycle transition under the same lock as its
+    /// snapshot. A terminal transition wins once, including cell cancellation.
+    pub(crate) fn publish_inner_call(&self, summary: InnerCallSummary) {
+        let mut inner = self.inner.write();
+        if let Some(existing) = inner
+            .inner_calls
+            .iter_mut()
+            .find(|call| call.seq == summary.seq)
+        {
+            if existing
+                .phase
+                .is_some_and(|phase| phase != InnerCallPhase::Running)
+            {
+                return;
+            }
+            *existing = summary.clone();
+        } else {
+            inner.inner_calls.push(summary.clone());
+        }
+        if let Some(event) = summary.progress_event() {
+            let _ = self.progress.send(event.encode());
+        }
+    }
+
+    pub(crate) fn progress_sender(&self) -> broadcast::Sender<String> {
+        self.progress.clone()
+    }
+
+    pub(crate) fn subscribe_progress(&self) -> broadcast::Receiver<String> {
+        self.progress.subscribe()
     }
 
     /// The inner calls so far, in the order the script made them.
@@ -286,6 +368,15 @@ impl ScriptCell {
                 return;
             }
             inner.phase = CellPhase::Terminated;
+            for call in &mut inner.inner_calls {
+                if call.phase == Some(InnerCallPhase::Running) {
+                    call.phase = Some(InnerCallPhase::Cancelled);
+                    call.is_error = true;
+                    if let Some(event) = call.progress_event() {
+                        let _ = self.progress.send(event.encode());
+                    }
+                }
+            }
         }
         self.terminate.cancel();
         self.notify.notify_waiters();
@@ -317,11 +408,7 @@ impl ScriptCell {
                 ScriptOutcome::Failed(_) => CellPhase::Failed,
             };
             if let ScriptOutcome::Failed(error) = &outcome {
-                if !inner.output.is_empty() {
-                    inner.output.push('\n');
-                }
-                inner.output.push_str("error: ");
-                inner.output.push_str(error);
+                inner.push_output(&format!("error: {error}"), self.max_output_bytes);
             }
         }
         self.notify.notify_waiters();
@@ -457,7 +544,7 @@ impl CodeCells {
                 .iter()
                 .map(|(id, cell)| (cell.created, id.clone(), cell.phase().is_terminal()))
                 .collect();
-            finished.sort_by_key(|(created, _, _)| *created);
+            finished.sort_by_key(|(created, _, terminal)| (!terminal, *created));
             for (_, id, terminal) in finished {
                 if cells.len() < MAX_RETAINED_CELLS {
                     break;
@@ -518,7 +605,11 @@ mod tests {
         let cell = CodeCells::new().create("s", 32);
         cell.push_output(&"a".repeat(40));
         let snapshot = cell.snapshot();
-        assert!(snapshot.output.starts_with("aaaaaaaaaa"), "{}", snapshot.output);
+        assert!(
+            snapshot.output.starts_with("aaaaaaaaaa"),
+            "{}",
+            snapshot.output
+        );
         assert!(snapshot.output.contains("output truncated at 32 bytes"));
         assert!(snapshot.output.len() < 40 + 64);
     }
@@ -600,6 +691,21 @@ mod tests {
             "the oldest finished cell goes first"
         );
         assert!(cells.get("s", last.cell_id()).is_some());
+    }
+
+    #[test]
+    fn eviction_preserves_older_running_work_when_a_finished_cell_exists() {
+        let cells = CodeCells::new();
+        let oldest = cells.create("s", 16);
+        let finished = cells.create("s", 16);
+        finished.finish(ScriptOutcome::Completed);
+        for _ in 2..super::MAX_RETAINED_CELLS {
+            cells.create("s", 16);
+        }
+        cells.create("s", 16);
+        assert!(cells.get("s", oldest.cell_id()).is_some());
+        assert!(!oldest.terminated());
+        assert!(cells.get("s", finished.cell_id()).is_none());
     }
 
     /// With nothing finished the oldest running cell is stopped, so a model

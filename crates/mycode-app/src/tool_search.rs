@@ -12,7 +12,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bm25::{Embedder, EmbedderBuilder, Language, Scorer};
-use mycode_agent::{ToolCtx, ToolDyn, ToolError, ToolResult, ToolStream, ToolSpec};
+use mycode_agent::{ToolCtx, ToolDyn, ToolError, ToolResult, ToolSpec, ToolStream};
 use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -55,8 +55,10 @@ impl ToolSearchIndex {
         let mut changed = false;
         for (key, tool) in entries {
             let text = format!(
-                "{key} {} {} {}",
+                "{key} {} {} {} {} {}",
+                identifier_words(key),
                 tool.server_id(),
+                identifier_words(tool.server_id()),
                 tool.description(),
                 tool.snippet()
             );
@@ -74,7 +76,16 @@ impl ToolSearchIndex {
         let Some(embedder) = &state.embedder else {
             return Vec::new();
         };
-        let scored = state.scorer.matches(&embedder.embed(query));
+        let mut scored = state.scorer.matches(&embedder.embed(query));
+        // The scorer gathers matches from a HashSet and leaves score ties
+        // unordered. Break ties before limiting so repeated searches return
+        // the same tools and serialized order.
+        scored.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         scored
             .into_iter()
             .filter(|hit| hit.score > 0.0)
@@ -88,6 +99,34 @@ impl ToolSearchIndex {
     pub(crate) fn len(&self) -> usize {
         self.state.read().documents.len()
     }
+}
+
+/// Adds words from snake_case/camelCase identifiers to the search corpus.
+/// Keep the original identifier beside these words so exact-name queries
+/// continue to match the same catalog key.
+fn identifier_words(identifier: &str) -> String {
+    let mut words = String::with_capacity(identifier.len());
+    let mut chars = identifier.chars().peekable();
+    let mut previous: Option<char> = None;
+    while let Some(ch) = chars.next() {
+        if !ch.is_alphanumeric() {
+            words.push(' ');
+        } else {
+            if ch.is_uppercase()
+                && previous.is_some_and(|prev| {
+                    prev.is_lowercase()
+                        || prev.is_numeric()
+                        || (prev.is_uppercase()
+                            && chars.peek().is_some_and(|next| next.is_lowercase()))
+                })
+            {
+                words.push(' ');
+            }
+            words.push(ch);
+        }
+        previous = Some(ch);
+    }
+    words
 }
 
 impl IndexState {
@@ -207,6 +246,40 @@ impl ToolDyn for ToolSearchTool {
 #[cfg(test)]
 mod tests {
     use super::ToolSearchIndex;
+    use crate::mcp_tools::stub_catalog_tool;
+
+    #[test]
+    fn identifier_words_are_searchable_without_description_help() {
+        let index = ToolSearchIndex::new();
+        let snake = stub_catalog_tool("docs", "fetch_issue", "Perform an action.");
+        let camel = stub_catalog_tool("docs", "createPullRequest", "Perform an action.");
+        index.insert_many([
+            ("fetch_issue", snake.as_ref()),
+            ("createPullRequest", camel.as_ref()),
+        ]);
+        assert_eq!(index.search("issue", 8), ["fetch_issue"]);
+        assert_eq!(index.search("pull request", 8), ["createPullRequest"]);
+        assert_eq!(index.search("fetch_issue", 8)[0], "fetch_issue");
+    }
+
+    #[test]
+    fn equal_scores_have_stable_key_order() {
+        let index = ToolSearchIndex::new();
+        let tools: Vec<_> = (0..12)
+            .map(|i| {
+                let key = format!("tool{i:02}");
+                let tool = stub_catalog_tool("docs", &key, "Common lookup.");
+                (key, tool)
+            })
+            .collect();
+        index.insert_many(
+            tools
+                .iter()
+                .map(|(key, tool)| (key.as_str(), tool.as_ref())),
+        );
+        let expected: Vec<_> = tools.iter().take(8).map(|(key, _)| key.clone()).collect();
+        assert_eq!(index.search("common", 8), expected);
+    }
 
     #[test]
     fn an_empty_corpus_finds_nothing() {

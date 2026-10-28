@@ -8,12 +8,12 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::ToolSpec;
 use crate::code_mode::{CodeCells, RunCodeTool, WaitCodeTool};
 use crate::ctx::ToolCtx;
 use crate::registry::ToolRegistry;
 use crate::stream::{ToolStream, ToolStreamItem};
 use crate::tool::{ToolDyn, ToolError, ToolResult};
-use crate::ToolSpec;
 
 struct SlowTool;
 
@@ -267,7 +267,10 @@ async fn a_long_script_yields_a_cell_and_wait_code_stops_it() {
     .expect("run_code returns a running cell");
     assert!(!running.is_error, "{running:?}");
     let text = text_of(&running);
-    assert!(text.contains("Script running with cell ID cell-0"), "{text}");
+    assert!(
+        text.contains("Script running with cell ID cell-0"),
+        "{text}"
+    );
     let cell_id = running
         .details
         .as_ref()
@@ -285,7 +288,10 @@ async fn a_long_script_yields_a_cell_and_wait_code_stops_it() {
     .expect("wait_code stops the cell");
     let text = text_of(&stopped);
     assert!(text.contains("terminated"), "{text}");
-    assert_eq!(cells.get(SCOPE, "cell-0").unwrap().phase(), super::CellPhase::Terminated);
+    assert_eq!(
+        cells.get(SCOPE, "cell-0").unwrap().phase(),
+        super::CellPhase::Terminated
+    );
 }
 
 #[tokio::test]
@@ -411,7 +417,11 @@ async fn the_progress_stream_closes_when_run_code_returns_a_running_cell() {
     let task_cells = Arc::clone(&cells);
     let handle = tokio::spawn(async move {
         let registry = registry();
-        let tool = RunCodeTool::new(Arc::clone(&registry), Arc::clone(&task_cells), SCOPE.to_owned());
+        let tool = RunCodeTool::new(
+            Arc::clone(&registry),
+            Arc::clone(&task_cells),
+            SCOPE.to_owned(),
+        );
         let ctx = ToolCtx::new(&root);
         tool.execute_dyn(
             json!({
@@ -439,7 +449,10 @@ async fn the_progress_stream_closes_when_run_code_returns_a_running_cell() {
             .any(|item| matches!(item, ToolStreamItem::Progress(_))),
         "the call progress reached the stream: {items:?}"
     );
-    let result = handle.await.expect("the task ran").expect("run_code returns");
+    let result = handle
+        .await
+        .expect("the task ran")
+        .expect("run_code returns");
     assert!(text_of(&result).contains("Script running with cell ID cell-0"));
     if let Some(cell) = cells.get(SCOPE, "cell-0") {
         cell.terminate();
@@ -493,6 +506,74 @@ async fn a_panicking_tool_settles_its_cell() {
         cells.get(SCOPE, "cell-0").expect("cell").phase(),
         super::CellPhase::Failed
     );
+}
+
+/// Stopping a script must retain the native shell's process cleanup path.
+#[cfg(windows)]
+#[tokio::test]
+async fn terminating_a_code_cell_reaps_its_shell_process() {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+
+    let workspace = workspace("cancel-process");
+    let cells = Arc::new(CodeCells::new());
+    let registry = Arc::new(ToolRegistry::new());
+    let shell = crate::ShellTool::new();
+    let name = shell.spec().name;
+    registry.register(Arc::new(shell));
+    let tool = RunCodeTool::new(Arc::clone(&registry), Arc::clone(&cells), SCOPE.to_owned());
+    let command = "[IO.File]::WriteAllText((Join-Path $PWD 'started.pid'), [string]$PID); Start-Sleep -Seconds 30; Set-Content -Path late.txt -Value late";
+    let script = format!("call({}, #{{ command: {} }});", json!(name), json!(command));
+    let ctx = ToolCtx::new(&workspace.0);
+    let result = tool
+        .execute_dyn(
+            json!({"script": script, "yield_time_ms": 10}),
+            &ctx,
+            &mut ToolStream::closed(),
+        )
+        .await
+        .unwrap();
+    assert!(text_of(&result).contains("Script running"), "{result:?}");
+    let cell = cells.get(SCOPE, "cell-0").unwrap();
+    // Ensure an assertion failure also stops the test's process.
+    let _stop_on_drop = super::TerminateOnDrop::new(Arc::clone(&cell));
+    let pid = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(text) = std::fs::read_to_string(workspace.0.join("started.pid"))
+                && let Ok(pid) = text.parse::<u32>()
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the script shell started");
+    // SAFETY: OpenProcess creates an owned handle for this test's child.
+    let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    assert!(
+        !raw.is_null(),
+        "open child process: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: `raw` is non-null and uniquely owned after OpenProcess.
+    let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+    cell.terminate();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            // SAFETY: the owned handle stays valid throughout this wait.
+            if unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } == WAIT_OBJECT_0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("terminating code mode reaps its shell process");
+    assert!(!workspace.0.join("late.txt").exists());
 }
 
 /// The registry owns its tools; a strong handle inside `run_code` would make

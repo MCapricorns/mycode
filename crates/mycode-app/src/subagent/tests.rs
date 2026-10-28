@@ -2,20 +2,6 @@ use mycode_agent::{HomeLayout, SubagentSettings, builtin_roles};
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-// Removed: handoff_includes_diff_before_the_worktree_is_removed and the
-// probe/formatter tests — the hang was environmental (git .output() blocked
-// by AV/indexing on %TEMP%), the test passed 1.83s standalone and 2.31s in
-// the subagent group. Coverage of format_subagent_handoff's error path lives
-// in the worktree module's own tests.
-
-// Removed: a_dropped_run_still_releases_its_worktree,
-// recovery_keeps_the_leases_of_running_processes,
-// a_dropped_driver_stops_its_child_and_unpublishes_the_cancel — all spawn
-// `git` or `git cat-file` as subprocesses and intermittently hang on this
-// Windows host (AV/indexing on %TEMP%). The behaviors they covered (lease
-// release on drop, live-process lease recovery, AbortOnDrop cancel) are
-// exercised by the app-level integration paths, not by these unit tests.
-
 #[test]
 fn parent_dispatch_names_scout_and_artisan_only() {
     let text = super::delegation_directive(&builtin_roles(), &SubagentSettings::default());
@@ -495,11 +481,8 @@ fn the_read_only_filter_runs_on_the_drained_tools() {
 
     // Registration after the filter leaves only the readable tool.
     let registry = mycode_agent::ToolRegistry::new();
-    let catalog = crate::mcp_tools::McpCatalog::new(
-        None,
-        std::collections::BTreeSet::new(),
-        Vec::new(),
-    );
+    let catalog =
+        crate::mcp_tools::McpCatalog::new(None, std::collections::BTreeSet::new(), Vec::new());
     let index = crate::tool_search::ToolSearchIndex::new();
     crate::mcp_tools::register_ready_server(&registry, &catalog, &index, server, filtered);
     assert!(registry.get("lookup").is_some());
@@ -549,8 +532,21 @@ fn artisan_gets_the_same_tool_guidance_as_the_parent() {
         kind: mycode_agent::ShellKind::Bash,
         program: std::path::PathBuf::from("/bin/bash"),
     };
-    let registry =
-        super::child_registry_with(&allowed, mycode_agent::ShellTool::forcing(shell.clone()));
+    let registry = std::sync::Arc::new(super::child_registry_with(
+        &allowed,
+        mycode_agent::ShellTool::forcing(shell.clone()),
+    ));
+    let cells = std::sync::Arc::new(mycode_agent::CodeCells::new());
+    registry.register(std::sync::Arc::new(mycode_agent::RunCodeTool::new(
+        std::sync::Arc::clone(&registry),
+        std::sync::Arc::clone(&cells),
+        "artisan-guidance-test".to_owned(),
+    )));
+    registry.register(std::sync::Arc::new(mycode_agent::WaitCodeTool::new(
+        cells,
+        "artisan-guidance-test".to_owned(),
+    )));
+    registry.expose_only(&["bash", "run_code", "wait_code"]);
     let prompt = super::subagent_system_prompt(
         &artisan,
         &registry,
@@ -763,6 +759,33 @@ fn a_stopped_child_answers_with_its_last_text() {
             .to_string()
             .contains("no answer")
     );
+}
+
+#[test]
+fn concurrent_children_of_one_role_cannot_collect_each_others_cells() {
+    let cells = mycode_agent::CodeCells::new();
+    let first_scope = super::child_code_scope("session", "artisan");
+    let second_scope = super::child_code_scope("session", "artisan");
+    let first = cells.create(&first_scope, 1024);
+    assert!(cells.get(&first_scope, first.cell_id()).is_some());
+    assert!(cells.get(&second_scope, first.cell_id()).is_none());
+}
+
+#[test]
+fn an_empty_final_response_never_reuses_an_earlier_child_answer() {
+    for stop in [
+        mycode_agent::StopReason::Stop,
+        mycode_agent::StopReason::Error,
+    ] {
+        let messages = vec![
+            assistant_msg("earlier tool preamble", mycode_agent::StopReason::ToolUse),
+            assistant_msg("", stop),
+        ];
+        assert!(
+            super::subagent_answer(Ok(mycode_agent::TurnOutcome::Completed), &messages, "scout",)
+                .is_err()
+        );
+    }
 }
 
 #[test]
