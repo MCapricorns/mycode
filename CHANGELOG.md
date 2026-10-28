@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.32] - 2026-10-28
+
 ### Changed
 
 - 原生界面重构为顶部项目书架、会话账本与带改动轨迹的工作页；重做 wiki，统一纸白、墨黑、朱红配色和 bracket-M 图标。slogan 为「每次改动，有迹可循。」，浅色与深色保持同一套布局。
@@ -509,7 +511,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.31...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.32...HEAD
+[0.12.32]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.32
 [0.12.31]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.31
 [0.12.30]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.30
 [0.12.29]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.29
