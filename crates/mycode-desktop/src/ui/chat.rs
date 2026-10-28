@@ -10,8 +10,8 @@ mod tools;
 mod transcript;
 mod welcome;
 
-pub(crate) use composer::composer_placeholder;
 pub(crate) use composer::busy_enter_opens_choice;
+pub(crate) use composer::composer_placeholder;
 pub(crate) use menus::reasoning_row_label;
 pub(crate) use tools::parse_diff_hunk_header;
 pub(crate) use welcome::new_task_label;
@@ -256,10 +256,39 @@ pub(super) fn render_chat(
             .iter()
             .map(|call| ToolRow { call, result: None })
             .collect();
-        let preparing_element = (!preparing.is_empty()).then(|| {
-            let rows = preparing
-                .iter()
-                .map(|tool| render_one_tool(tool, workspace, sending, reduce_motion, cx));
+        let mut pending_rows: Vec<_> = preparing
+            .iter()
+            .map(|tool| render_one_tool(tool, workspace, sending, reduce_motion, cx))
+            .collect();
+        // Code-mode children are represented durably inside their outer
+        // result, but need their own live cancel control before it arrives.
+        for job in &workspace.vm().live_jobs {
+            if entries.iter().any(|entry| {
+                entry.kind == EntryKind::ToolCall
+                    && entry.call_id.as_deref() == Some(job.call_id.as_str())
+            }) {
+                continue;
+            }
+            let call = ConversationEntry {
+                event_id: format!("inner-{}", job.call_id),
+                kind: EntryKind::ToolCall,
+                text: mycode_frontend::tool_label("agent", &format!("{} {}", job.role, job.label))
+                    .into(),
+                call_id: Some(job.call_id.clone()),
+                thinking: String::new(),
+            };
+            pending_rows.push(render_one_tool(
+                &ToolRow {
+                    call: &call,
+                    result: None,
+                },
+                workspace,
+                sending,
+                reduce_motion,
+                cx,
+            ));
+        }
+        let preparing_element = (!pending_rows.is_empty()).then(|| {
             div()
                 .w_full()
                 .min_w_0()
@@ -268,7 +297,7 @@ pub(super) fn render_chat(
                 .border_color(cx.theme().border.opacity(0.65))
                 .flex()
                 .flex_col()
-                .children(rows)
+                .children(pending_rows)
                 .into_any_element()
         });
         (
@@ -294,7 +323,7 @@ pub(super) fn render_chat(
     // strip between the sidebar and that column. When the card floats,
     // reserve its width or the transcript and composer slide underneath it.
     let details_docked = workspace.vm().inspector_open && workspace.vm().inspector_pinned;
-    let chat_width = f32::from(window.viewport_size().width) - super::sidebar::WIDTH_PX;
+    let chat_width = f32::from(window.viewport_size().width) - super::sidebar::width(window);
     let details_reserve = super::context::chat_right_reserve(
         workspace.vm().inspector_open,
         details_docked,
@@ -309,6 +338,7 @@ pub(super) fn render_chat(
         .flex_col()
         .bg(super::skin::ambient(theme))
         .when(details_reserve > 0., |this| this.pr(px(details_reserve)))
+        .child(super::workbench::render_page_band(workspace, window, cx))
         .child(
             div()
                 .id("conversation-frame")

@@ -169,6 +169,19 @@ fn code_mode_rows_have_their_own_verbs_and_batch_phrase() {
 }
 
 #[test]
+fn code_call_snapshots_preserve_cancelled_and_yielded_states() {
+    use mycode_frontend::InnerCallPhase;
+    let text = "[code calls]\nagent  artisan (cancelled)\nagent  scout (running)\nread  src/lib.rs";
+    let (_, calls) = split_code_calls(text).expect("snapshot");
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].phase, InnerCallPhase::Cancelled);
+    assert!(!calls[0].failed);
+    assert_eq!(calls[1].phase, InnerCallPhase::Running);
+    assert_eq!(calls[2].phase, InnerCallPhase::Completed);
+    assert_eq!(code_call_count(text), 3);
+}
+
+#[test]
 fn a_run_code_result_splits_into_its_inner_calls() {
     let text = "script output\n[code calls]\nread  src/lib.rs\nedit  src/main.rs (failed)\n+ new\n- old\ngrep  needle src";
     let (head, calls) = split_code_calls(text).expect("breakdown");

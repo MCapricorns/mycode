@@ -1,4 +1,4 @@
-//! The composer bar: a floating rounded card at the bottom of the conversation column.
+//! The command dock: an anchored work surface below the current session page.
 //!
 //! Model, reasoning, and folder sit as pill chips inside the bar, alongside a
 //! `⌘K` / `Ctrl+K` hint; typing `@` references a project file. While a turn
@@ -22,8 +22,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    BoxShadow, Context, Focusable as _, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, hsla, px,
+    Context, Focusable as _, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use crate::i18n::t;
@@ -62,8 +62,7 @@ pub(crate) fn busy_enter_opens_choice(sending: bool, draft: &str, has_attachment
     sending && !draft.trim().is_empty() && !has_attachments
 }
 
-/// Centered composer measure. Narrower than the chat pane; prose and tool
-/// cards stay full width and left-aligned.
+/// Maximum reading measure for the mention menu. The command dock fills the page.
 pub(super) const COMPOSER_MAX_PX: f32 = 760.;
 
 /// Bottom composer: a floating rounded card with soft elevation, pill chips for
@@ -104,8 +103,8 @@ pub(super) fn render_composer(
     // field. It paints only while the turn runs; a turn that ends with it
     // open leaves a stale flag the next busy Enter reuses harmlessly,
     // because both picks re-read the live draft and state.
-    let send_choice = (workspace.send_choice_open && sending)
-        .then(|| render_send_choice(cx).into_any_element());
+    let send_choice =
+        (workspace.send_choice_open && sending).then(|| render_send_choice(cx).into_any_element());
     let compacting = workspace.vm().compacting;
     let has_pending_ask = workspace.vm().pending_ask.is_some();
     if workspace.composer_busy != sending {
@@ -229,18 +228,35 @@ pub(super) fn render_composer(
         .flex_row()
         .justify_center()
         .w_full()
+        .flex_shrink_0()
+        .border_t_1()
+        .border_color(theme.border)
+        .bg(theme.sidebar)
         .px_4()
-        .pt(skin::space(1))
-        .pb(skin::space(3))
+        .py_3()
         .child(
             div()
                 .id("composer-column")
                 .w_full()
-                .max_w(px(COMPOSER_MAX_PX))
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap_2()
+                .child(
+                    div()
+                        .id("command-dock-label")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(t("Command dock", "指令坞"))
+                        .when_some(context_meter(workspace), |this, meter| {
+                            this.child(composer_meter_chip(meter, theme))
+                        }),
+                )
                 .when_some(steer_panel, |this, steers| this.child(steers))
                 .when_some(compact_card, |this, card| this.child(card))
                 .when_some(ask_card, |this, card| this.child(card))
@@ -256,11 +272,10 @@ pub(super) fn render_composer(
                         .py(skin::space(2))
                         .w_full()
                         .min_h(px(56.))
-                        .rounded(px(20.))
+                        .rounded(px(8.))
                         .border_1()
-                        .border_color(skin::glass_border(theme))
+                        .border_color(skin::border_strong(theme))
                         .bg(skin::popover(theme))
-                        .shadow(composer_elevation(theme.is_dark()))
                         // Dropping a picture or a code file attaches it to
                         // the next prompt; folders still bind the project.
                         .can_drop(|value, _, _| value.is::<gpui_kit::ExternalPaths>())
@@ -327,9 +342,6 @@ pub(super) fn render_composer(
                                 .child(model_chip)
                                 .when_some(thinking_chip, |this, chip| this.child(chip))
                                 .child(div().flex_1().min_w(px(8.)))
-                                .when_some(context_meter(workspace), |this, meter| {
-                                    this.child(composer_meter_chip(meter, theme))
-                                })
                                 .child(composer_palette_hint(cx))
                                 // While a turn runs the arrow stays: it
                                 // steers the draft in; the stop sits beside
@@ -343,11 +355,6 @@ pub(super) fn render_composer(
         )
 }
 
-fn composer_elevation(dark: bool) -> Vec<BoxShadow> {
-    let alpha = if dark { 0.35 } else { 0.08 };
-    vec![BoxShadow::new(px(0.), px(8.), hsla(0., 0., 0., alpha)).blur_radius(px(24.))]
-}
-
 /// Send arrow while idle, stop square while a turn runs.
 ///
 /// Stop ends the whole turn and every subagent. It sits where the send
@@ -359,10 +366,8 @@ fn composer_round_button(
 ) -> impl IntoElement {
     let theme = cx.theme();
     let active = sending || can_send;
-    // A sendable draft gets the primary treatment — the same soft accent
-    // fill and thin accent edge as a glass button — so the one action the
-    // composer exists for carries the accent instead of sitting grey.
-    let send_fill = crate::ui::desk::primary_fill(theme.accent, theme.primary);
+    // The sendable draft is the primary action; stop stays a distinct square.
+    let send_fill = theme.primary;
     div()
         .id(if sending {
             "composer-stop"
@@ -376,7 +381,9 @@ fn composer_round_button(
         .flex()
         .items_center()
         .justify_center()
-        .text_color(if active {
+        .text_color(if !sending && can_send {
+            theme.primary_foreground
+        } else if active {
             theme.foreground
         } else {
             theme.muted_foreground
@@ -384,7 +391,7 @@ fn composer_round_button(
         .when(!sending && can_send, |this| {
             this.bg(send_fill)
                 .border_1()
-                .border_color(crate::ui::desk::primary_edge(theme.primary))
+                .border_color(theme.primary)
                 .cursor_pointer()
                 .hover(|style| style.bg(crate::ui::desk::deepen(send_fill)))
         })

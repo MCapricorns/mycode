@@ -1,5 +1,5 @@
-//! GPUI rendering for the workspace: a frosted sidebar, a conversation that
-//! fills the space up to Details, and an inspector on the right.
+//! GPUI rendering for the workspace: a quiet frame, a paper-like reading
+//! surface, and an inspector on the right.
 mod chat;
 pub(crate) mod command_palette;
 mod context;
@@ -13,6 +13,7 @@ mod skin;
 pub(crate) mod syntax;
 mod title_bar;
 mod update_dialog;
+mod workbench;
 
 use gpui_kit::Focusable as _;
 use gpui_kit::assets::IconName;
@@ -27,8 +28,8 @@ use gpui_kit::{
 use crate::view_model::{MainView, SettingsSection};
 use crate::workspace::{ToastKind, Workspace};
 
-pub(crate) use chat::composer_placeholder;
 pub(crate) use chat::busy_enter_opens_choice;
+pub(crate) use chat::composer_placeholder;
 pub(crate) use command_palette::ToggleCommandPalette;
 
 /// Renders the whole window chrome and content.
@@ -59,6 +60,7 @@ pub fn render_root(
     let theme = cx.theme();
     let ui_font = theme.font_family.clone();
     let fg = theme.foreground;
+    let frame = theme.sidebar;
     let focus_handle = workspace.focus_handle().clone();
     // Opening settings unmounts the composer and the sidebar control that
     // was focused. A stale focus handle is not in this frame, so key dispatch
@@ -93,8 +95,7 @@ pub fn render_root(
         // would otherwise swallow it, and Back to desk advertises Esc.
         // Bubble still sees Escape on the desk after a focused field declines it.
         .track_focus(&focus_handle)
-        // No opaque page here. Rails and the reading column paint their own
-        // fills so the window blur shows through the chrome.
+        .bg(frame)
         .can_drop(|value, _, _| value.is::<gpui_kit::ExternalPaths>())
         .on_drop(
             cx.listener(|workspace, paths: &gpui_kit::ExternalPaths, _, cx| {
@@ -137,6 +138,9 @@ pub fn render_root(
         }))
         .font_family(ui_font)
         .child(title_bar::render_title_bar(workspace, window, cx))
+        .when(workspace.vm().view == MainView::Chat, |this| {
+            this.child(workbench::render_project_shelf(workspace, window, cx))
+        })
         .child(
             div()
                 .id("body")
@@ -228,16 +232,20 @@ fn main_pane(
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .h_full()
+            .mr(px(8.))
+            .mb(px(8.))
+            .rounded(skin::radius_card())
+            .border_1()
+            .border_color(cx.theme().border)
+            .overflow_hidden()
             .flex()
             .flex_col()
             .child(pane),
     )
 }
 
-/// Gap between the title bar and the first toast. It clears the 44px
-/// settings header and the Details/drawer header rows that start just below
-/// the title bar, so a notice never sits on their buttons.
+/// Settings header clearance below the title bar. The workbench also clears
+/// its project shelf and session band, so notices do not cover scope or actions.
 const TOAST_TOP_GAP: f32 = 52.;
 /// Gap between the toast stack and the right edge of the chat surface.
 const TOAST_EDGE_GAP: f32 = 16.;
@@ -254,7 +262,12 @@ fn render_toasts(
 ) -> impl IntoElement {
     let theme = cx.theme();
     let toasts = workspace.toasts();
-    let top = title_bar::BAR_HEIGHT + TOAST_TOP_GAP;
+    let top = title_bar::BAR_HEIGHT
+        + if workspace.vm().view == MainView::Chat {
+            workbench::SHELF_HEIGHT + 80.
+        } else {
+            TOAST_TOP_GAP
+        };
     div()
         .id("toasts")
         .max_h((window.viewport_size().height - px(top + TOAST_EDGE_GAP)).max(px(120.)))

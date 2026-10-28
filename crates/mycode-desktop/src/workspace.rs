@@ -79,10 +79,8 @@ pub fn open_window(home: HomeLayout, applied_update: Option<String>, cx: &mut Ap
     let (bounds, min_size) = startup_geometry(cx, saved_size);
     let options = client_window_options(bounds, min_size);
     cx.open_window(options, |window, cx| {
-        // Platform blur behind translucent chrome. GPUI has no per-element
-        // backdrop filter; macOS and Windows implement this appearance, and a
-        // system without blur simply composites the translucent fills.
-        window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Blurred);
+        // Opaque surfaces keep contrast stable on every desktop background.
+        window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Opaque);
         strip_dwm_border(window);
         // Start in dark mode until the saved appearance arrives, then sync
         // the Desk colors into Base.
@@ -375,6 +373,14 @@ impl Workspace {
                 while let Some(event) = driver.next_event() {
                     buffer.push_back(event);
                 }
+                stream::retain_active_deltas(
+                    buffer,
+                    driver
+                        .vm()
+                        .active
+                        .as_ref()
+                        .map(|active| active.session_id.as_str()),
+                );
             },
             cx,
         );
