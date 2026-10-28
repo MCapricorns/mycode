@@ -942,7 +942,7 @@ def _expect_single_workflow(workflow: str) -> None:
         jobs
         == [
             "check",
-            "check-macos",
+            "check-platforms",
             "release-plan",
             "release-build",
             "release-publish",
@@ -966,22 +966,22 @@ def _expect_single_workflow(workflow: str) -> None:
     _expect("libxkbcommon-dev" not in build, "Linux GPUI packages are back in release builds")
     check = _yaml_job(workflow, "check")
     _expect("runs-on: windows-latest" in check, "workspace check is not on windows-latest")
-    macos_check = _yaml_job(workflow, "check-macos")
+    platforms = _yaml_job(workflow, "check-platforms")
+    _expect("runs-on: ${{ matrix.os }}" in platforms, "native checks do not use the runner matrix")
+    for runner in ("macos-latest", "windows-11-arm"):
+        _expect(f"os: {runner}" in platforms, f"missing native check on {runner}")
+    _expect("fail-fast: false" in platforms, "one native failure cancels the other check")
     _expect(
-        "runs-on: macos-latest" in macos_check,
-        "the macOS check is not on macos-latest",
+        "cargo test --workspace --locked" in platforms,
+        "native checks do not test the locked workspace",
     )
     _expect(
-        "cargo check --workspace --all-targets" in macos_check,
-        "the macOS check does not compile every target",
+        'RUSTFLAGS: "-Dwarnings"' in platforms,
+        "native checks do not deny warnings, so dead code passes",
     )
     _expect(
-        'RUSTFLAGS: "-Dwarnings"' in macos_check,
-        "the macOS check does not deny warnings, so dead code passes",
-    )
-    _expect(
-        "needs.check-macos.result == 'success'" in _yaml_job(workflow, "release-publish"),
-        "publish does not wait for the macOS check",
+        "needs.check-platforms.result == 'success'" in _yaml_job(workflow, "release-publish"),
+        "publish does not wait for all native checks",
     )
     _expect("apt-get" not in check, "Linux packages are back in the workspace check")
     _expect("cargo test --workspace" in check, "workspace check does not test")
