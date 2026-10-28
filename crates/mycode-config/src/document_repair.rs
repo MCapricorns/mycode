@@ -5,9 +5,10 @@
 //! strict checks reject for its own permissions, owner, or type, are both
 //! moved aside and replaced. A damaged document's replacement keeps every
 //! field that still decodes and validates (`salvage`), so one bad section does
-//! not force the user to re-enter the rest; a permissions mismatch salvages
-//! the same way from the moved bytes, so an external writer (magpie's agent
-//! plugin) cannot cost the user their configuration. The previous file stays
+//! not force the user to re-enter the rest. Safe Windows DACL drift from
+//! same-user external writers is normalized before decoding, without a
+//! repair report; rejected permissions are salvaged only when the backup
+//! still passes owner, link, and foreign-writer checks. The previous file stays
 //! beside the original as `{name}.broken-<nanos>`. Session ledgers are not
 //! documents this module handles.
 
@@ -60,15 +61,18 @@ pub(crate) fn is_document_damage(error: &ConfigError) -> bool {
 /// failed here with `owned path access control failed` on every launch.
 fn is_unusable_file(error: &ConfigError) -> bool {
     match error.kind() {
-        ConfigErrorKind::AccessControl | ConfigErrorKind::LinkEscape => true,
-        ConfigErrorKind::Io => !matches!(
-            error.io_kind(),
-            Some(
-                io::ErrorKind::Interrupted
-                    | io::ErrorKind::WouldBlock
-                    | io::ErrorKind::TimedOut
-                    | io::ErrorKind::ResourceBusy
+        ConfigErrorKind::AccessControl => {
+            matches!(
+                error.io_kind(),
+                None | Some(io::ErrorKind::PermissionDenied)
             )
+        }
+        ConfigErrorKind::LinkEscape => true,
+        // Native regular-file checks report these for a directory or another
+        // wrong type. Other I/O errors do not establish document damage.
+        ConfigErrorKind::Io => matches!(
+            error.io_kind(),
+            Some(io::ErrorKind::InvalidData | io::ErrorKind::IsADirectory)
         ),
         _ => false,
     }
@@ -185,12 +189,10 @@ pub(crate) fn load_or_reset<T>(
 /// home, not the file) the original error is returned unchanged.
 ///
 /// An external writer such as magpie's agent plugin replaces the file
-/// wholesale: the replacement carries the directory's inherited ACL while
-/// the bytes themselves stay the user's. The moved bytes are re-read
-/// through the strict owned-file path, which bounds the read and re-checks
-/// ownership — a backup that is still not owned by the current user is not
-/// salvaged, so an injected document cannot ride this path back in. Without
-/// this salvage, every plugin write dropped the whole `magpie` binding.
+/// wholesale. Safe current-owner Windows ACL drift is handled before this
+/// path. Any rejected bytes moved here must still pass owner, single-link,
+/// and foreign-writer checks before salvage; moving an untrusted document
+/// aside cannot make its contents trustworthy.
 fn reset_unreadable<T>(
     home: &HomeLayout,
     relative: &'static str,
@@ -328,10 +330,9 @@ mod tests {
         (tempfile_guard::Guard(parent), layout)
     }
 
-    /// Writes fixture bytes through the app's secure transaction so the file
-    /// carries the private permissions the read path enforces (a plain
-    /// `fs::write` file inherits the temp directory's DACL and is rejected
-    /// by the Windows fail-closed checks).
+    /// Writes fixture bytes through the secure transaction with the exact
+    /// private permissions required by the read path. Plain external writes
+    /// may need Windows DACL normalization before their first read.
     fn write_private(home: &crate::HomeLayout, name: &str, bytes: &[u8]) {
         crate::write_owned_test_bytes(home, name, bytes)
             .unwrap_or_else(|error| panic!("fixture {name}: {error:?}"));
@@ -500,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn a_permissions_mismatch_keeps_the_magpie_binding_of_the_moved_bytes() {
+    fn an_external_settings_write_keeps_the_magpie_binding() {
         let (_guard, home) = home("plugin-rewrite");
         // What magpie's agent plugin leaves behind: a full, valid document
         // whose bytes carry the binding but whose permissions came from the
@@ -527,10 +528,9 @@ mod tests {
         // On Windows the replacement carries the ambient DACL (owner, SYSTEM,
         // Administrators), which is repaired in place without quarantining.
         #[cfg(windows)]
-        assert!(
-            repair.is_none() || home.root().join(&repair.unwrap().backup).exists(),
-            "a repaired or quarantined document keeps its bytes"
-        );
+        assert!(repair.is_none(), "safe ACL drift is not document damage");
+        #[cfg(windows)]
+        assert_eq!(std::fs::read(&path).unwrap(), document.as_bytes());
         // The republished document reads back cleanly and is protected again.
         assert!(read_app_settings_with_repair(&home).unwrap().1.is_none());
     }
@@ -576,6 +576,93 @@ mod tests {
                 .all(|name| !name.contains(".broken-")),
             "a valid document was quarantined"
         );
+    }
+
+    #[test]
+    fn only_confirmed_file_failures_trigger_unreadable_repair() {
+        use crate::{ConfigError, ConfigErrorKind};
+        use std::io::ErrorKind;
+
+        for kind in [
+            ErrorKind::Interrupted,
+            ErrorKind::WouldBlock,
+            ErrorKind::TimedOut,
+            ErrorKind::ResourceBusy,
+            ErrorKind::OutOfMemory,
+            ErrorKind::StorageFull,
+            ErrorKind::Other,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::NotFound,
+        ] {
+            let error = ConfigError::new(ConfigErrorKind::Io).with_io_kind(kind);
+            assert!(!super::is_unusable_file(&error), "{kind:?}");
+        }
+        assert!(!super::is_unusable_file(&ConfigError::new(
+            ConfigErrorKind::Io
+        )));
+        for kind in [ErrorKind::InvalidData, ErrorKind::IsADirectory] {
+            assert!(super::is_unusable_file(
+                &ConfigError::new(ConfigErrorKind::Io).with_io_kind(kind)
+            ));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_sharing_violation_does_not_quarantine_a_healthy_document() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_SHARE_DELETE};
+
+        let (_guard, home) = home("share-locked");
+        let bytes = br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":7,"appearance":{"theme":"dark","fontSize":"l"}}"#;
+        write_private(&home, "settings.json", bytes);
+        // Deny reads while allowing rename: the old broad I/O classification
+        // could move this healthy document and publish defaults beside it.
+        let lock = std::fs::OpenOptions::new()
+            .access_mode(DELETE)
+            .share_mode(FILE_SHARE_DELETE)
+            .open(home.root().join("settings.json"))
+            .unwrap();
+        assert!(read_app_settings_with_repair(&home).is_err());
+        assert!(
+            names_in(&home)
+                .iter()
+                .all(|name| !name.contains(".broken-"))
+        );
+        drop(lock);
+        assert_eq!(
+            std::fs::read(home.root().join("settings.json")).unwrap(),
+            bytes
+        );
+        let (loaded, repair) = read_app_settings_with_repair(&home).unwrap();
+        assert_eq!(loaded.appearance.font_size, "l");
+        assert!(repair.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_foreign_writers_and_hardlinks_cannot_be_salvaged() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let bytes = br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark","fontSize":"l"}}"#;
+        let (_guard, home) = home("unix-trust");
+        let path = home.root().join("settings.json");
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let (loaded, repair) = read_app_settings_with_repair(&home).unwrap();
+        assert_eq!(loaded.appearance.font_size, "m");
+        assert!(repair.is_some());
+
+        std::fs::remove_file(&path).unwrap();
+        let outside = home.root().parent().unwrap().join("outside.json");
+        std::fs::write(&outside, bytes).unwrap();
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::hard_link(&outside, &path).unwrap();
+        let error = crate::read_owned_file(&home, "settings.json", 4096).unwrap_err();
+        assert_eq!(error.kind(), crate::ConfigErrorKind::LinkEscape);
+        let (loaded, repair) = read_app_settings_with_repair(&home).unwrap();
+        assert_eq!(loaded.appearance.font_size, "m");
+        assert!(repair.is_some());
+        assert_eq!(std::fs::read(&outside).unwrap(), bytes);
     }
 
     #[test]

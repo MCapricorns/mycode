@@ -43,20 +43,14 @@ pub(in crate::secure_fs) fn read_file(
     read_bounded(file, maximum_bytes).map(Some)
 }
 
-/// A quarantined backup: ownership still verified, DACL mode not. See
-/// `owned_file::read_quarantined_backup`.
+/// A quarantined backup must pass the same owner and safe-DACL checks as
+/// the original. Quarantine cannot make foreign-writable bytes trustworthy.
 pub(in crate::secure_fs) fn read_backup(
     root: &Path,
     components: &[OsString],
     maximum_bytes: usize,
 ) -> Result<Option<Zeroizing<Vec<u8>>>, ConfigError> {
-    let Some((parent, name)) = open_existing_parent(root, components)? else {
-        return Ok(None);
-    };
-    let Some(file) = open_existing_regular(&parent, name, false)? else {
-        return Ok(None);
-    };
-    read_bounded(file, maximum_bytes).map(Some)
+    read_file(root, components, maximum_bytes)
 }
 
 pub(in crate::secure_fs) struct Transaction {
@@ -336,6 +330,9 @@ fn open_existing_regular(
     let Some(opened) = opened else {
         return Ok(None);
     };
+    // Check the link count before changing the DACL: another name may live
+    // outside the owned home and must not have its permissions changed.
+    file_identity(&opened.file)?;
     windows_acl::require_current_owner(&opened.file)?;
     if require_private_dacl {
         // A same-user writer that created the file under its own token leaves
@@ -461,6 +458,9 @@ fn file_identity(file: &File) -> Result<(u32, u32, u32), ConfigError> {
     {
         return Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(io::ErrorKind::InvalidData));
     }
+    if information.nNumberOfLinks != 1 {
+        return Err(ConfigError::new(ConfigErrorKind::LinkEscape));
+    }
     Ok((
         information.dwVolumeSerialNumber,
         information.nFileIndexHigh,
@@ -475,12 +475,7 @@ fn read_bounded(mut file: File, maximum_bytes: usize) -> Result<Zeroizing<Vec<u8
         return Err(ConfigError::new(ConfigErrorKind::Oversized));
     }
     let mut bytes = Zeroizing::new(vec![0_u8; declared]);
-    if let Err(error) = file.read_exact(bytes.as_mut_slice()) {
-        if error.kind() == io::ErrorKind::UnexpectedEof {
-            return Err(ConfigError::new(ConfigErrorKind::Oversized));
-        }
-        return Err(io_error(error));
-    }
+    file.read_exact(bytes.as_mut_slice()).map_err(io_error)?;
 
     let mut extra = Zeroizing::new([0_u8; 1]);
     match file.read_exact(extra.as_mut_slice()) {
@@ -813,7 +808,7 @@ mod tests {
         let path = root.join("settings.json");
         fs::write(
             &path,
-            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark"}}"#,
+            br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark","fontSize":"l"}}"#,
         )
         .expect("write");
         let sid = super::windows_acl::current_user_sid_string().expect("sid");
@@ -826,5 +821,297 @@ mod tests {
         let refused =
             crate::read_owned_file(&home, "settings.json", 4096).expect_err("strict read");
         assert_eq!(refused.kind(), crate::ConfigErrorKind::AccessControl);
+        let (loaded, repair) = crate::read_app_settings_with_repair(&home).expect("repair");
+        assert_eq!(
+            loaded.appearance.font_size, "m",
+            "foreign-writable bytes must not be salvaged"
+        );
+        assert!(repair.is_some());
+    }
+
+    /// Models the normal Windows save in magpie 7fe98c2afd's
+    /// internal/edit/file.go:WriteAtomic and internal/steady/steady.go:Rename:
+    /// create beside the target with the process token's default DACL, keep
+    /// the read-only attribute, flush, close, and MoveFileExW(REPLACE_EXISTING).
+    /// Go's Windows Chmod and keepGroup do not copy an owner or a DACL.
+    fn magpie_write_atomic(path: &std::path::Path, bytes: &[u8]) {
+        use std::io::Write as _;
+        use std::os::windows::ffi::OsStrExt as _;
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_SHARE_READ, FILE_SHARE_WRITE, MOVEFILE_REPLACE_EXISTING, MoveFileExW,
+        };
+
+        if fs::read(path).ok().as_deref() == Some(bytes) {
+            return;
+        }
+        let permissions = fs::metadata(path)
+            .ok()
+            .map(|metadata| metadata.permissions());
+        let temporary = path.with_file_name(format!(
+            ".{}.{}.tmp",
+            path.file_name().unwrap().to_string_lossy(),
+            crate::unix_now().as_nanos(),
+        ));
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&temporary)
+            .expect("external temporary file");
+        file.write_all(bytes).unwrap();
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions).unwrap();
+        }
+        file.sync_all().unwrap();
+        drop(file);
+        let source: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+        let target: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        // SAFETY: Both paths are live NUL-terminated UTF-16 buffers.
+        assert_ne!(
+            unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_REPLACE_EXISTING) },
+            0,
+            "{}",
+            std::io::Error::last_os_error(),
+        );
+    }
+
+    #[test]
+    fn magpie_same_directory_saves_keep_exact_bytes_and_do_not_report_acl_damage() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let tree = TempTree::new("magpie-save");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).expect("home");
+        let home = HomeLayout::from_root(&root).expect("layout");
+        let mut initial = AppSettings::default();
+        initial.appearance.font_size = "l".to_owned();
+        initial.magpie.enabled = true;
+        initial.magpie.base_url = "http://127.0.0.1:3425/v1".to_owned();
+        initial.magpie.api_key = "synthetic-test-value".to_owned();
+        initial.magpie.model = "fixture/model-0".to_owned();
+        replace_app_settings(&home, AuthorityRevision::ABSENT, &initial).unwrap();
+        let path = root.join("settings.json");
+        for save in 1..=3 {
+            // MYCode has already protected the home: no manufactured inherited
+            // ACEs. Magpie's temp receives the token's default DACL instead.
+            let directory = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS)
+                .open(&root)
+                .unwrap();
+            super::windows_acl::verify_fixed_descriptor(&directory).unwrap();
+            let before = String::from_utf8(fs::read(&path).unwrap()).unwrap();
+            // SetJSON replaces the existing model value and leaves the strict
+            // document envelope, revision, and every unrelated byte alone.
+            let bytes = before.replace(
+                &format!("fixture/model-{}", save - 1),
+                &format!("fixture/model-{save}"),
+            );
+            magpie_write_atomic(&path, bytes.as_bytes());
+            let file = fs::File::open(&path).expect("external file");
+            super::windows_acl::require_current_owner(&file).unwrap();
+            assert!(super::windows_acl::verify_fixed_descriptor(&file).is_err());
+            drop(file);
+
+            let (settings, repair) =
+                crate::read_app_settings_with_repair(&home).expect("read replacement");
+            assert_eq!(settings.appearance.font_size, "l");
+            assert_eq!(settings.magpie.model, format!("fixture/model-{save}"));
+            assert!(settings.magpie.is_active());
+            assert!(repair.is_none());
+            assert_eq!(fs::read(&path).unwrap(), bytes.as_bytes());
+            let file = fs::File::open(&path).expect("normalized file");
+            super::windows_acl::verify_fixed_descriptor(&file).expect("private DACL");
+        }
+        assert!(
+            !fs::read_dir(&root)
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains(".broken-"))
+        );
+    }
+
+    #[test]
+    fn magpie_first_create_is_imported_and_consecutive_saves_stay_canonical() {
+        // Plugin 30ce348b7a's SetJSON first-create writes only its four
+        // binding keys, with no MYCode envelope. Import must happen after
+        // the normal owned-file checks and must not be reported as damage.
+        let tree = TempTree::new("magpie-bootstrap");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).unwrap();
+        let home = HomeLayout::from_root(&root).unwrap();
+        // Magpie creates settings before MYCode has loaded this home.
+        let path = root.join("settings.json");
+        let bytes = br#"{"magpie":{"enabled":true,"baseUrl":"http://127.0.0.1:3425/v1","apiKey":"synthetic-test-value","model":"fixture/model-0"}}"#;
+        magpie_write_atomic(&path, bytes);
+        let (settings, repair) = crate::read_app_settings_with_repair(&home).unwrap();
+        assert!(repair.is_none(), "a valid bootstrap is imported quietly");
+        assert!(settings.magpie.is_active());
+        assert_eq!(settings.magpie.api_key, "synthetic-test-value");
+        let canonical: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(canonical["formatVersion"], 1);
+        assert_eq!(canonical["kind"], "mycode-app-settings");
+        assert_eq!(canonical["revision"], 1);
+        super::windows_acl::verify_fixed_descriptor(&fs::File::open(&path).unwrap()).unwrap();
+        for save in 1..=3 {
+            let before = String::from_utf8(fs::read(&path).unwrap()).unwrap();
+            let next = before.replace(
+                &format!("fixture/model-{}", save - 1),
+                &format!("fixture/model-{save}"),
+            );
+            magpie_write_atomic(&path, next.as_bytes());
+            let (settings, repair) = crate::read_app_settings_with_repair(&home).unwrap();
+            assert_eq!(settings.magpie.model, format!("fixture/model-{save}"));
+            assert!(repair.is_none());
+            assert_eq!(fs::read(&path).unwrap(), next.as_bytes());
+            let document: serde_json::Value = serde_json::from_str(&next).unwrap();
+            assert_eq!(document["revision"], 1);
+            super::windows_acl::verify_fixed_descriptor(&fs::File::open(&path).unwrap()).unwrap();
+        }
+        assert!(
+            !fs::read_dir(&root)
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains(".broken-"))
+        );
+    }
+
+    #[test]
+    fn a_foreign_writable_magpie_bootstrap_cannot_bypass_owned_file_checks() {
+        let tree = TempTree::new("magpie-bootstrap-foreign");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).unwrap();
+        let home = HomeLayout::from_root(&root).unwrap();
+        read_app_settings(&home).unwrap();
+        let path = root.join("settings.json");
+        let bytes = br#"{"magpie":{"enabled":true,"baseUrl":"http://127.0.0.1:3425/v1","apiKey":"synthetic-test-value","model":"fixture/model-0"}}"#;
+        magpie_write_atomic(&path, bytes);
+        let sid = super::windows_acl::current_user_sid_string().unwrap();
+        set_dacl(
+            &path,
+            &super::windows_acl::descriptor_for_tests(&format!(
+                "O:{sid}D:(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;WD)"
+            ))
+            .unwrap(),
+        );
+        let error = crate::read_owned_file(&home, "settings.json", 4096).unwrap_err();
+        assert_eq!(error.kind(), crate::ConfigErrorKind::AccessControl);
+        let (settings, repair) = crate::read_app_settings_with_repair(&home).unwrap();
+        assert!(!settings.magpie.is_active());
+        let repair = repair.expect("untrusted bytes must not be imported");
+        assert_eq!(fs::read(root.join(repair.backup)).unwrap(), bytes);
+    }
+
+    #[test]
+    fn magpie_saves_with_retired_fields_still_need_one_content_repair() {
+        // SetJSON preserves unknown keys in existing settings, so the
+        // bootstrap import must not admit a retired providers field.
+        let tree = TempTree::new("magpie-retired-content");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).unwrap();
+        let home = HomeLayout::from_root(&root).unwrap();
+        read_app_settings(&home).expect("secure home");
+        let path = root.join("settings.json");
+        let bytes = br#"{"magpie":{"enabled":true,"baseUrl":"http://127.0.0.1:3425/v1","apiKey":"synthetic-test-value","model":"fixture/model-0"},"formatVersion":1,"kind":"mycode-app-settings","revision":7,"providers":{}}"#;
+        magpie_write_atomic(&path, bytes);
+        let (settings, repair) = crate::read_app_settings_with_repair(&home).unwrap();
+        assert!(settings.magpie.is_active());
+        let repair = repair.expect("retired fields still require content repair");
+        assert_eq!(fs::read(root.join(repair.backup)).unwrap(), bytes);
+
+        let normalized = String::from_utf8(fs::read(&path).unwrap()).unwrap();
+        let next = normalized.replace("fixture/model-0", "fixture/model-1");
+        magpie_write_atomic(&path, next.as_bytes());
+        let (settings, repair) = crate::read_app_settings_with_repair(&home).unwrap();
+        assert_eq!(settings.magpie.model, "fixture/model-1");
+        assert!(repair.is_none());
+        assert_eq!(fs::read(&path).unwrap(), next.as_bytes());
+    }
+
+    #[test]
+    fn hardlinks_are_rejected_before_any_dacl_normalization_or_salvage() {
+        let tree = TempTree::new("hardlink");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).expect("home");
+        let home = HomeLayout::from_root(&root).expect("layout");
+        read_app_settings(&home).expect("secure home");
+        let outside = tree.path.join("outside.json");
+        let bytes = br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark","fontSize":"l"}}"#;
+        fs::write(&outside, bytes).unwrap();
+        let sid = super::windows_acl::current_user_sid_string().unwrap();
+        set_dacl(
+            &outside,
+            &super::windows_acl::descriptor_for_tests(&format!(
+                "O:{sid}D:(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FR;;;WD)"
+            ))
+            .unwrap(),
+        );
+        fs::hard_link(&outside, root.join("settings.json")).unwrap();
+
+        let refused = crate::read_owned_file(&home, "settings.json", 4096).expect_err("hardlink");
+        assert_eq!(refused.kind(), crate::ConfigErrorKind::LinkEscape);
+        let outside_file = fs::File::open(&outside).unwrap();
+        assert!(
+            super::windows_acl::verify_fixed_descriptor(&outside_file).is_err(),
+            "outside ACL was changed"
+        );
+        let (loaded, repair) = crate::read_app_settings_with_repair(&home).unwrap();
+        assert_eq!(loaded.appearance.font_size, "m");
+        assert!(repair.is_some());
+        assert_eq!(fs::read(&outside).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_junction_is_quarantined_without_reading_or_changing_its_target() {
+        let tree = TempTree::new("junction");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).unwrap();
+        let home = HomeLayout::from_root(&root).unwrap();
+        read_app_settings(&home).unwrap();
+        let outside = tree.path.join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("sentinel"), b"unchanged fixture").unwrap();
+        let link = root.join("settings.json");
+        let result = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "junction fixture: {:?}",
+            result.status
+        );
+        let error = crate::read_owned_file(&home, "settings.json", 4096).unwrap_err();
+        assert_eq!(error.kind(), crate::ConfigErrorKind::LinkEscape);
+        let (_, repair) = crate::read_app_settings_with_repair(&home).unwrap();
+        assert!(repair.is_some());
+        assert_eq!(
+            fs::read(outside.join("sentinel")).unwrap(),
+            b"unchanged fixture"
+        );
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn synthetic_secrets_are_private_after_external_write() {
+        let tree = TempTree::new("private-secrets");
+        let root = tree.path.join("home");
+        fs::create_dir(&root).unwrap();
+        let home = HomeLayout::from_root(&root).unwrap();
+        read_app_settings(&home).unwrap();
+        let path = root.join("secrets.json");
+        let bytes = br#"{"formatVersion":1,"kind":"mycode-provider-secrets","revision":2,"providerKeys":{"mcp-fixture":"synthetic-test-value"}}"#;
+        fs::write(&path, bytes).unwrap();
+        let (secrets, repair) = crate::read_provider_secrets_with_repair(&home).unwrap();
+        assert_eq!(secrets.provider_ids(), ["mcp-fixture"]);
+        assert!(repair.is_none());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let file = fs::File::open(&path).unwrap();
+        super::windows_acl::verify_fixed_descriptor(&file).unwrap();
     }
 }

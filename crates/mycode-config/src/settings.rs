@@ -3,12 +3,15 @@
 //! [`AppSettings`] is the single settings document at `settings.json`: the
 //! desktop settings pages edit it through typed APIs and it is published with
 //! revision compare-and-swap through the hardened owned-file transaction.
-//! Secrets never live here; credentials stay in the secret store.
+//! The gateway binding includes magpie's key; MCP credentials live in the
+//! separate secret store.
 //!
-//! A document that cannot be parsed or validated is copied aside and
-//! replaced: whatever still decodes and validates is kept, the rest is
-//! rebuilt from defaults, so startup can continue without re-entering whole
-//! sections. Session ledgers are not part of this document.
+//! A valid magpie-created bootstrap without any envelope fields is imported
+//! as revision 1 without a damage report. Other documents that cannot be
+//! parsed or validated are copied aside and replaced: whatever still decodes
+//! and validates is kept, the rest is rebuilt from defaults, so startup can
+//! continue without re-entering whole sections. Session ledgers are not part
+//! of this document.
 
 mod magpie;
 mod mcp;
@@ -178,14 +181,15 @@ impl AppSettings {
 
 /// Reads and validates `settings.json`.
 ///
-/// A missing document yields the defaults. A document that cannot be parsed
-/// or validated is backed up and replaced, keeping whatever still decodes;
+/// A missing document yields the defaults. A valid magpie bootstrap is
+/// imported with a canonical envelope. Other documents that cannot be parsed
+/// or validated are backed up and replaced, keeping whatever still decodes;
 /// see [`read_app_settings_with_repair`].
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] for owned-path security or when a damaged document
-/// cannot be copied aside.
+/// Returns [`ConfigError`] for owned-path security or when an import or
+/// repair cannot be published.
 pub fn read_app_settings(home: &crate::HomeLayout) -> Result<AppSettings, ConfigError> {
     Ok(read_app_settings_with_repair(home)?.0)
 }
@@ -194,7 +198,9 @@ pub fn read_app_settings(home: &crate::HomeLayout) -> Result<AppSettings, Config
 ///
 /// The second value is set when the previous bytes were copied to a
 /// `settings.json.broken-*` file and the original path was replaced. A valid
-/// document does not report a repair.
+/// document does not report a repair. A supported settings object with an
+/// active magpie binding and no envelope fields is imported as revision 1
+/// through the same owned-file transaction, without a backup or repair report.
 ///
 /// # Errors
 ///
@@ -203,16 +209,68 @@ pub fn read_app_settings(home: &crate::HomeLayout) -> Result<AppSettings, Config
 pub fn read_app_settings_with_repair(
     home: &crate::HomeLayout,
 ) -> Result<(AppSettings, Option<crate::DocumentRepair>), ConfigError> {
+    let mut bootstrap = false;
     let loaded = crate::document_repair::load_or_reset(
         home,
         SETTINGS_PATH,
         MAX_AUTHORITY_DOCUMENT_BYTES,
-        |bytes| Ok(decode_settings(bytes)?.settings),
+        |bytes| match decode_settings(bytes) {
+            Ok(document) => Ok(document.settings),
+            Err(error) => {
+                let settings = decode_magpie_bootstrap(bytes).ok_or(error)?;
+                bootstrap = true;
+                Ok(settings)
+            }
+        },
         AppSettings::default,
         salvage_app_settings,
         |settings| publish_settings(home, settings),
     )?;
-    Ok((loaded.value, loaded.repair))
+    // Publication failures are I/O/update errors, not damage to the valid
+    // bootstrap bytes. Keep them outside load_or_reset's decode callback.
+    let settings = if bootstrap {
+        import_magpie_bootstrap(home)?
+    } else {
+        loaded.value
+    };
+    Ok((settings, loaded.repair))
+}
+
+/// The plugin's SetJSON first-create writes binding keys but no envelope.
+/// Direct AppSettings decoding rejects every envelope field (including a
+/// partial or wrong envelope), unknown key, malformed value, and duplicate
+/// field. Its ordinary validators still apply to every supported setting.
+fn decode_magpie_bootstrap(bytes: &[u8]) -> Option<AppSettings> {
+    let settings: AppSettings = serde_json::from_slice(bytes).ok()?;
+    (settings.magpie.is_active() && settings.validate().is_ok()).then_some(settings)
+}
+
+fn import_magpie_bootstrap(home: &crate::HomeLayout) -> Result<AppSettings, ConfigError> {
+    let mut imported = None;
+    locked_update_owned_file(
+        home,
+        SETTINGS_PATH,
+        MAX_AUTHORITY_DOCUMENT_BYTES,
+        |current| {
+            let bytes =
+                current.ok_or_else(|| ConfigError::new(ConfigErrorKind::RevisionConflict))?;
+            // Re-read under the existing lock and trust checks. Another
+            // reader may already have imported the bootstrap; keep its
+            // canonical bytes and revision instead of replacing its value.
+            let (settings, replacement) = match decode_settings(bytes) {
+                Ok(document) => (document.settings, bytes.to_vec()),
+                Err(error) => {
+                    let settings = decode_magpie_bootstrap(bytes).ok_or(error)?;
+                    let bytes =
+                        encode_settings(AuthorityRevision::ABSENT.checked_next()?, &settings)?;
+                    (settings, bytes)
+                }
+            };
+            imported = Some(settings);
+            Ok(replacement)
+        },
+    )?;
+    imported.ok_or_else(|| ConfigError::new(ConfigErrorKind::Serialization))
 }
 
 fn publish_settings(home: &crate::HomeLayout, settings: &AppSettings) -> Result<(), ConfigError> {
@@ -330,8 +388,8 @@ fn decode_settings(bytes: &[u8]) -> Result<ParsedSettings, ConfigError> {
     let settings =
         serde_json::from_value::<AppSettings>(serde_json::Value::Object(document.fields))
             .map_err(|_| rejection())?;
-    // No in-place upgrade. A document that does not validate is rejected
-    // and the caller resets the file, keeping what still decodes.
+    // Canonical documents must validate without per-field upgrades. The
+    // reader recognizes magpie bootstrap objects separately.
     settings.validate()?;
     Ok(ParsedSettings { settings, revision })
 }
@@ -425,7 +483,6 @@ pub(crate) fn bounded_text(value: &str, max: usize) -> Result<(), ConfigError> {
     }
 }
 
-
 pub(crate) fn is_https_url(value: &str) -> bool {
     if bounded_text(value, MAX_URL_BYTES).is_err() {
         return false;
@@ -484,6 +541,210 @@ pub(crate) fn is_portable_model_id(value: &str) -> bool {
 mod tests {
     use super::{AppSettings, decode_settings, encode_settings, salvage_app_settings};
     use crate::authority::AuthorityRevision;
+
+    fn settings_home(label: &str) -> (TempDir, crate::HomeLayout) {
+        let parent = std::env::temp_dir().join(format!(
+            "mycode-settings-{label}-{}-{}",
+            std::process::id(),
+            crate::unix_now().as_nanos()
+        ));
+        let root = parent.join("home");
+        std::fs::create_dir_all(&root).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let home = crate::HomeLayout::from_root(&root).unwrap();
+        (TempDir(parent), home)
+    }
+
+    fn bootstrap_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "magpie": {
+                "enabled": true,
+                "baseUrl": "http://127.0.0.1:3425/v1",
+                "apiKey": "synthetic-test-value",
+                "model": "fixture/model-0"
+            }
+        })
+    }
+
+    #[test]
+    fn magpie_bootstrap_import_preserves_supported_settings_and_starts_revision_cas() {
+        let (_guard, home) = settings_home("bootstrap");
+        let mut document = bootstrap_fixture();
+        document["appearance"] =
+            serde_json::json!({"theme":"light","language":"zh","fontSize":"l"});
+        document["reasoningEffort"] = "high".into();
+        document["skills"] = serde_json::json!({"disabled":["fixture-skill"]});
+        let bytes = serde_json::to_vec(&document).unwrap();
+        // The ordinary strict decoder continues to require its envelope.
+        assert!(decode_settings(&bytes).is_err());
+        crate::write_owned_test_bytes(&home, "settings.json", &bytes).unwrap();
+        let (settings, repair) = super::read_app_settings_with_repair(&home).unwrap();
+        assert!(repair.is_none(), "a recognized bootstrap is an import");
+        assert!(settings.magpie.is_active());
+        assert_eq!(settings.magpie.api_key, "synthetic-test-value");
+        assert_eq!(settings.magpie.model, "fixture/model-0");
+        assert_eq!(settings.appearance.theme, "light");
+        assert_eq!(settings.appearance.language, "zh");
+        assert_eq!(settings.appearance.font_size, "l");
+        assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(settings.skills.disabled, ["fixture-skill"]);
+        let canonical = std::fs::read(home.root().join("settings.json")).unwrap();
+        let parsed = decode_settings(&canonical).unwrap();
+        assert_eq!(parsed.revision.get(), 1);
+        assert_eq!(parsed.settings, settings);
+        assert_eq!(
+            super::read_app_settings_with_repair(&home).unwrap(),
+            (settings.clone(), None)
+        );
+        assert_eq!(
+            std::fs::read(home.root().join("settings.json")).unwrap(),
+            canonical
+        );
+        assert!(
+            !std::fs::read_dir(home.root())
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains(".broken-"))
+        );
+
+        let error =
+            super::replace_app_settings(&home, AuthorityRevision::ABSENT, &settings).unwrap_err();
+        assert_eq!(error.kind(), crate::ConfigErrorKind::RevisionConflict);
+        let next = super::replace_app_settings(&home, parsed.revision, &settings).unwrap();
+        assert_eq!(next.get(), 2);
+    }
+
+    #[test]
+    fn bootstrap_publication_failure_keeps_the_original_without_a_damage_backup() {
+        let (_guard, home) = settings_home("bootstrap-publish-error");
+        let mut document = bootstrap_fixture();
+        document["magpie"]["hiddenModels"] = (0..super::MAX_HIDDEN_MODELS_PER_PROVIDER)
+            .map(|index| format!("fixture/{index:04}-{}", "m".repeat(107)))
+            .collect::<Vec<_>>()
+            .into();
+        let bytes = serde_json::to_vec(&document).unwrap();
+        let settings: AppSettings = serde_json::from_value(document).unwrap();
+        settings.validate().unwrap();
+        // Compact input fits the read limit, but canonical indentation puts
+        // the replacement over it. Publication must fail without treating
+        // the valid source as a damaged document or creating a backup.
+        assert!(bytes.len() <= super::MAX_AUTHORITY_DOCUMENT_BYTES);
+        assert!(
+            encode_settings(AuthorityRevision::new(1).unwrap(), &settings)
+                .unwrap()
+                .len()
+                > super::MAX_AUTHORITY_DOCUMENT_BYTES
+        );
+        crate::write_owned_test_bytes(&home, "settings.json", &bytes).unwrap();
+        let error = super::read_app_settings_with_repair(&home).unwrap_err();
+        assert_eq!(error.kind(), crate::ConfigErrorKind::Oversized);
+        assert_eq!(
+            std::fs::read(home.root().join("settings.json")).unwrap(),
+            bytes
+        );
+        assert!(
+            !std::fs::read_dir(home.root())
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains(".broken-"))
+        );
+    }
+
+    #[test]
+    fn bootstrap_compatibility_does_not_hide_partial_invalid_or_unrelated_documents() {
+        let mut rejected = vec![
+            b"{not-json".to_vec(),
+            b"[]".to_vec(),
+            b"{}".to_vec(),
+            br#"{"appearance":{"theme":"light"}}"#.to_vec(),
+        ];
+        let envelope = [
+            ("formatVersion", serde_json::json!(1)),
+            ("kind", serde_json::json!("mycode-app-settings")),
+            ("revision", serde_json::json!(7)),
+        ];
+        // Every proper nonempty subset remains damage, even when each
+        // present envelope field has its otherwise-correct value.
+        for mask in 1..7 {
+            let mut document = bootstrap_fixture();
+            for (index, (key, value)) in envelope.iter().enumerate() {
+                if mask & (1 << index) != 0 {
+                    document[*key] = value.clone();
+                }
+            }
+            rejected.push(serde_json::to_vec(&document).unwrap());
+        }
+        for (key, value) in [
+            ("formatVersion", serde_json::json!(2)),
+            ("kind", serde_json::json!("another-format")),
+            ("revision", serde_json::json!("7")),
+            ("revision", serde_json::json!(u64::MAX)),
+            ("formatVersion", serde_json::Value::Null),
+            ("kind", serde_json::Value::Null),
+            ("revision", serde_json::Value::Null),
+        ] {
+            let mut document = bootstrap_fixture();
+            for (field, original) in &envelope {
+                document[*field] = original.clone();
+            }
+            document[key] = value;
+            rejected.push(serde_json::to_vec(&document).unwrap());
+        }
+        for (key, value) in [
+            ("providers", serde_json::json!({})),
+            ("web", serde_json::json!({})),
+            ("tools", serde_json::json!({"shell":{}})),
+            ("appearance", serde_json::json!({"theme":"nope"})),
+            (
+                "appearance",
+                serde_json::json!({"theme":"dark","unknown":true}),
+            ),
+            ("reasoningEffort", serde_json::json!("default")),
+            ("skills", serde_json::json!({"disabled":[""]})),
+        ] {
+            let mut document = bootstrap_fixture();
+            document[key] = value;
+            rejected.push(serde_json::to_vec(&document).unwrap());
+        }
+        for (key, value) in [
+            ("enabled", serde_json::json!(false)),
+            ("baseUrl", serde_json::json!("http://example.com/v1")),
+            ("apiKey", serde_json::json!("")),
+            ("model", serde_json::json!("")),
+            ("model", serde_json::json!("invalid model")),
+            ("unknown", serde_json::json!(true)),
+        ] {
+            let mut document = bootstrap_fixture();
+            document["magpie"][key] = value;
+            rejected.push(serde_json::to_vec(&document).unwrap());
+        }
+        for field in ["enabled", "baseUrl", "apiKey", "model"] {
+            let mut document = bootstrap_fixture();
+            document["magpie"].as_object_mut().unwrap().remove(field);
+            rejected.push(serde_json::to_vec(&document).unwrap());
+        }
+        for (index, bytes) in rejected.into_iter().enumerate() {
+            let (_guard, home) = settings_home("bootstrap-rejected");
+            crate::write_owned_test_bytes(&home, "settings.json", &bytes).unwrap();
+            let (_, repair) = super::read_app_settings_with_repair(&home).unwrap();
+            let repair =
+                repair.unwrap_or_else(|| panic!("invalid bootstrap case {index} bypassed repair"));
+            assert_eq!(
+                std::fs::read(home.root().join(repair.backup)).unwrap(),
+                bytes
+            );
+            assert!(
+                super::read_app_settings_with_repair(&home)
+                    .unwrap()
+                    .1
+                    .is_none()
+            );
+        }
+    }
 
     #[test]
     fn unknown_settings_field_is_rejected_not_ignored() {

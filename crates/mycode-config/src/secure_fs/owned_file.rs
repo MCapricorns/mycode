@@ -71,7 +71,8 @@ mod fallback {
 #[cfg(not(any(unix, windows)))]
 use fallback as platform;
 
-/// Reads a private regular file without creating any filesystem object.
+/// Reads a private, singly linked regular file without creating an object.
+/// On Windows, safe current-owner DACL drift is normalized before reading.
 ///
 /// # Errors
 ///
@@ -121,12 +122,12 @@ pub(crate) fn quarantine_owned_file(
     platform::quarantine_file(&path.root, &path.components, backup_name)
 }
 
-/// Reads a quarantined backup without the DACL-mode check.
+/// Reads a quarantined backup only while its bytes remain trustworthy.
 ///
-/// [`quarantine_owned_file`] renames the file, so a permissions mismatch
-/// (an external writer's inherited ACL) moves with the bytes and would fail
-/// [`read_owned_file`] again. Ownership is still verified — a file the
-/// current user does not own is never salvaged — and the read stays bounded.
+/// Ownership, regular-file type, and a single link are required. Windows
+/// applies the same safe DACL normalization as [`read_owned_file`]; Unix
+/// tolerates read permissions for others but rejects their write access.
+/// Quarantine must not bypass the original rejection of foreign writers.
 ///
 /// # Errors
 ///

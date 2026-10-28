@@ -44,6 +44,10 @@ pub(in crate::secure_fs) fn read_backup(
     let Some(file) = open_existing_regular(&parent, name, false)? else {
         return Ok(None);
     };
+    let stat = verify_regular_owner(&file)?;
+    if stat.st_mode & 0o022 != 0 {
+        return Err(ConfigError::new(ConfigErrorKind::AccessControl));
+    }
     read_bounded(file, maximum_bytes).map(Some)
 }
 
@@ -309,6 +313,9 @@ fn verify_regular_owner(file: &File) -> Result<rfs::Stat, ConfigError> {
     if rfs::FileType::from_raw_mode(stat.st_mode) != rfs::FileType::RegularFile {
         return Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(io::ErrorKind::InvalidData));
     }
+    if stat.st_nlink != 1 {
+        return Err(ConfigError::new(ConfigErrorKind::LinkEscape));
+    }
     if stat.st_uid != rustix::process::geteuid().as_raw() {
         return Err(ConfigError::new(ConfigErrorKind::AccessControl));
     }
@@ -342,12 +349,7 @@ fn read_bounded(mut file: File, maximum_bytes: usize) -> Result<Zeroizing<Vec<u8
         return Err(ConfigError::new(ConfigErrorKind::Oversized));
     }
     let mut bytes = Zeroizing::new(vec![0_u8; declared]);
-    if let Err(error) = file.read_exact(bytes.as_mut_slice()) {
-        if error.kind() == io::ErrorKind::UnexpectedEof {
-            return Err(ConfigError::new(ConfigErrorKind::Oversized));
-        }
-        return Err(io_error(error));
-    }
+    file.read_exact(bytes.as_mut_slice()).map_err(io_error)?;
 
     let mut extra = Zeroizing::new([0_u8; 1]);
     match file.read_exact(extra.as_mut_slice()) {
