@@ -12,10 +12,11 @@
 
 - 原生界面重构为顶部项目书架、会话账本与带改动轨迹的工作页；重做 wiki，统一纸白、墨黑、朱红配色和 bracket-M 图标。slogan 为「每次改动，有迹可循。」，浅色与深色保持同一套布局。
 - 全局与项目规则标明来源并按优先级装配；提示词准确描述 Rhai、工具参数与既有授权，远程 MCP schema 保持按需发现。
-- GitHub Actions 在 Windows ARM64 和 macOS Apple Silicon 原生执行 workspace 测试，发布等待所有平台门禁。
+- GitHub Actions 在 Windows ARM64 和 macOS Apple Silicon 原生执行 workspace 测试，发布等待所有平台门禁；测试覆盖 Git 换行转换与各平台的旧目录配置迁移。
 
 ### Fixed
 
+- 更新 Tokio 至 1.54.1，修复上游 `tokio::time::Interval` 的竞态问题。
 - magpie 首次生成的有效无版本绑定规范导入，不再误报损坏；临时文件访问错误不会重置配置，文件信任检查继续生效。
 - 模型目录刷新后重新同步 magpie binding 和模型选择，首次打开不再依赖关闭重开；保留未保存设置和各会话已选模型，拒绝过期回复。已选模型不可用时明确报错，不会静默切换到其他模型。
 - MCP 工具名冲突、带服务器前缀的误派发与搜索排序，保留连接失败的实际原因。

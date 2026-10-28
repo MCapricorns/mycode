@@ -30,7 +30,7 @@ serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.154", features = ["preserve_order", "raw_value"] }
 base64 = "0.23.1"
 thiserror = "2.0.21"
-tokio = { version = "1.54.0", features = ["rt", "macros", "sync", "time"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time"] }
 schemars = "1.2.3"
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 zeroize = "1.9.1"
