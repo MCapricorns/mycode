@@ -241,15 +241,10 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     // already shadows: the count is the catalog the agent actually loads.
     let servers = settings.map(|configured| {
         configured.mcp_servers.iter().filter(|m| m.enabled).count()
-            + vm
-                .mcp_library
+            + vm.mcp_library
                 .iter()
                 .filter(|server| {
-                    server.enabled
-                        && !configured
-                            .mcp_servers
-                            .iter()
-                            .any(|row| row.id == server.id)
+                    server.enabled && !configured.mcp_servers.iter().any(|row| row.id == server.id)
                 })
                 .count()
     });
@@ -520,7 +515,6 @@ fn nav_row(
         })
         .into_any_element()
 }
-
 
 #[cfg(test)]
 mod tests {
