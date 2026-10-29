@@ -15,21 +15,73 @@ pub fn provider_display_name(state: &WorkspaceState, id: &str) -> String {
         .unwrap_or_else(|| id.to_owned())
 }
 
-/// Catalog display name for one model, or the id when the catalog has none.
+/// Canonical catalog id for a model, preserving unlisted custom ids.
 #[must_use]
-pub fn model_display_name(state: &WorkspaceState, provider: &str, model_id: &str) -> String {
+pub fn canonical_model_id(state: &WorkspaceState, provider: &str, model_id: &str) -> String {
     state
         .catalog
         .as_ref()
         .and_then(|catalog| catalog.model(provider, model_id))
-        .map(|model| {
-            if model.name.is_empty() {
-                model.id.clone()
-            } else {
-                model.name.clone()
-            }
-        })
+        .map(|model| model.id.clone())
         .unwrap_or_else(|| model_id.to_owned())
+}
+
+/// Model label with its upstream source, retaining distinct real routes.
+#[must_use]
+pub fn model_display_name(state: &WorkspaceState, provider: &str, model_id: &str) -> String {
+    let Some(provider) = state
+        .catalog
+        .as_ref()
+        .and_then(|catalog| catalog.provider(provider))
+    else {
+        return unlisted_model_label(model_id);
+    };
+    let Some(model) = provider.model(model_id) else {
+        return unlisted_model_label(model_id);
+    };
+    let name = if model.name.is_empty() {
+        &model.id
+    } else {
+        &model.name
+    };
+    let source = model_source(&model.source, &model.id);
+    let ambiguous = provider.models.iter().any(|other| {
+        other.id != model.id
+            && (if other.name.is_empty() {
+                &other.id
+            } else {
+                &other.name
+            }) == name
+            && model_source(&other.source, &other.id) == source
+    });
+    if ambiguous {
+        format!("{source} · {name} ({})", model.id)
+    } else {
+        format!("{source} · {name}")
+    }
+}
+
+fn model_source<'a>(published: &'a str, model_id: &'a str) -> &'a str {
+    if !published.is_empty() {
+        published
+    } else {
+        model_id
+            .split_once('/')
+            .filter(|(source, _)| !source.is_empty())
+            .map_or(
+                crate::i18n::t("Source unknown", "来源未提供"),
+                |(source, _)| source,
+            )
+    }
+}
+
+fn unlisted_model_label(model_id: &str) -> String {
+    let source = model_source("", model_id);
+    let name = model_id
+        .split_once('/')
+        .filter(|(prefix, _)| *prefix == source)
+        .map_or(model_id, |(_, name)| name);
+    format!("{source} · {name}")
 }
 
 /// Effective context window (in tokens) for the selected provider and model,

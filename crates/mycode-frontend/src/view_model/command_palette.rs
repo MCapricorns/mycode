@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use super::chat::COMPOSER_COMMANDS;
-use super::models::{model_display_name, provider_display_name};
+use super::models::{canonical_model_id, model_display_name, provider_display_name};
 use super::projects::{project_label, project_of_session};
 use super::settings::SettingsSection;
 use super::state::{MainView, WorkspaceState};
@@ -165,10 +165,10 @@ fn model_items(state: &WorkspaceState) -> Vec<PaletteItem> {
     let mut seen = HashSet::new();
     let mut items = Vec::new();
     let mut push = |provider: &str, model: &str| {
+        let model = canonical_model_id(state, provider, model);
+        let model = model.as_str();
         // A hidden model stays out of the palette as it does the picker.
-        let offered = enabled
-            .iter()
-            .any(|entry| entry.id == provider && entry.shows_model(model));
+        let offered = crate::picker::offers_model(state, provider, model);
         if !offered || model.is_empty() {
             return;
         }
@@ -185,7 +185,10 @@ fn model_items(state: &WorkspaceState) -> Vec<PaletteItem> {
             keywords.push(model_name.clone());
         }
         let checked = state.selected_provider.as_deref() == Some(provider)
-            && state.selected_model.as_deref() == Some(model);
+            && state
+                .selected_model
+                .as_deref()
+                .is_some_and(|selected| canonical_model_id(state, provider, selected) == model);
         items.push(PaletteItem {
             command: PaletteCommand::SelectModel {
                 provider: provider.to_owned(),

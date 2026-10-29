@@ -22,6 +22,12 @@ pub const MAX_STRING_BYTES: usize = 8 * 1024;
 pub struct CatalogModel {
     /// Model id as sent to the provider.
     pub id: String,
+    /// Other model ids that resolve to this route.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Upstream source published by the gateway, distinct from the gateway itself.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
     /// Display name.
     pub name: String,
     /// Supports reasoning output.
@@ -109,6 +115,18 @@ impl Default for CatalogProvider {
     }
 }
 
+impl CatalogProvider {
+    /// Looks one model up by exact id first, then by alias.
+    #[must_use]
+    pub fn model(&self, id: &str) -> Option<&CatalogModel> {
+        self.models.iter().find(|model| model.id == id).or_else(|| {
+            self.models
+                .iter()
+                .find(|model| model.aliases.iter().any(|alias| alias == id))
+        })
+    }
+}
+
 /// The complete provider catalog.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CatalogDocument {
@@ -124,13 +142,10 @@ impl CatalogDocument {
         self.providers.iter().find(|provider| provider.id == id)
     }
 
-    /// Looks one model up by provider and model id.
+    /// Looks one model up by provider and model id or alias.
     #[must_use]
     pub fn model(&self, provider_id: &str, model_id: &str) -> Option<&CatalogModel> {
-        self.provider(provider_id)?
-            .models
-            .iter()
-            .find(|model| model.id == model_id)
+        self.provider(provider_id)?.model(model_id)
     }
 
     /// Resolves a model for a configured endpoint.
@@ -149,14 +164,14 @@ impl CatalogDocument {
             let base_url = base_url.filter(|url| !url.is_empty())?;
             self.providers.iter().find(|item| item.base_url == base_url)
         }) {
-            return provider.models.iter().find(|model| model.id == model_id);
+            return provider.model(model_id);
         }
         self.model_by_id(model_id)
     }
 
     fn model_by_id(&self, model_id: &str) -> Option<&CatalogModel> {
         for provider in &self.providers {
-            if let Some(model) = provider.models.iter().find(|model| model.id == model_id) {
+            if let Some(model) = provider.model(model_id) {
                 return Some(model);
             }
         }
@@ -214,6 +229,13 @@ pub(crate) fn normalize_provider(mut provider: CatalogProvider) -> Option<Catalo
         provider.models.truncate(MAX_MODELS_PER_PROVIDER);
     }
     for model in &mut provider.models {
+        model
+            .aliases
+            .retain(|alias| valid_model_id(alias) && alias != &model.id);
+        model.aliases.truncate(MAX_MODELS_PER_PROVIDER);
+        model.aliases.sort();
+        model.aliases.dedup();
+        model.source = clean_text(&model.source).unwrap_or_default();
         model.name = clean_text(&model.name).unwrap_or_else(|| model.id.clone());
         model.cost_in = model
             .cost_in
@@ -229,7 +251,10 @@ pub(crate) fn normalize_provider(mut provider: CatalogProvider) -> Option<Catalo
 
 #[cfg(test)]
 mod tests {
-    use super::{CatalogDocument, CatalogModel, CatalogProvider};
+    use super::{
+        CatalogDocument, CatalogModel, CatalogProvider, MAX_MODELS_PER_PROVIDER, MAX_STRING_BYTES,
+        normalize_provider,
+    };
 
     #[test]
     fn published_efforts_are_not_padded_with_a_guessed_ladder() {
@@ -263,6 +288,126 @@ mod tests {
             ..CatalogModel::default()
         };
         assert_eq!(bare.reasoning_levels(), vec!["default".to_owned()]);
+    }
+
+    #[test]
+    fn exact_model_ids_win_over_aliases() {
+        let provider = CatalogProvider {
+            models: vec![
+                CatalogModel {
+                    id: "copilot/model".to_owned(),
+                    aliases: vec!["model".to_owned()],
+                    ..CatalogModel::default()
+                },
+                CatalogModel {
+                    id: "model".to_owned(),
+                    ..CatalogModel::default()
+                },
+            ],
+            ..CatalogProvider::default()
+        };
+        assert_eq!(provider.model("model"), Some(&provider.models[1]));
+        assert_eq!(provider.model("copilot/model"), Some(&provider.models[0]));
+        assert!(provider.model("missing").is_none());
+    }
+
+    #[test]
+    fn aliases_default_to_empty_and_serialize_only_when_present() {
+        let mut model: CatalogModel = serde_json::from_str(r#"{"id":"copilot/model"}"#)
+            .expect("legacy model without aliases");
+        assert!(model.aliases.is_empty());
+        assert!(
+            serde_json::to_value(&model)
+                .expect("model")
+                .get("aliases")
+                .is_none()
+        );
+        model.aliases.push("model".to_owned());
+        let encoded = serde_json::to_value(&model).expect("model with alias");
+        assert_eq!(encoded["aliases"], serde_json::json!(["model"]));
+        assert_eq!(
+            serde_json::from_value::<CatalogModel>(encoded).expect("round trip"),
+            model
+        );
+    }
+
+    #[test]
+    fn normalization_validates_aliases_like_ids_and_bounds_their_count() {
+        let provider = CatalogProvider {
+            id: "magpie".to_owned(),
+            base_url: "http://localhost:1/v1".to_owned(),
+            models: vec![
+                CatalogModel {
+                    id: "copilot/model".to_owned(),
+                    aliases: vec![
+                        "z".to_owned(),
+                        "alias".to_owned(),
+                        "alias".to_owned(),
+                        "copilot/model".to_owned(),
+                        String::new(),
+                        "has space".to_owned(),
+                        "has\ncontrol".to_owned(),
+                        "x".repeat(MAX_STRING_BYTES + 1),
+                        "模型".to_owned(),
+                    ],
+                    ..CatalogModel::default()
+                },
+                CatalogModel {
+                    id: "bounded".to_owned(),
+                    aliases: (0..MAX_MODELS_PER_PROVIDER + 1)
+                        .map(|index| format!("alias-{index:04}"))
+                        .collect(),
+                    ..CatalogModel::default()
+                },
+                CatalogModel {
+                    id: "invalid id".to_owned(),
+                    ..CatalogModel::default()
+                },
+            ],
+            ..CatalogProvider::default()
+        };
+        let provider = normalize_provider(provider).expect("normalized provider");
+        assert_eq!(provider.models.len(), 2);
+        let model = provider.model("copilot/model").expect("route");
+        assert_eq!(model.aliases, ["alias", "z", "模型"]);
+        assert_eq!(provider.model("alias"), Some(model));
+        let bounded = provider.model("bounded").expect("bounded aliases");
+        assert_eq!(bounded.aliases.len(), MAX_MODELS_PER_PROVIDER);
+        assert!(bounded.aliases.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn known_providers_keep_alias_resolution_within_their_own_models() {
+        let document = CatalogDocument {
+            providers: vec![
+                CatalogProvider {
+                    id: "magpie".to_owned(),
+                    models: vec![CatalogModel {
+                        id: "copilot/model".to_owned(),
+                        aliases: vec!["model".to_owned()],
+                        ..CatalogModel::default()
+                    }],
+                    ..CatalogProvider::default()
+                },
+                CatalogProvider {
+                    id: "other".to_owned(),
+                    base_url: "http://other/v1".to_owned(),
+                    ..CatalogProvider::default()
+                },
+            ],
+        };
+        assert!(document.model("magpie", "model").is_some());
+        assert!(document.model("other", "model").is_none());
+        assert!(
+            document
+                .model_for_endpoint("other", None, "model")
+                .is_none()
+        );
+        assert!(
+            document
+                .model_for_endpoint("unknown", Some("http://other/v1"), "model")
+                .is_none()
+        );
     }
 
     #[test]
