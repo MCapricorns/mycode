@@ -5,6 +5,7 @@ use mycode_app::ActiveConversation;
 mod catalog;
 mod recall;
 mod runtime_guards;
+mod scroll;
 
 fn conversation(session: &str, branch: &str) -> ActiveConversation {
     ActiveConversation {
@@ -126,6 +127,7 @@ fn a_chat_opened_mid_turn_reloads_from_the_ledger_when_the_turn_ends() {
             entry: ConversationEntry {
                 event_id: "evt".to_owned(),
                 kind: EntryKind::AssistantMessage,
+                agent_states: None,
                 text: "done".into(),
                 call_id: None,
                 thinking: String::new(),

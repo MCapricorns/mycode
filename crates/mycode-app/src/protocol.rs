@@ -44,7 +44,7 @@ pub struct SessionSummary {
 }
 
 /// What one conversation entry represents.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EntryKind {
     UserMessage,
     AssistantMessage,
@@ -58,7 +58,7 @@ pub enum EntryKind {
 pub const CODE_CALLS_HEADING: &str = "[code calls]";
 
 /// One entry of a conversation transcript.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ConversationEntry {
     /// Event identity spelling.
     pub event_id: String,
@@ -71,6 +71,9 @@ pub struct ConversationEntry {
     pub call_id: Option<String>,
     /// Reasoning text shown above an assistant answer. Empty when none.
     pub thinking: String,
+    /// Typed agent results retained separately from the readable tool output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_states: Option<Arc<[crate::builtin::AgentStateEvent]>>,
 }
 
 /// The currently open conversation.

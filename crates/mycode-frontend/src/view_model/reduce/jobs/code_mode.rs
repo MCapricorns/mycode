@@ -7,6 +7,9 @@ pub(super) fn apply_progress(state: &mut WorkspaceState, message: &str) -> bool 
     let Some(event) = CodeModeProgress::parse(message) else {
         return false;
     };
+    if !state.sending && matches!(event, CodeModeProgress::Started { .. }) {
+        return true;
+    }
     match event {
         CodeModeProgress::Started {
             call_id,
@@ -46,9 +49,33 @@ pub(super) fn apply_progress(state: &mut WorkspaceState, message: &str) -> bool 
             // The outer ledger/provider ids never reach the child cancel map.
             tool_progress(state, call_id.clone(), call_id, name, message);
         }
-        CodeModeProgress::Completed { call_id, .. } => {
+        CodeModeProgress::Completed {
+            call_id,
+            phase,
+            is_error,
+            ..
+        } => {
+            let status = match phase {
+                mycode_app::InnerCallPhase::Cancelled => {
+                    mycode_app::builtin::AgentRunStatus::Cancelled
+                }
+                mycode_app::InnerCallPhase::Failed => mycode_app::builtin::AgentRunStatus::Failed,
+                _ if is_error => mycode_app::builtin::AgentRunStatus::Failed,
+                _ => mycode_app::builtin::AgentRunStatus::Completed,
+            };
+            snapshots::complete_call(state, &call_id, status);
+            if let Some(job) = state
+                .live_jobs
+                .iter()
+                .find(|job| job.call_id == call_id)
+                .cloned()
+            {
+                snapshots::archive_legacy(state, &job, status, None);
+            }
             drop_live_job(state, &call_id);
-            refresh_subagent_status(state);
+            if state.sending {
+                refresh_subagent_status(state);
+            }
         }
     }
     true

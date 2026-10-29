@@ -368,6 +368,7 @@ impl LedgerPump {
             entry: ConversationEntry {
                 event_id,
                 kind: EntryKind::UserMessage,
+                agent_states: None,
                 text: text.into(),
                 call_id: None,
                 thinking: String::new(),

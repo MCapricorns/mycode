@@ -272,6 +272,7 @@ pub(super) fn render_chat(
             let call = ConversationEntry {
                 event_id: format!("inner-{}", job.call_id),
                 kind: EntryKind::ToolCall,
+                agent_states: None,
                 text: mycode_frontend::tool_label("agent", &format!("{} {}", job.role, job.label))
                     .into(),
                 call_id: Some(job.call_id.clone()),
@@ -316,6 +317,7 @@ pub(super) fn render_chat(
         scroll_handle.clone(),
         workspace.take_scroll_anchor(),
         appearance,
+        workspace.conversation_follows_tail(),
     );
     let probe = anchor.probe();
     let theme = cx.theme();
@@ -783,6 +785,7 @@ mod nesting_tests {
         ConversationEntry {
             event_id: format!("call-{id}"),
             kind: EntryKind::ToolCall,
+            agent_states: None,
             text: text.into(),
             call_id: Some(id.to_owned()),
             thinking: String::new(),
@@ -793,6 +796,7 @@ mod nesting_tests {
         ConversationEntry {
             event_id: format!("result-{id}"),
             kind: EntryKind::ToolResult,
+            agent_states: None,
             text: text.into(),
             call_id: Some(id.to_owned()),
             thinking: String::new(),
@@ -862,6 +866,7 @@ mod nesting_tests {
         let user = crate::view_model::ConversationEntry {
             event_id: "user".into(),
             kind: EntryKind::UserMessage,
+            agent_states: None,
             text: "hi".into(),
             call_id: None,
             thinking: String::new(),
@@ -869,6 +874,7 @@ mod nesting_tests {
         let agent = crate::view_model::ConversationEntry {
             event_id: "agent".into(),
             kind: EntryKind::AssistantMessage,
+            agent_states: None,
             text: "done".into(),
             call_id: None,
             thinking: String::new(),
@@ -907,6 +913,7 @@ mod nesting_tests {
         let user = |id: &str| ConversationEntry {
             event_id: id.into(),
             kind: EntryKind::UserMessage,
+            agent_states: None,
             text: "prompt".into(),
             call_id: None,
             thinking: String::new(),
@@ -914,6 +921,7 @@ mod nesting_tests {
         let assistant = |id: &str, text: &str, thinking: &str| ConversationEntry {
             event_id: id.into(),
             kind: EntryKind::AssistantMessage,
+            agent_states: None,
             text: text.into(),
             call_id: None,
             thinking: thinking.into(),

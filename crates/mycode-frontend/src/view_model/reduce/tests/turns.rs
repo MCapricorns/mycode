@@ -8,6 +8,7 @@ fn queued_tool_events_do_not_duplicate_a_reopened_snapshot() {
     let call = ConversationEntry {
         event_id: "ledger-call".into(),
         kind: EntryKind::ToolCall,
+        agent_states: None,
         text: "agent  scout inspect code".into(),
         call_id: Some("call-1".into()),
         thinking: String::new(),
@@ -15,6 +16,7 @@ fn queued_tool_events_do_not_duplicate_a_reopened_snapshot() {
     let result = ConversationEntry {
         event_id: "ledger-result".into(),
         kind: EntryKind::ToolResult,
+        agent_states: None,
         text: "found the entry point".into(),
         call_id: Some("call-1".into()),
         thinking: String::new(),
@@ -145,6 +147,7 @@ fn manual_and_auto_compaction_show_the_summary_in_the_chat() {
     let entry = ConversationEntry {
         event_id: "sum-1".to_owned(),
         kind: EntryKind::UserMessage,
+        agent_states: None,
         text: text.into(),
         call_id: None,
         thinking: String::new(),
@@ -165,6 +168,7 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
     let tool = ConversationEntry {
         event_id: "call-1".to_owned(),
         kind: EntryKind::ToolCall,
+        agent_states: None,
         text: "grep  src".into(),
         call_id: Some("c1".into()),
         thinking: String::new(),
@@ -172,6 +176,7 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
     let result = ConversationEntry {
         event_id: "res-1".to_owned(),
         kind: EntryKind::ToolResult,
+        agent_states: None,
         text: "src/main.rs:1:fn main".into(),
         call_id: Some("c1".into()),
         thinking: String::new(),
@@ -199,6 +204,7 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
     let summary = ConversationEntry {
         event_id: "sum-1".to_owned(),
         kind: EntryKind::UserMessage,
+        agent_states: None,
         text: mycode_app::display_summary_text("files: src/main.rs").into(),
         call_id: None,
         thinking: String::new(),
@@ -227,6 +233,7 @@ fn a_mid_turn_summary_lands_after_the_final_reply() {
     let reply = ConversationEntry {
         event_id: "reply-1".to_owned(),
         kind: EntryKind::AssistantMessage,
+        agent_states: None,
         text: "done".into(),
         call_id: None,
         thinking: "weigh the matches".to_owned(),
@@ -556,6 +563,7 @@ fn steer_committed_appends_the_entry_and_moves_the_head() {
     let entry = ConversationEntry {
         event_id: "evt-steer".to_owned(),
         kind: EntryKind::UserMessage,
+        agent_states: None,
         text: "keep going".into(),
         call_id: None,
         thinking: String::new(),
@@ -834,6 +842,7 @@ fn a_mid_turn_reopen_keeps_agent_calls_pairable() {
             entries: vec![ConversationEntry {
                 event_id: "evt-call".to_owned(),
                 kind: EntryKind::ToolCall,
+                agent_states: None,
                 text: "agent scout verify".into(),
                 call_id: Some("call1-a".to_owned()),
                 thinking: String::new(),
@@ -860,6 +869,7 @@ fn a_mid_turn_reopen_keeps_agent_calls_pairable() {
         FrontendAction::ToolResultAppended(ConversationEntry {
             event_id: "evt-res".to_owned(),
             kind: EntryKind::ToolResult,
+            agent_states: None,
             text: "done".into(),
             call_id: Some("call1-a".to_owned()),
             thinking: String::new(),

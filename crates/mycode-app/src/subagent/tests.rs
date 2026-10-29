@@ -3,7 +3,7 @@ use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[test]
-fn parent_dispatch_names_scout_and_artisan_only() {
+fn parent_dispatch_names_enabled_builtin_roles_and_runtime_capabilities() {
     let text = super::delegation_directive(&builtin_roles(), &SubagentSettings::default());
     assert!(text.contains("`scout`"));
     assert!(text.contains("`artisan`"));
@@ -21,7 +21,20 @@ fn parent_dispatch_names_scout_and_artisan_only() {
         mycode_agent::SUBAGENT_CONCURRENCY
     )));
     assert!(!text.contains("steward"));
-    assert!(!text.contains("sentinel"));
+    assert!(text.contains("`sentinel`"));
+    assert!(text.contains("`skeptic`"));
+    assert!(text.contains("agent_status"));
+    assert!(text.contains("waiting_integration"));
+    assert!(text.contains("phase_id"));
+    assert!(text.contains("Full-session continuation is unsupported"));
+    assert!(text.contains("preserve its original cell_id and use wait_code"));
+    assert!(text.contains("existing authorization and declared scope"));
+    assert!(text.contains("new independent acceptance result"));
+    assert!(text.contains("original writer worktree"));
+    assert!(text.contains("does not restore a full conversation session"));
+    assert!(!text.contains("continuation is refused"));
+    assert!(text.contains("Completed worktree writers reopen"));
+    assert!(!text.contains("standalone shared/read-only"));
     assert!(!text.contains("`exec`"));
     assert!(!text.contains("`task`"));
     assert!(
@@ -45,6 +58,14 @@ fn parent_dispatch_never_names_a_role_switched_off_in_settings() {
     assert!(!text.contains("scout"), "{text}");
 
     settings.role_mut("artisan").enabled = false;
+    let remaining = super::delegation_directive(&builtin_roles(), &settings);
+    assert!(remaining.contains("`sentinel`"));
+    assert!(remaining.contains("`skeptic`"));
+    assert!(!remaining.contains("name=research"));
+    assert!(!remaining.contains("name=migration"));
+    for name in builtin_roles().names() {
+        settings.role_mut(&name).enabled = false;
+    }
     assert!(super::delegation_directive(&builtin_roles(), &settings).is_empty());
 }
 
@@ -358,7 +379,7 @@ fn scout_stays_read_only_and_does_not_list_a_shell() {
     assert!(!prompt.contains("translated"), "{prompt}");
     assert!(!prompt.contains("\n- shell:"), "{prompt}");
     assert!(registry.get("edit").is_none());
-    assert!(prompt.contains("`goal`"), "{prompt}");
+    assert!(prompt.contains("bounded research question"), "{prompt}");
     assert!(
         !prompt.contains("Do not do that research inline"),
         "{prompt}"

@@ -1,8 +1,5 @@
-//! Live tool and subagent progress: the `agent|role|phase|detail` protocol,
-//! the running scout/artisan rows, and the status lines they feed.
-//!
-//! Finished jobs drop out of the list: the panel and the status line only
-//! ever describe work that is still running.
+//! Typed agent snapshots and legacy live progress. Terminal records remain
+//! in the session inspector while the compatibility live-job list retires.
 
 use crate::i18n::t;
 use crate::view_model::{ConversationEntry, EntryKind, LiveJob, WorkspaceState};
@@ -12,9 +9,17 @@ use mycode_app::builtin::AGENT_PROGRESS_PREFIX;
 use super::streaming::{set_streaming_status, tool_call_label};
 
 mod code_mode;
+mod snapshots;
+pub(super) use snapshots::{
+    cancelled as subagent_cancelled, consume_result as consume_agent_result,
+};
 
 fn job_finished(state: &WorkspaceState, call_id: &str) -> bool {
     state.finished_jobs.contains(call_id)
+        || state
+            .subagent_session()
+            .and_then(|session| session.run(call_id))
+            .is_some_and(|run| run.status.is_terminal())
         || state.active.as_ref().is_some_and(|conversation| {
             conversation.entries.iter().any(|entry| {
                 entry.kind == EntryKind::ToolResult && entry.call_id.as_deref() == Some(call_id)
@@ -54,6 +59,7 @@ pub(super) fn tool_preparing(
         None => state.preparing_calls.push(ConversationEntry {
             event_id,
             kind: EntryKind::ToolCall,
+            agent_states: None,
             text: label.into(),
             call_id: None,
             thinking: String::new(),
@@ -85,7 +91,9 @@ pub(super) fn tool_started(
 ) {
     // A reopened snapshot may already contain this result while its live
     // start event is still in the UI queue. It must not restart a finished job.
-    if job_finished(state, &call_id) {
+    if job_finished(state, &call_id)
+        || (!provider_call_id.is_empty() && job_finished(state, &provider_call_id))
+    {
         return;
     }
     let label = tool_call_label(&name, &target);
@@ -119,6 +127,7 @@ pub(super) fn tool_started(
         conversation.entries.push(ConversationEntry {
             event_id: format!("call-{call_id}"),
             kind: EntryKind::ToolCall,
+            agent_states: None,
             text: label.into(),
             call_id: Some(call_id),
             thinking: String::new(),
@@ -135,7 +144,17 @@ pub(super) fn tool_progress(
     name: String,
     message: String,
 ) {
+    if snapshots::consume(state, &call_id, &provider_call_id, &message) {
+        return;
+    }
     if code_mode::apply_progress(state, &message) {
+        return;
+    }
+    if !state.sending {
+        return;
+    }
+    // Legacy workflow text has no node identity. Typed snapshots own those rows.
+    if name == "agent_workflow" {
         return;
     }
     let agent_event = is_agent_event(&name, &message);
@@ -422,7 +441,7 @@ fn live_job_mut<'a>(state: &'a mut WorkspaceState, call_id: &str) -> Option<&'a 
         .find(|job| job.call_id == call_id)
 }
 
-/// Removes one finished job and any detail window still showing it.
+/// Removes one finished compatibility job, retaining its detail and result.
 /// Its clock stops here: the final runtime is stored for the transcript
 /// row that stays behind. Returns whether a job left the list.
 pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) -> bool {
@@ -442,9 +461,12 @@ pub(super) fn drop_live_job(state: &mut WorkspaceState, call_id: &str) -> bool {
     };
     let job = state.live_jobs.remove(index);
     record_job_elapsed(state, &job);
-    if state.subagent_window.as_deref() == Some(job.call_id.as_str()) && !job.call_id.is_empty() {
-        state.subagent_window = None;
-    }
+    snapshots::archive_legacy(
+        state,
+        &job,
+        mycode_app::builtin::AgentRunStatus::Completed,
+        None,
+    );
     true
 }
 
@@ -455,7 +477,14 @@ pub(super) fn retire_live_jobs(state: &mut WorkspaceState) {
     for job in &jobs {
         record_job_elapsed(state, job);
     }
-    state.subagent_window = None;
+    let retained = state.subagent_window.as_ref().is_some_and(|id| {
+        state.subagent_session().is_some_and(|session| {
+            session.run(id).is_some() || session.workflows.iter().any(|workflow| &workflow.id == id)
+        })
+    });
+    if !retained {
+        state.subagent_window = None;
+    }
 }
 
 /// Stores one job's final runtime keyed by its call id. Jobs that never
@@ -547,6 +576,7 @@ mod tests {
             FrontendAction::ToolResultAppended(ConversationEntry {
                 event_id: "res-c1".to_owned(),
                 kind: EntryKind::ToolResult,
+                agent_states: None,
                 text: "done".into(),
                 call_id: Some("c1".to_owned()),
                 thinking: String::new(),
@@ -598,6 +628,7 @@ mod tests {
                 entry: ConversationEntry {
                     event_id: "evt-2".to_owned(),
                     kind: EntryKind::AssistantMessage,
+                    agent_states: None,
                     text: "done".into(),
                     call_id: None,
                     thinking: String::new(),
@@ -777,6 +808,7 @@ mod tests {
             FrontendAction::AssistantStepCommitted(ConversationEntry {
                 event_id: "evt-step".to_owned(),
                 kind: EntryKind::AssistantMessage,
+                agent_states: None,
                 text: "dispatching".into(),
                 call_id: None,
                 thinking: String::new(),
@@ -871,6 +903,7 @@ mod tests {
                 entries: vec![ConversationEntry {
                     event_id: "call-c1".to_owned(),
                     kind: EntryKind::ToolCall,
+                    agent_states: None,
                     text: "agent  scout Audit Rust client crate".into(),
                     call_id: Some("c1".to_owned()),
                     thinking: String::new(),

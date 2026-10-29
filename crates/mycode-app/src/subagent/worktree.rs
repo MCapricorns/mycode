@@ -66,6 +66,62 @@ impl WorktreeLease {
         Ok(Self { path, manifest })
     }
 
+    /// Reopens only a recorded linked worktree from this home and repository.
+    /// This performs no checkout, reset, clean, apply, merge or file replacement.
+    pub(crate) fn reopen(home: &HomeLayout, repo: &Path, path: &Path) -> Result<Self, String> {
+        let missing =
+            |error| format!("retained worktree is unavailable; no HEAD fallback: {error}");
+        let leases = home
+            .root()
+            .join(WORKTREE_LEASE_DIR)
+            .canonicalize()
+            .map_err(missing)?;
+        let path = path.canonicalize().map_err(missing)?;
+        if path.parent() != Some(leases.as_path()) || !path.join(".git").is_file() {
+            return Err("retained path is not a linked worktree owned by this home".into());
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("invalid retained worktree name")?;
+        let manifest = leases.join(format!("{name}.json"));
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest).map_err(missing)?)
+                .map_err(|e| format!("retained worktree manifest: {e}"))?;
+        let recorded = |key: &str| -> Result<PathBuf, String> {
+            PathBuf::from(
+                record[key]
+                    .as_str()
+                    .ok_or("incomplete retained worktree manifest")?,
+            )
+            .canonicalize()
+            .map_err(missing)
+        };
+        if recorded("repo")? != repo.canonicalize().map_err(missing)? || recorded("path")? != path {
+            return Err("retained worktree belongs to another repository or path".into());
+        }
+        let git_path = |cwd: &Path, flag: &str| -> Result<PathBuf, String> {
+            let output = git_command()
+                .arg("-C")
+                .arg(cwd)
+                .args(["rev-parse", flag])
+                .output()
+                .map_err(missing)?;
+            if !output.status.success() {
+                return Err("retained worktree Git metadata is unavailable".into());
+            }
+            cwd.join(String::from_utf8_lossy(&output.stdout).trim())
+                .canonicalize()
+                .map_err(missing)
+        };
+        if git_path(&path, "--show-toplevel")? != path
+            || git_path(&path, "--git-common-dir")? != git_path(repo, "--git-common-dir")?
+        {
+            return Err("retained worktree is not registered with the original repository".into());
+        }
+        Ok(Self { path, manifest })
+    }
+
     /// Releases a clean lease. A failed removal preserves both the checkout
     /// and its recovery manifest, including untracked and ignored files.
     pub(crate) fn release(self) -> bool {
@@ -108,25 +164,16 @@ impl WorktreeLease {
     }
 }
 
-/// Releases a lease the run never handed off.
-///
-/// A parent cancel stops polling a running `agent` call and drops it
-/// mid-await. Without this guard the checkout stayed registered in the
-/// user's repository until the next app start.
+/// Reclaims a lease never handed to a child. Activated leases leave this
+/// guard before workers can start; abandoning an active run preserves its
+/// checkout and recovery manifest instead of racing native worker cleanup.
 pub(super) struct LeaseGuard(pub(super) Option<WorktreeLease>);
-
-impl LeaseGuard {
-    pub(super) fn path(&self) -> Option<&Path> {
-        self.0.as_ref().map(|lease| lease.path.as_path())
-    }
-}
 
 impl Drop for LeaseGuard {
     fn drop(&mut self) {
         let Some(lease) = self.0.take() else {
             return;
         };
-        // `git worktree remove` blocks; keep it off the runtime thread.
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => drop(runtime.spawn_blocking(move || lease.release())),
             Err(_) => {

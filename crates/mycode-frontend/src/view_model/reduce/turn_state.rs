@@ -66,9 +66,10 @@ pub(super) fn reset_turn_view(state: &mut WorkspaceState) {
     state.turn_alert = None;
     retire_live_jobs(state);
     state.finished_jobs.clear();
+    state.job_elapsed.clear();
+    state.subagent_window = None;
+    state.subagent_sections.clear();
     drop_preparing_rows(state);
-    // `retire_live_jobs` just parked each job's final runtime on the state
-    // for the transcript rows that stay behind; clearing here would undo it.
     state.changes_panel_open = false;
     state.pending_ask = None;
     state.ask_answers.clear();

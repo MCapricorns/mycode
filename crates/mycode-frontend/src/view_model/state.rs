@@ -128,15 +128,19 @@ pub struct WorkspaceState {
     /// call starts (the started row then follows the committed step) or the
     /// turn ends.
     pub preparing_calls: Vec<ConversationEntry>,
-    /// Live `agent` runs for the inspector panel.
+    /// Compatibility projection of currently active calls for transcript tools.
     pub live_jobs: Vec<LiveJob>,
+    /// Typed run/workflow history, bounded per session in this process.
+    pub subagents: super::subagents::SubagentHistory,
+    /// Expanded optional sections in the selected agent detail.
+    pub subagent_sections: std::collections::HashSet<String>,
     /// Final runtimes of finished subagent calls, `(call_id, ms)`. A row
     /// looks its duration up here once the job left `live_jobs`.
     pub job_elapsed: Vec<(String, u64)>,
     /// Terminal or individually stopped jobs in the current conversation.
     /// Retiring a view or ending a turn alone does not finish yielded cells.
     pub finished_jobs: std::collections::HashSet<String>,
-    /// Call id of the subagent detail window, when open.
+    /// Stable run/workflow id (or legacy call id) selected in the agent detail.
     pub subagent_window: Option<String>,
     /// Whether the full working-tree changes drawer is open.
     pub changes_panel_open: bool,
@@ -249,6 +253,23 @@ pub struct WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// Agent snapshots for the open session only.
+    pub fn subagent_session(&self) -> Option<&super::subagents::SubagentSession> {
+        self.subagents.session(
+            self.active
+                .as_ref()
+                .map_or("", |active| active.session_id.as_str()),
+        )
+    }
+
+    /// Whether the inspector has retained or active agent records to display.
+    pub fn has_subagents(&self) -> bool {
+        !self.live_jobs.is_empty()
+            || self
+                .subagent_session()
+                .is_some_and(|session| !session.runs.is_empty() || !session.workflows.is_empty())
+    }
+
     /// Milliseconds the in-flight turn has been running. `0` when no turn
     /// is armed or the clock was never stamped.
     pub fn turn_elapsed_ms(&self) -> u64 {
@@ -470,6 +491,8 @@ pub enum FrontendAction {
     },
     /// Opens or closes the subagent detail window.
     SubagentWindowChanged(Option<String>),
+    /// Toggles a progressively disclosed prompt or activity section.
+    SubagentSectionToggled(String),
     /// The core acknowledged cancellation of one running subagent.
     SubagentDismissed(String),
     /// Opens or closes the full changes drawer.

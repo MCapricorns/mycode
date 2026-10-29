@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use crate::builtin::{AgentRunStatus, AgentStateEvent, AgentWorkflowStatus};
 use crate::registry::ToolRegistry;
 use crate::stream::{ToolStream, ToolStreamItem};
 use crate::tool::{ToolDyn, ToolResult};
@@ -199,8 +200,23 @@ async fn handle(
                 ),
                 Err(_) => (true, None),
             };
+            let agent_states: Vec<AgentStateEvent> = outcome
+                .as_ref()
+                .ok()
+                .and_then(|result| result.details.as_ref())
+                .and_then(|details| details.get("agent_states"))
+                .and_then(|states| serde_json::from_value(states.clone()).ok())
+                .unwrap_or_default();
+            let child_cancelled = is_error
+                && current_execution_cancelled(&name, &args, &lifecycle.call_id, &agent_states);
+            cell.record_agent_states(agent_states);
             let response = outcome.and_then(|result| project_result(cell, result));
-            lifecycle.finish(&response, is_error || response.is_err(), diff);
+            lifecycle.finish(
+                &response,
+                is_error || response.is_err(),
+                diff,
+                child_cancelled,
+            );
             let response = match response {
                 Ok(response) => response,
                 Err(message) => json!({
@@ -212,6 +228,45 @@ async fn handle(
             cell.record(seq, ScriptEventKind::Call, &call_args, Some(&response));
             let _ = reply.send(HostReply::Value(response));
         }
+    }
+}
+
+// Query/control results retain history without executing the reported runs.
+// Workflow execution returns its own terminal snapshot alongside runs from all
+// revisions; only that workflow outcome determines cancellation of this call.
+fn current_execution_cancelled(
+    name: &str,
+    args: &Value,
+    call_id: &str,
+    states: &[AgentStateEvent],
+) -> bool {
+    match name {
+        "agent" | "agent_message" => states.iter().any(|event| {
+            matches!(event, AgentStateEvent::Run(run)
+                if run.call_id == call_id && run.status == AgentRunStatus::Cancelled)
+        }),
+        "agent_workflow" => {
+            let id = match args
+                .get("action")
+                .and_then(Value::as_str)
+                .unwrap_or("start")
+            {
+                "start" => None,
+                "resume" | "accept" | "revise" => {
+                    let Some(id) = args.get("id").and_then(Value::as_str) else {
+                        return false;
+                    };
+                    Some(id)
+                }
+                _ => return false,
+            };
+            states.iter().any(|event| {
+                matches!(event, AgentStateEvent::Workflow(workflow)
+                    if id.is_none_or(|id| workflow.id == id)
+                        && workflow.status == AgentWorkflowStatus::Cancelled)
+            })
+        }
+        _ => false,
     }
 }
 
@@ -283,11 +338,18 @@ impl InnerCallLifecycle {
         self.cell.terminated() || self.cancel.is_cancelled()
     }
 
-    fn finish(&mut self, outcome: &Result<Value, String>, is_error: bool, diff: Option<String>) {
+    fn finish(
+        &mut self,
+        outcome: &Result<Value, String>,
+        is_error: bool,
+        diff: Option<String>,
+        child_cancelled: bool,
+    ) {
         // The legacy AgentHost API reports an independently stopped child
         // as `Execution("subagent <role> cancelled")`. Preserve that state
         // even though its parent cell's token was deliberately not cancelled.
         let cancelled = self.cancelled()
+            || child_cancelled
             || outcome.as_ref().err().is_some_and(|message| {
                 message.contains(crate::tool::INTERRUPTED_NOTE)
                     || (self.summary.name == "agent"

@@ -1,8 +1,9 @@
 //! The transcript timeline: streaming bubble, committed entries, tool
-//! blocks, and user rows with their recall hover action.
+//! blocks, and user rows with their persistent recall action.
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::theme::Theme;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, SharedString,
@@ -35,9 +36,9 @@ pub(super) struct AssistantActions {
 
 /// The in-flight assistant turn: a live status line, then thinking and text.
 ///
-/// While subagents run the status line only says the turn is waiting for
-/// them. Each child's task and cancel sit on its `agent` row in the
-/// transcript, and its steps in the inspector and the subagent window.
+/// The status stays at turn level: working or thinking. Tool details live
+/// on their transcript rows; each child's steps stay in the inspector and
+/// the subagent window.
 pub(super) fn render_streaming_entry(
     streaming: &StreamingReply,
     workspace: &Workspace,
@@ -52,17 +53,14 @@ pub(super) fn render_streaming_entry(
         speaker: show_speaker,
     } = display;
     let desk = Desk::of(theme);
-    let working = t("WORKING", "工作中");
-    let elapsed = workspace.vm().turn_elapsed_ms();
-    let elapsed = if elapsed >= 1_000 {
-        format!(" · {}", crate::view_model::elapsed_label(elapsed))
+    // The reducer keeps detailed progress for tools. Do not echo it below
+    // the tool rows, or keep animating an earlier thinking trace after the
+    // model has moved on. Accept both languages when preferences change.
+    let thinking = matches!(streaming.status.as_str(), "Thinking" | "思考中");
+    let status = if thinking {
+        t("Thinking", "思考中")
     } else {
-        String::new()
-    };
-    let status = if streaming.status.is_empty() {
-        format!("{working}{elapsed}")
-    } else {
-        format!("{working} · {}{elapsed}", streaming.status)
+        t("Working", "工作中")
     };
     let has_text = !streaming.text.trim().is_empty();
     desk_shell(
@@ -76,7 +74,7 @@ pub(super) fn render_streaming_entry(
             .gap_2()
             .child(markdown::prose_measure(status_line(
                 "streaming-status",
-                &status,
+                status,
                 desk.amber,
                 theme,
             )))
@@ -94,7 +92,7 @@ pub(super) fn render_streaming_entry(
                     id,
                     &streaming.thinking,
                     workspace.thinking_open(),
-                    true,
+                    thinking && !cx.reduce_motion(),
                     theme,
                     cx.listener(|workspace, _, _, cx| {
                         workspace.on_toggle_thinking(cx);
@@ -248,9 +246,8 @@ fn speaker_row(
         )
 }
 
-/// A lamp plus a one-line label. The label truncates: a running status
-/// carries the whole tool target (a full shell command), which otherwise
-/// stretches the row past the transcript column.
+/// A lamp plus a compact turn-level label, constrained to the transcript
+/// column at every window width.
 fn status_line(
     id: impl Into<gpui_kit::ElementId>,
     label: &str,
@@ -765,9 +762,9 @@ pub(super) fn render_summary_entry(
 pub(super) const USER_BUBBLE_MAX_SHARE: f32 = 0.72;
 
 /// One right-aligned user bubble (capped at 72% width, no speaker header) with
-/// one hover action: recall, which rewinds to before this message and puts its
-/// text back in the composer for resending. Workspace files are not restored
-/// or deleted. Messages without a prior ledger event hide the action.
+/// one persistent action: recall, which rewinds to before this message and
+/// puts its text back in the composer for resending. Workspace files are not
+/// restored or deleted. Busy turns keep the action visible but disabled.
 /// User turns render verbatim: pasted Markdown, HTML, and rich-text styling
 /// keep no styling here. Line breaks stay, so the bubble shows what was sent.
 fn plain_user_text(text: &str) -> impl IntoElement {
@@ -794,8 +791,26 @@ pub(super) fn render_user_entry(
     index: usize,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
-    let theme = cx.theme();
-    let mut column = div()
+    user_block(
+        entry,
+        can_rewind,
+        index,
+        cx.theme(),
+        cx.listener(move |workspace, _, _, cx| {
+            workspace.on_recall_message(index, cx);
+        }),
+    )
+    .into_any_element()
+}
+
+fn user_block(
+    entry: &ConversationEntry,
+    can_rewind: bool,
+    index: usize,
+    theme: &Theme,
+    on_recall: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
+) -> impl IntoElement {
+    let column = div()
         .w_full()
         .min_w_0()
         .flex()
@@ -818,46 +833,39 @@ pub(super) fn render_user_entry(
                 .text_color(theme.foreground)
                 .child(plain_user_text(&entry.text))
                 .test_support(),
-        );
-    if can_rewind {
-        column = column.child(
+        )
+        .child(
             div()
                 .id(format!("entry-actions-{index}"))
                 .flex()
                 .flex_row()
                 .justify_end()
-                .gap_1()
-                .opacity(0.0)
-                .group_hover("user-entry", |this| this.opacity(1.0))
                 .child(
-                    div()
-                        .id(format!("entry-recall-{index}"))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .h(px(22.))
-                        .rounded(skin::radius_control())
-                        .text_xs()
-                        .cursor_pointer()
-                        .text_color(theme.muted_foreground)
-                        .hover(|this| this.bg(skin::frost_hover(theme)))
-                        .on_click(cx.listener(move |workspace, _, _, cx| {
-                            workspace.on_recall_message(index, cx);
-                        }))
-                        .child(Icon::new(IconName::RefreshCcw).xsmall())
-                        .child(t("recall", "撤回")),
+                    Button::new(format!("entry-recall-{index}"))
+                        .icon(IconName::RefreshCcw)
+                        .label(t("Recall and edit", "撤回并编辑"))
+                        .small()
+                        .ghost()
+                        .disabled(!can_rewind)
+                        .tooltip(if can_rewind {
+                            t(
+                                "Rewind to before this message and edit it. Workspace files stay unchanged.",
+                                "回到这条消息之前，并将原文放回输入框。工作区文件保持不变。",
+                            )
+                        } else {
+                            t(
+                                "Stop the current task before recalling this message.",
+                                "请先停止当前任务，再撤回并编辑这条消息。",
+                            )
+                        })
+                        .on_click(on_recall),
                 )
                 .test_support(),
         );
-    }
     div()
         .id(format!("entry-{}", entry.event_id))
-        .group("user-entry")
         .child(desk_shell(markdown::prose_measure(column)))
         .test_support()
-        .into_any_element()
 }
 
 #[cfg(test)]

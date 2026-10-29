@@ -264,6 +264,7 @@ mod tests {
             .push(mycode_app::ConversationEntry {
                 event_id: "e1".to_owned(),
                 kind: mycode_app::EntryKind::UserMessage,
+                agent_states: None,
                 text: "hello".into(),
                 call_id: None,
                 thinking: String::new(),

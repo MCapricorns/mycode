@@ -4658,6 +4658,7 @@ version = "0.12.32"
 dependencies = [
  "mycode-app",
  "notify",
+ "serde_json",
  "tokio",
  "windows-sys 0.61.2",
 ]

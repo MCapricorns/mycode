@@ -116,6 +116,7 @@ where
     // supervisor thread; running it inline would stall the calling runtime
     // whenever thread startup is slow.
     let spawn_cancel = worker_cancel.clone();
+    let activity = crate::builtin::agent::activity::current_guard();
     let worker = tokio::task::spawn_blocking(move || {
         InterruptibleWorker::spawn(
             move || {
@@ -128,6 +129,7 @@ where
             },
             tx,
             spawn_cancel,
+            activity,
         )
     })
     .await
@@ -458,6 +460,7 @@ impl InterruptibleWorker {
         work: impl FnOnce() -> Result<T, ToolError> + Send + 'static,
         tx: tokio::sync::oneshot::Sender<Result<T, ToolError>>,
         cancel: CancellationToken,
+        activity: Option<crate::builtin::agent::activity::ActivityGuard>,
     ) -> Result<Self, ToolError> {
         let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
         let (go_tx, go_rx) = std::sync::mpsc::sync_channel(1);
@@ -467,6 +470,7 @@ impl InterruptibleWorker {
         let supervisor = std::thread::Builder::new()
             .name("mycode-blocking-supervisor".to_owned())
             .spawn(move || {
+                let _activity = activity;
                 #[cfg(unix)]
                 let _signal = match acquire_interrupt_signal() {
                     Ok(guard) => guard,

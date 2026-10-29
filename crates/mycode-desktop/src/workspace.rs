@@ -587,11 +587,8 @@ impl Workspace {
         run: impl FnOnce(&mut FrontendDriver, &mut Vec<Effect>) -> T,
         cx: &mut Context<Self>,
     ) -> T {
-        // Decide from the scroll position before this update. New text has
-        // not been laid out yet, so the handle still describes the frame the
-        // user is looking at.
-        self.driver
-            .set_conversation_at_tail(self.conversation_follows_tail());
+        // Follow intent changes only on user scroll. Sampling geometry here
+        // would mistake a newly docked steer/ask card for reading history.
         self.driver.note_scroll_hold(self.scroll_hold.is_some());
         let subagent_before = self.subagent_window_mark();
         let menus_before = self.menu_navigation_mark();

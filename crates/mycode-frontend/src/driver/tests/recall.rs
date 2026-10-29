@@ -7,6 +7,7 @@ fn user_entry() -> ConversationEntry {
     ConversationEntry {
         event_id: "evt1-00000000000000000000000000000001".into(),
         kind: EntryKind::UserMessage,
+        agent_states: None,
         text: "original
 多行 text"
             .into(),

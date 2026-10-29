@@ -178,7 +178,7 @@ impl Tool for RunCodeTool {
             cancel: dispatch_cancel,
             call_id: ctx.call_id.clone(),
         };
-        tokio::spawn(async move {
+        tokio::spawn(crate::builtin::inherit_agent_activity(async move {
             let dispatch = std::panic::AssertUnwindSafe(dispatch::drive_cell(
                 Arc::clone(&dispatch_cell),
                 host_rx,
@@ -192,7 +192,7 @@ impl Tool for RunCodeTool {
                     "the code-mode dispatcher panicked".to_owned(),
                 ));
             }
-        });
+        }));
 
         // Stopping the turn by dropping this future must still stop the
         // script; the cancel branch below only runs when the future is
@@ -407,6 +407,7 @@ fn result_for(cell: &ScriptCell) -> ToolResult {
         "calls": snapshot.calls,
         "journal": snapshot.journal.entries(),
         "inner_calls": snapshot.inner_calls,
+        "agent_states": cell.agent_states(),
     });
     let text = snapshot.render();
     let mut result = match snapshot.phase {

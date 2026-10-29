@@ -184,6 +184,66 @@ async fn dropping_worktree_acquisition_still_reclaims_the_eventual_clean_lease()
 }
 
 #[test]
+fn reopening_original_worktree_preserves_edits_untracked_and_ignored_files_without_git_changes() {
+    let fixture = Repository::new();
+    let lease = WorktreeLease::acquire(&fixture.home, &fixture.repo).unwrap();
+    let path = lease.path.clone();
+    let manifest = lease.manifest.clone();
+    std::fs::write(path.join("tracked.txt"), "original edit\n").unwrap();
+    std::fs::write(path.join("untracked.bin"), [0, 159, 255]).unwrap();
+    std::fs::write(path.join("ignored.txt"), "keep ignored").unwrap();
+    handoff_worktree(lease, Ok("first result".into())).unwrap();
+    let reopened = WorktreeLease::reopen(&fixture.home, &fixture.repo, &path).unwrap();
+    assert_eq!(reopened.path, path.canonicalize().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(reopened.path.join("tracked.txt")).unwrap(),
+        "original edit\n"
+    );
+    std::fs::write(
+        reopened.path.join("tracked.txt"),
+        "original edit\nrework edit\n",
+    )
+    .unwrap();
+    assert!(
+        handoff_worktree(
+            reopened,
+            Err(mycode_agent::ToolError::Execution(
+                "review still failed".into()
+            ))
+        )
+        .is_err()
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("tracked.txt")).unwrap(),
+        "original edit\nrework edit\n"
+    );
+    assert_eq!(
+        std::fs::read(path.join("untracked.bin")).unwrap(),
+        [0, 159, 255]
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("ignored.txt")).unwrap(),
+        "keep ignored"
+    );
+    assert!(manifest.exists());
+    let foreign = Repository::new();
+    assert!(WorktreeLease::reopen(&fixture.home, &foreign.repo, &path).is_err());
+    assert!(WorktreeLease::reopen(&fixture.home, &fixture.repo, &fixture.repo).is_err());
+    assert!(
+        WorktreeLease::reopen(
+            &fixture.home,
+            &fixture.repo,
+            &fixture.home.root().join("missing-checkout")
+        )
+        .is_err()
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.repo.join("tracked.txt")).unwrap(),
+        "original\n"
+    );
+}
+
+#[test]
 fn a_clean_worktree_is_removed_after_handoff() {
     let fixture = Repository::new();
     let lease = WorktreeLease::acquire(&fixture.home, &fixture.repo).unwrap();

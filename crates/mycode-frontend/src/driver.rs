@@ -543,10 +543,16 @@ impl FrontendDriver {
         ))
     }
 
-    /// The frontend reports whether the conversation viewport sits at its
-    /// tail. A frontend that cannot scroll leaves this `true`.
+    /// Reports the reader's follow intent. Layout changes alone must not
+    /// clear it; only explicit scrolling away from the tail does.
     pub fn set_conversation_at_tail(&mut self, at_tail: bool) {
         self.conversation_at_tail = at_tail;
+    }
+
+    /// Whether new content and viewport changes should stay at the tail.
+    #[must_use]
+    pub fn conversation_at_tail(&self) -> bool {
+        self.conversation_at_tail
     }
 
     /// The frontend holds a scroll anchor for an older page still painting.
@@ -758,6 +764,20 @@ impl FrontendDriver {
     /// consequences that follow from the transition (autosave, toasts,
     /// project-change side effects, tail-follow scroll, mention search).
     pub fn act(&mut self, action: FrontendAction, out: &mut Vec<Effect>) {
+        let changed_conversation = match &action {
+            FrontendAction::ConversationOpened(next) => {
+                self.vm.active.as_ref().is_none_or(|active| {
+                    active.session_id != next.session_id || active.branch_id != next.branch_id
+                })
+            }
+            FrontendAction::SessionCreated(_)
+            | FrontendAction::SessionDeleted
+            | FrontendAction::ConversationParked => true,
+            _ => false,
+        };
+        if changed_conversation {
+            self.conversation_at_tail = true;
+        }
         let grew = matches!(
             action,
             FrontendAction::MessageSent { .. }

@@ -27,8 +27,8 @@ pub use self::composer::{ComposerSubmit, composer_submit, preferred_slash_index}
 use self::composer::{parse_mention, slash_items};
 pub use self::jobs::{PREPARING_ROW_PREFIX, is_preparing_row};
 use self::jobs::{
-    drop_live_job, drop_preparing_rows, refresh_subagent_status, retire_live_jobs, tool_preparing,
-    tool_progress, tool_started,
+    consume_agent_result, drop_live_job, drop_preparing_rows, refresh_subagent_status,
+    retire_live_jobs, subagent_cancelled, tool_preparing, tool_progress, tool_started,
 };
 use self::models::{
     apply_session_model, assign_fresh_session_model, ensure_model_selection, model_selected,
@@ -135,6 +135,9 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             clear_session_usage(state);
         }
         FrontendAction::SessionDeleted => {
+            if let Some(active) = &state.active {
+                state.subagents.forget(&active.session_id);
+            }
             state.active = None;
             reset_turn_view(state);
             state.error = None;
@@ -204,6 +207,17 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             // A `/compact` in flight ends with `CompactFinished`, never a
             // chat terminal, so it is restored as compacting, not sending.
             state.compacting = compacting || (!switched && state.compacting);
+            let results: Vec<_> = state
+                .active
+                .as_ref()
+                .into_iter()
+                .flat_map(|active| active.entries.iter())
+                .filter(|entry| entry.kind == super::EntryKind::ToolResult)
+                .cloned()
+                .collect();
+            for entry in results {
+                consume_agent_result(state, &entry);
+            }
             if state.sending && state.turn_started_ms == 0 {
                 // The wire does not carry the real turn start; count from
                 // the reopen so the elapsed label still ticks.
@@ -289,12 +303,21 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             }
         }
         FrontendAction::SubagentWindowChanged(call_id) => {
+            if state.subagent_window != call_id {
+                state.subagent_sections.clear();
+            }
             state.subagent_window = call_id;
+        }
+        FrontendAction::SubagentSectionToggled(section) => {
+            if !state.subagent_sections.remove(&section) {
+                state.subagent_sections.insert(section);
+            }
         }
         FrontendAction::ChangesPanelToggled(open) => {
             state.changes_panel_open = open;
         }
         FrontendAction::SubagentDismissed(call_id) => {
+            subagent_cancelled(state, &call_id);
             if drop_live_job(state, &call_id) && state.sending {
                 refresh_subagent_status(state);
             }
@@ -352,13 +375,12 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             name,
             message,
         } => {
-            // Same guard: a late progress line must not repopulate
-            // `live_jobs` and the status line once the turn has ended.
-            if state.sending {
-                tool_progress(state, call_id, provider_call_id, name, message);
-            }
+            // Typed terminals may still retain their result after the turn closes.
+            // The jobs reducer rejects late nonterminal and legacy progress.
+            tool_progress(state, call_id, provider_call_id, name, message);
         }
         FrontendAction::ToolResultAppended(entry) => {
+            consume_agent_result(state, &entry);
             if let Some(call_id) = entry.call_id.as_deref()
                 && drop_live_job(state, call_id)
                 && state.sending
@@ -434,6 +456,12 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                     && active.older_before.as_deref() == Some(requested_before.as_str())
             });
             if applicable {
+                for entry in entries
+                    .iter()
+                    .filter(|entry| entry.kind == super::EntryKind::ToolResult)
+                {
+                    consume_agent_result(state, entry);
+                }
                 let active = state.active.as_mut().expect("applicable conversation");
                 let mut older = entries;
                 older.append(&mut active.entries);
