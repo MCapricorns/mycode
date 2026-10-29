@@ -124,6 +124,7 @@ mod tests {
         ConversationEntry {
             event_id: id.to_owned(),
             kind: EntryKind::AssistantMessage,
+            agent_states: None,
             text: "done".into(),
             call_id: None,
             thinking: String::new(),

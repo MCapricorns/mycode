@@ -287,8 +287,18 @@ async fn run_chat_turn_on(
         registry.register(Arc::new(mycode_agent::builtin::AskTool::new(channel)));
         // `agent` delegates scoped work to a catalog role; slots, isolation,
         // and per-role model routes live in the host.
-        if crate::subagent::any_role_enabled(&role_catalog, &settings.subagents) {
-            registry.register(Arc::new(mycode_agent::builtin::AgentTool::new(Arc::new(
+        {
+            let runtime = state
+                .agent_runtimes
+                .lock()
+                .entry(session_id.to_owned())
+                .or_insert_with(|| {
+                    Arc::new(mycode_agent::builtin::AgentRuntime::new(
+                        home.root().join("agent-results").join(session_id),
+                    ))
+                })
+                .clone();
+            let host: Arc<dyn mycode_agent::builtin::AgentHost> = Arc::new(
                 crate::subagent::BridgeAgentHost::new(
                     resolved.clone(),
                     home.clone(),
@@ -299,12 +309,32 @@ async fn run_chat_turn_on(
                     state.mcp_pool.clone(),
                     Arc::clone(&state.code_cells),
                 )
+                .with_slots(runtime.slots(mycode_agent::SUBAGENT_CONCURRENCY as usize))
                 .with_context(
                     Arc::clone(&state.catalog),
                     provider.clone(),
                     model.to_owned(),
                 ),
-            ))));
+            );
+            if crate::subagent::any_role_enabled(&role_catalog, &settings.subagents) {
+                registry.register(Arc::new(
+                    mycode_agent::builtin::AgentTool::new(host.clone())
+                        .with_runtime(runtime.clone()),
+                ));
+            }
+            registry.register(Arc::new(mycode_agent::builtin::AgentStatusTool::new(
+                runtime.clone(),
+            )));
+            registry.register(Arc::new(mycode_agent::builtin::AgentStopTool::new(
+                runtime.clone(),
+            )));
+            registry.register(Arc::new(mycode_agent::builtin::AgentMessageTool::new(
+                host.clone(),
+                runtime.clone(),
+            )));
+            registry.register(Arc::new(mycode_agent::builtin::AgentWorkflowTool::new(
+                host, runtime,
+            )));
         }
         registry
     });

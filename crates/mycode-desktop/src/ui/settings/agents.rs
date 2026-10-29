@@ -1,8 +1,6 @@
-//! The Agents settings page: Scout and Artisan, then any further roles
-//! `discover_roles` found. Concurrency is fixed and subagents have no
-//! wall-clock limit, so neither is a setting. Stored steward and sentinel
-//! entries stay on disk and are not product defaults; they appear only when
-//! a role file actually defines them.
+//! The Agents settings page: the four built-in roles, then custom roles
+//! found by `discover_roles`. User and project overrides keep their built-in
+//! card position. Concurrency and wall-clock limits are not settings here.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::switch::Switch;
@@ -297,7 +295,7 @@ fn group_settings_roles(
     Vec<&mycode_frontend::SubagentRole>,
     Vec<&mycode_frontend::SubagentRole>,
 ) {
-    const PRIMARY: [&str; 2] = ["scout", "artisan"];
+    const PRIMARY: [&str; 4] = ["scout", "artisan", "sentinel", "skeptic"];
     let primary = PRIMARY
         .into_iter()
         .filter_map(|name| catalog.role(name))
@@ -322,17 +320,17 @@ fn title_case(name: &str) -> String {
 mod tests {
 
     #[test]
-    fn settings_roles_are_scout_and_artisan() {
+    fn settings_roles_match_all_four_builtin_defaults() {
         let roles = mycode_frontend::builtin_roles();
         let names: Vec<_> = roles.roles.iter().map(|role| role.name.as_str()).collect();
-        assert_eq!(names, ["scout", "artisan"]);
+        assert_eq!(names, ["scout", "artisan", "sentinel", "skeptic"]);
         let (primary, additional) = super::group_settings_roles(&roles);
         assert_eq!(
             primary
                 .iter()
                 .map(|role| role.name.as_str())
                 .collect::<Vec<_>>(),
-            ["scout", "artisan"]
+            ["scout", "artisan", "sentinel", "skeptic"]
         );
         assert!(additional.is_empty());
     }
@@ -340,6 +338,12 @@ mod tests {
     #[test]
     fn discovered_roles_follow_the_builtin_cards() {
         let mut catalog = mycode_frontend::builtin_roles();
+        catalog
+            .roles
+            .iter_mut()
+            .find(|role| role.name == "sentinel")
+            .unwrap()
+            .origin = mycode_frontend::RoleOrigin::User;
         catalog
             .roles
             .push(sample_role("reviewer", mycode_frontend::RoleOrigin::User));
@@ -355,7 +359,7 @@ mod tests {
                 .iter()
                 .map(|role| role.name.as_str())
                 .collect::<Vec<_>>(),
-            ["scout", "artisan"]
+            ["scout", "artisan", "sentinel", "skeptic"]
         );
         assert_eq!(
             additional
@@ -368,7 +372,7 @@ mod tests {
             !mycode_frontend::builtin_roles()
                 .names()
                 .iter()
-                .any(|name| name == "steward" || name == "sentinel")
+                .any(|name| name == "steward")
         );
     }
 

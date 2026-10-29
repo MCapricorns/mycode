@@ -456,6 +456,7 @@ pub(crate) async fn send_message_with(
         ConversationEntry {
             event_id,
             kind: EntryKind::UserMessage,
+            agent_states: None,
             text: display.into(),
             call_id: None,
             thinking: String::new(),

@@ -70,6 +70,7 @@ pub(crate) fn project_replayed_entry_with_meter(
                         Some(ConversationEntry {
                             event_id: event.event_id.as_str().to_owned(),
                             kind: EntryKind::UserMessage,
+                            agent_states: None,
                             text: text.into(),
                             call_id: None,
                             thinking: String::new(),
@@ -101,6 +102,7 @@ pub(crate) fn project_replayed_entry_with_meter(
                 Some(ConversationEntry {
                     event_id: event.event_id.as_str().to_owned(),
                     kind: EntryKind::ToolCall,
+                    agent_states: None,
                     text: mycode_agent::tool_label(name, target).into(),
                     call_id: event.call_id.as_ref().map(|call| call.as_str().to_owned()),
                     thinking: String::new(),
@@ -219,6 +221,15 @@ pub(crate) fn project_tool_result_message(
     ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::ToolResult,
+        agent_states: result
+            .details
+            .as_ref()
+            .and_then(|details| details.get("agent_states"))
+            .and_then(|value| {
+                serde_json::from_value::<Vec<crate::builtin::AgentStateEvent>>(value.clone()).ok()
+            })
+            .filter(|events| !events.is_empty())
+            .map(Into::into),
         text: text.into(),
         call_id: Some(result.tool_call_id.clone()),
         thinking: String::new(),
@@ -252,6 +263,7 @@ pub(crate) fn project_assistant_message(
     ConversationEntry {
         event_id: event_id.to_owned(),
         kind: EntryKind::AssistantMessage,
+        agent_states: None,
         text: text.into(),
         call_id: None,
         thinking,
@@ -259,12 +271,15 @@ pub(crate) fn project_assistant_message(
 }
 
 #[cfg(test)]
+mod agent_states_tests;
+
+#[cfg(test)]
 mod tests {
     use mycode_agent::session::SessionEvent;
 
     use super::project_replayed_entry;
 
-    fn event_of_kind(kind: mycode_agent::session::EventKind) -> SessionEvent {
+    pub(super) fn event_of_kind(kind: mycode_agent::session::EventKind) -> SessionEvent {
         SessionEvent {
             event_id: mycode_agent::session::SessionEventId::parse(
                 "evt1-00000000000000000000000000000000",

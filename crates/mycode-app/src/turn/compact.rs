@@ -177,6 +177,7 @@ pub(super) async fn publish_visible_summary(
     let entry = crate::protocol::ConversationEntry {
         event_id,
         kind: crate::protocol::EntryKind::UserMessage,
+        agent_states: None,
         text: payload.into(),
         call_id: None,
         thinking: String::new(),

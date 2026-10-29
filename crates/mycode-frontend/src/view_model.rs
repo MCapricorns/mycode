@@ -12,6 +12,7 @@ pub mod nav;
 mod projects;
 mod settings;
 mod state;
+mod subagents;
 mod usage;
 
 mod reduce;
@@ -49,6 +50,10 @@ pub use self::reduce::{
     selected_reasoning_levels,
 };
 pub use self::state::{MAX_COMPOSER_CHARS, WorkspaceState};
+pub use self::subagents::{
+    SubagentHistory, SubagentSession, agent_run_elapsed_ms, agent_run_status_label,
+    agent_workflow_status_label, workflow_terminal,
+};
 pub use self::usage::{
     CacheAlert, ContextMeterParts, TurnStats, cache_alert_text, compact_count, context_meter_parts,
     context_remaining_percent, turn_cache_hit,

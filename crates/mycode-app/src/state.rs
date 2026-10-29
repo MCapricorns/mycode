@@ -38,6 +38,8 @@ pub(crate) struct CoreState {
     pub(crate) turn_cancels: Arc<Mutex<HashMap<String, LiveWork>>>,
     /// One token per running subagent, keyed by `session_id:call_id`.
     pub(crate) subagent_cancels: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
+    /// Bounded run/workflow records partitioned by session and reused across turns.
+    pub(crate) agent_runtimes: Mutex<HashMap<String, Arc<mycode_agent::builtin::AgentRuntime>>>,
     /// Steer inbox for the live turn of each session. Removed when the turn ends.
     pub(crate) steer_inboxes: Arc<Mutex<HashMap<String, Arc<mycode_agent::SteerInbox>>>>,
     /// Provider tokens per estimated token, by session, as its last turn
@@ -103,6 +105,7 @@ impl CoreState {
             projects: Arc::new(Mutex::new(projects)),
             turn_cancels: Arc::new(Mutex::new(HashMap::new())),
             subagent_cancels: Arc::new(Mutex::new(HashMap::new())),
+            agent_runtimes: Mutex::new(HashMap::new()),
             steer_inboxes: Arc::new(Mutex::new(HashMap::new())),
             token_scales: Mutex::new(HashMap::new()),
             mcp_pool: Arc::new(tokio::sync::Mutex::new(None)),

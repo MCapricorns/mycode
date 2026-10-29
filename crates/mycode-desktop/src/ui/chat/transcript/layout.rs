@@ -29,6 +29,7 @@ fn assistant(id: &str, text: &str) -> ConversationEntry {
         text: text.into(),
         call_id: None,
         thinking,
+        agent_states: None,
     }
 }
 
@@ -307,43 +308,13 @@ fn user_bubbles_align_right_stay_within_72_percent_and_omit_ledger_stamps(cx: &m
     impl Render for UserProbe {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let theme = cx.theme().clone();
-            let column = div()
-                .w_full()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .items_end()
-                .child(
-                    div()
-                        .id(format!("user-bubble-{}", self.0.event_id))
-                        .max_w(gpui_kit::relative(super::USER_BUBBLE_MAX_SHARE))
-                        .min_w_0()
-                        .rounded(px(14.))
-                        .bg(theme.secondary)
-                        .px(px(12.))
-                        .py(px(8.))
-                        .text_sm()
-                        .whitespace_normal()
-                        .child(gpui_kit::SharedString::from(self.0.text.clone()))
-                        .test_support(),
-                );
+            let row = super::user_block(&self.0, true, 0, &theme, |_, _, _| {});
             div().size_full().child(
                 div()
                     .id("conversation")
                     .w(px(800.))
                     .h(px(300.))
-                    .child(
-                        super::transcript_stack()
-                            .child(
-                                div()
-                                    .id(format!("entry-{}", self.0.event_id))
-                                    .child(super::desk_shell(super::markdown::prose_measure(
-                                        column,
-                                    )))
-                                    .test_support(),
-                            )
-                            .test_support(),
-                    )
+                    .child(super::transcript_stack().child(row).test_support())
                     .test_support(),
             )
         }
@@ -356,6 +327,7 @@ fn user_bubbles_align_right_stay_within_72_percent_and_omit_ledger_stamps(cx: &m
                 .into(),
             call_id: None,
             thinking: String::new(),
+            agent_states: None,
         };
     cx.update(gpui_kit::init);
     let handle = cx.open_window(size(px(900.), px(400.)), move |_, _| UserProbe(entry));
@@ -381,6 +353,76 @@ fn user_bubbles_align_right_stay_within_72_percent_and_omit_ledger_stamps(cx: &m
         assert!(
             (row.right() - bubble.right()).abs() <= px(2.),
             "user bubble must align to the right edge of its row: bubble {bubble:?} row {row:?}"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn recall_is_visible_without_hover_and_busy_messages_cannot_rewind(cx: &mut TestAppContext) {
+    use std::cell::Cell;
+
+    struct RecallProbe {
+        clicks: Rc<Cell<usize>>,
+    }
+    impl Render for RecallProbe {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let entries = [
+                ConversationEntry {
+                    event_id: "editable".into(),
+                    kind: EntryKind::UserMessage,
+                    text: "Edit this first message.".into(),
+                    call_id: None,
+                    thinking: String::new(),
+                    agent_states: None,
+                },
+                ConversationEntry {
+                    event_id: "busy".into(),
+                    kind: EntryKind::UserMessage,
+                    text: "A running turn keeps its recall action visible.".into(),
+                    call_id: None,
+                    thinking: String::new(),
+                    agent_states: None,
+                },
+            ];
+            let rows: Vec<_> = entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    let clicks = self.clicks.clone();
+                    super::user_block(entry, index == 0, index, &theme, move |_, _, _| {
+                        clicks.set(clicks.get() + 1);
+                    })
+                    .into_any_element()
+                })
+                .collect();
+            div()
+                .size_full()
+                .child(div().w(px(390.)).child(transcript_stack().children(rows)))
+        }
+    }
+    cx.update(gpui_kit::init);
+    let clicks = Rc::new(Cell::new(0));
+    let probe_clicks = clicks.clone();
+    let handle = cx.open_window(size(px(420.), px(500.)), move |_, _| RecallProbe {
+        clicks: probe_clicks,
+    });
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        for index in 0..2 {
+            let action = window.find(format!("entry-actions-{index}"));
+            assert!(action.visible(), "recall must be visible without hovering");
+            assert!(action.bounds().size.height >= px(24.));
+            assert!(action.bounds().right() <= px(390.));
+        }
+        window.click("entry-actions-1", cx);
+        assert_eq!(clicks.get(), 0, "a busy message must not rewind");
+        window.click("entry-actions-0", cx);
+        assert_eq!(
+            clicks.get(),
+            1,
+            "the visible action must recall the message"
         );
     })
     .unwrap();

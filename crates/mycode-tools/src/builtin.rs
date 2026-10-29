@@ -19,7 +19,11 @@ pub mod shell;
 pub mod write;
 
 pub use agent::{
-    AGENT_COMPACTED_STEP, AGENT_PROGRESS_PREFIX, AgentHost, AgentTool, SubagentRequest,
+    AGENT_COMPACTED_STEP, AGENT_PROGRESS_PREFIX, AGENT_STATE_PREFIX, AgentActivity, AgentHost,
+    AgentMessageTool, AgentRunSnapshot, AgentRunStatus, AgentRuntime, AgentScope, AgentStateEvent,
+    AgentStatusTool, AgentStopTool, AgentSymbolScope, AgentTool, AgentWorkflowNode,
+    AgentWorkflowSnapshot, AgentWorkflowStatus, AgentWorkflowTool, SubagentRequest,
+    inherit_agent_activity, settle_agent_activity,
 };
 pub use ask::{
     AskAnswer, AskChannel, AskQuestion, AskTool, ask_choice_selected, render_ask_answers,

@@ -8,6 +8,7 @@ fn result_entry(text: &str) -> ConversationEntry {
     ConversationEntry {
         event_id: "evt".into(),
         kind: EntryKind::ToolResult,
+        agent_states: None,
         text: text.into(),
         call_id: Some("call".into()),
         thinking: String::new(),

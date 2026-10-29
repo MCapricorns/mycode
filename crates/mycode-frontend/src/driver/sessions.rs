@@ -265,6 +265,7 @@ mod tests {
         ConversationEntry {
             event_id: id.to_owned(),
             kind,
+            agent_states: None,
             text: "text".into(),
             call_id: None,
             thinking: String::new(),

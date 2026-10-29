@@ -105,6 +105,7 @@ complete("done");
                 && let Some(CodeModeProgress::Progress {
                     call_id, message, ..
                 }) = CodeModeProgress::parse(&update.message)
+                && message.starts_with("agent|")
             {
                 assert_eq!(call_id, "outer.0");
                 assert_eq!(message, "agent|scout|queued|detail with | and\na newline");

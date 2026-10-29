@@ -9,7 +9,8 @@ use mycode_tools::ToolRegistry;
 /// so a second one here would read as a duplication.
 const HEADER: &str = "\
 Complete the task with the tools listed below. Do not invent tools. \
-Tool results are the source of truth; do not claim a command ran unless its result is in the conversation.";
+Support claims with inspected sources or tool results. Distinguish source inspection, \
+checks actually run, and unresolved gaps; do not claim a command ran without its result.";
 
 /// Names the one shell tool in `tools`, if the process registered one.
 pub fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
@@ -30,13 +31,13 @@ Tools inside run_code are called from JavaScript as `call(\"name\", { argument: 
 use their argument schemas below. `script` accepts JavaScript only. It runs in embedded \
 QuickJS, with no Node.js, require, fs, fetch, filesystem or network globals. No imports, \
 async/await or Promise job execution are supported.\n\
-- Batch related operations in one script. A `call` returns `{ content, is_error }`; \
-text blocks use `result.content[0].Text`. Dispatch refusals also include `__error__`. \
+- Batch related operations in one script; calls execute synchronously in order. \
+A `call` returns `{ content, is_error }`; text blocks use `result.content[0].Text`. Dispatch refusals also include `__error__`. \
 Inspect errors before continuing dependent work; \
-use `complete(value)` to return the result. Calls are synchronous inside the script.\n\
-- Prefer in-process JavaScript for routine file/data transformations: read with \
-`call(\"read\", ...)`, transform objects/arrays/strings, then use `call(\"write\", ...)` or \
-`call(\"edit\", ...)`. Use `log(value)` for output and progress.\n\
+use `complete(value)` to return the result and `log(value)` for output and progress.\n\
+- Use listed native names and schemas directly. When remote tools are available, \
+retrieve their schemas through the registered discovery tools before calling them.\n\
+- Scripts can reach only registered tools; they cannot add a shell or permissions.\n\
 - A `run_code` script cannot call `run_code` or `wait_code` itself.\n",
         );
     }
@@ -50,6 +51,13 @@ use `complete(value)` to return the result. Calls are synchronous inside the scr
         );
     }
     if tools.get("write").is_some() && tools.get("edit").is_some() {
+        if code_mode {
+            rules.push_str(
+                "- Prefer in-process JavaScript for routine file/data transformations: read with \
+`call(\"read\", ...)`, transform objects/arrays/strings, then use `call(\"write\", ...)` or \
+`call(\"edit\", ...)`.\n",
+            );
+        }
         let names = if code_mode {
             "`call(\"write\", …)` and `call(\"edit\", …)`"
         } else {
@@ -69,13 +77,17 @@ Never use it to list directories, read files, or search text.\n\
 - A `{shell_tool}` call waits for its command to exit. Do not start one that waits for \
 input or never exits (a dev server, a watcher, an interactive prompt): it holds the turn \
 until the timeout. Pass non-interactive flags instead.\n\
+- On Windows, keep console work in the background with captured output. Do not open \
+terminal windows or detach ordinary commands with Start-Process. The registered shell \
+manages process lifetime and cancellation.\n\
 - `{shell_tool}` `mode` `script` runs a command in the active shell. `mode` `program` \
 runs one executable with an explicit `args` vector and no shell parsing. Prefer it when a command string would need fragile quoting.\n\
 - Never use `{shell_tool}` to talk to the user."
         );
     }
     rules.push_str(
-        "- Editing or recalling a chat message does not restore or delete workspace files.\n</tool_calling>",
+        "- Editing or recalling a chat message, or switching conversation branches, does not restore or delete workspace files. \
+Inspect relevant files before resuming from earlier context.\n</tool_calling>",
     );
     rules
 }
@@ -278,6 +290,24 @@ mod tests {
         assert!(!prompt.contains("`powershell`"));
         assert!(!prompt.contains("`bash`"));
         assert!(!prompt.contains("`agent`"));
+        for unavailable in [
+            "call(\"write\"",
+            "call(\"edit\"",
+            "Change files by",
+            "routine file/data transformations",
+        ] {
+            assert!(
+                !prompt.contains(unavailable),
+                "unavailable capability {unavailable}:\n{prompt}"
+            );
+        }
+        assert!(prompt.contains("calls execute synchronously in order"));
+        assert!(prompt.contains("No imports, async/await or Promise job execution are supported"));
+        assert!(prompt.contains("Scripts can reach only registered tools"));
+        assert!(prompt.contains("Use listed native names and schemas directly"));
+        assert!(prompt.contains("retrieve their schemas through the registered discovery tools"));
+        assert!(prompt.contains("switching conversation branches"));
+        assert!(prompt.contains("does not restore or delete workspace files"));
     }
 
     #[test]
@@ -423,9 +453,11 @@ mod tests {
             prompt.contains("agent: hand one self-contained brief to a role from <dispatch>"),
             "the agent snippet must point at the dispatch section:\n{prompt}"
         );
-        assert!(
-            !prompt.contains("scout"),
-            "role names come from the dispatch section only:\n{prompt}"
-        );
+        for role in ["scout", "artisan", "sentinel", "skeptic"] {
+            assert!(
+                !prompt.contains(role),
+                "role {role} must come from the dynamic dispatch section only:\n{prompt}"
+            );
+        }
     }
 }

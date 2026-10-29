@@ -29,6 +29,7 @@ pub(super) struct ScrollAnchor {
     previous_offset_y: Pixels,
     previous_height: Pixels,
     active: bool,
+    follow_tail: bool,
     appearance: Option<AppearanceHold>,
     slot: Rc<Cell<Option<LayoutId>>>,
     child: Option<AnyElement>,
@@ -39,6 +40,7 @@ impl ScrollAnchor {
         handle: ScrollHandle,
         anchor: Option<(Pixels, Pixels)>,
         appearance: Option<AppearanceHold>,
+        follow_tail: bool,
     ) -> Self {
         let (previous_offset_y, previous_height, active) = match anchor {
             Some((offset_y, height)) => (offset_y, height, true),
@@ -49,6 +51,7 @@ impl ScrollAnchor {
             previous_offset_y,
             previous_height,
             active,
+            follow_tail,
             appearance,
             slot: Rc::new(Cell::new(None)),
             child: None,
@@ -117,6 +120,12 @@ impl Element for ScrollAnchor {
                 let y = theme_scroll_y(false, appearance.offset_y, px(f32::MAX));
                 self.handle.set_offset(point(x, y));
             }
+        }
+        // A docked steer/ask card can resize the viewport without a model
+        // event. Keep the user's follow intent through that layout change,
+        // using this frame's scroll extent rather than the previous one.
+        if self.follow_tail && !self.active {
+            self.handle.scroll_to_bottom();
         }
         if self.active
             && let Some(layout_id) = self.slot.get()
@@ -258,6 +267,9 @@ pub(super) fn theme_scroll_y(pinned: bool, previous_offset_y: Pixels, max_after:
         previous_offset_y
     }
 }
+
+#[cfg(all(test, feature = "test-support"))]
+mod layout;
 
 #[cfg(test)]
 mod tests {

@@ -144,6 +144,7 @@ mod tests {
             entry: ConversationEntry {
                 event_id: "e".into(),
                 kind: EntryKind::AssistantMessage,
+                agent_states: None,
                 text: Arc::from("full"),
                 call_id: None,
                 thinking: String::new(),
@@ -167,6 +168,7 @@ mod tests {
             entry: ConversationEntry {
                 event_id: "r".into(),
                 kind: EntryKind::ToolResult,
+                agent_states: None,
                 text: Arc::from("ok"),
                 call_id: Some("c".into()),
                 thinking: String::new(),

@@ -41,6 +41,7 @@ fn user(id: &str, text: &str) -> ConversationEntry {
     ConversationEntry {
         event_id: id.to_owned(),
         kind: EntryKind::UserMessage,
+        agent_states: None,
         text: text.into(),
         call_id: None,
         thinking: String::new(),
@@ -119,6 +120,7 @@ fn the_open_conversation_is_capped_at_the_resident_entry_ceiling() {
     entries[400] = ConversationEntry {
         event_id: "call-live-1".to_owned(),
         kind: EntryKind::ToolCall,
+        agent_states: None,
         text: "read  src/lib.rs".into(),
         call_id: Some("live-1".to_owned()),
         thinking: String::new(),

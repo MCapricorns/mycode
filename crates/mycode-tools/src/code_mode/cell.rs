@@ -134,6 +134,7 @@ struct CellInner {
     truncated: bool,
     journal: ScriptJournal,
     inner_calls: Vec<InnerCallSummary>,
+    agent_states: Vec<crate::builtin::AgentStateEvent>,
     /// Native images awaiting delivery by the next run/wait result.
     pending_images: Vec<BinaryData>,
     pending_image_bytes: usize,
@@ -234,6 +235,7 @@ impl ScriptCell {
                 truncated: false,
                 journal: ScriptJournal::new(),
                 inner_calls: Vec::new(),
+                agent_states: Vec::new(),
                 pending_images: Vec::new(),
                 pending_image_bytes: 0,
                 next_seq: 0,
@@ -377,6 +379,33 @@ impl ScriptCell {
         if let Some(event) = summary.progress_event() {
             let _ = self.progress.send(event.encode());
         }
+    }
+
+    pub(crate) fn record_agent_states(&self, events: Vec<crate::builtin::AgentStateEvent>) {
+        use crate::builtin::AgentStateEvent;
+        let mut inner = self.inner.write();
+        let key = |event: &AgentStateEvent| match event {
+            AgentStateEvent::Run(r) => r.id.clone(),
+            AgentStateEvent::Workflow(w) => w.id.clone(),
+        };
+        for event in events {
+            if let Some(existing) = inner
+                .agent_states
+                .iter_mut()
+                .find(|e| key(e) == key(&event))
+            {
+                *existing = event;
+            } else {
+                if inner.agent_states.len() >= 160 {
+                    inner.agent_states.remove(0);
+                }
+                inner.agent_states.push(event);
+            }
+        }
+    }
+
+    pub(crate) fn agent_states(&self) -> Vec<crate::builtin::AgentStateEvent> {
+        self.inner.read().agent_states.clone()
     }
 
     pub(crate) fn progress_sender(&self) -> broadcast::Sender<String> {

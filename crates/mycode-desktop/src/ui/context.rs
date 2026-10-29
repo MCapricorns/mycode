@@ -161,7 +161,7 @@ pub(crate) fn review_panel(
         })
 }
 
-const SUBAGENT_WINDOW_WIDTH: f32 = 320.;
+const SUBAGENT_WINDOW_WIDTH: f32 = 520.;
 /// Bottom inset for the subagent window. It stops above the tallest
 /// composer (input cap, toolbar, jump row) so its occluding body never
 /// covers the send or stop button where the two overlap horizontally.
@@ -187,12 +187,13 @@ pub(crate) fn subagent_window_bounds(
         // The strip the diff panel would occupy: clear of Details.
         diff_right
     };
-    let right = if preferred + SUBAGENT_WINDOW_WIDTH + PANEL_GAP <= viewport_width {
+    let width = SUBAGENT_WINDOW_WIDTH.min((viewport_width - 2. * PANEL_GAP).max(0.));
+    let right = if preferred + width + PANEL_GAP <= viewport_width {
         preferred
     } else {
-        (viewport_width - SUBAGENT_WINDOW_WIDTH - PANEL_GAP).max(PANEL_GAP)
+        (viewport_width - width - PANEL_GAP).max(PANEL_GAP)
     };
-    (right, SUBAGENT_WINDOW_WIDTH)
+    (right, width)
 }
 
 /// Proportional fill fraction in `0.0..=1.0` for the context usage bar.
@@ -381,7 +382,7 @@ fn inspector_body(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> imp
         .gap_4()
         .when(
             crate::view_model::task_surface_visible(workspace.vm())
-                && !workspace.vm().live_jobs.is_empty(),
+                && workspace.vm().has_subagents(),
             |this| this.child(render_subagents(workspace, cx)),
         )
         .child(render_changes(workspace, cx))

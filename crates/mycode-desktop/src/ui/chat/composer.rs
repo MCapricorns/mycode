@@ -344,7 +344,7 @@ pub(super) fn render_composer(
         )
 }
 
-/// Send arrow while idle, stop square while a turn runs.
+/// Send arrow while idle, labeled stop control while a turn runs.
 ///
 /// Stop ends the whole turn and every subagent. It sits where the send
 /// arrow sits.
@@ -363,7 +363,8 @@ fn composer_round_button(
         } else {
             "composer-send"
         })
-        .size(px(30.))
+        .h(px(30.))
+        .min_w(px(30.))
         .flex_shrink_0()
         .ml_auto()
         .rounded_full()
@@ -385,7 +386,9 @@ fn composer_round_button(
                 .hover(|style| style.bg(crate::ui::desk::deepen(send_fill)))
         })
         .when(sending, |this| {
-            this.cursor_pointer()
+            this.px_2()
+                .gap_2()
+                .cursor_pointer()
                 .hover(|style| style.bg(theme.secondary_hover))
         })
         .on_click(cx.listener(move |workspace, _, window, cx| {
@@ -395,8 +398,8 @@ fn composer_round_button(
                 workspace.on_send(window, cx);
             }
         }))
-        // Two round icons sit side by side while a turn runs; the tooltip
-        // tells the queueing arrow from the stop that ends everything.
+        // The visible label distinguishes stop from the steering arrow;
+        // the tooltip explains that stopping also cancels the children.
         .when(sending, |this| {
             this.tooltip(|window, cx| {
                 Tooltip::new(t(
@@ -408,6 +411,7 @@ fn composer_round_button(
         })
         .when(sending, |this| {
             this.child(div().size(px(9.)).rounded(px(2.)).bg(theme.foreground))
+                .child(div().text_xs().child(t("Stop", "停止")))
         })
         .when(!sending, |this| {
             this.child(Icon::new(IconName::ArrowUp).small())

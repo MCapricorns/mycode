@@ -17,6 +17,23 @@ use crate::ctx::ToolCtx;
 use crate::stream::ToolStream;
 use crate::tool::{Tool, ToolError, ToolResult};
 
+pub(crate) mod activity;
+pub use activity::{AgentActivity, inherit_agent_activity, settle_agent_activity};
+mod control;
+mod redact;
+mod rework;
+mod runtime;
+mod scope;
+mod state;
+mod workflow;
+pub use control::{AgentMessageTool, AgentStatusTool, AgentStopTool};
+pub use runtime::AgentRuntime;
+pub use scope::{AgentScope, AgentSymbolScope};
+pub use state::*;
+pub use workflow::AgentWorkflowTool;
+#[cfg(test)]
+mod runtime_tests;
+
 /// Maximum characters accepted for the delegated prompt.
 pub const MAX_AGENT_PROMPT_CHARS: usize = 16_000;
 /// Maximum characters of the subagent answer kept in the tool result.
@@ -47,6 +64,49 @@ pub struct SubagentRequest {
 /// The method returns a boxed future so the trait stays object-safe for
 /// `dyn AgentHost` dispatch; implementers write `Box::pin(async move { … })`.
 pub trait AgentHost: Send + Sync + 'static {
+    /// Resolve an enabled role before allocating a run; return its write capability.
+    fn validate_role<'a>(
+        &'a self,
+        role: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, ToolError>> + Send + 'a>> {
+        Box::pin(async move { Ok(!matches!(role, "scout" | "sentinel" | "skeptic")) })
+    }
+    /// Validate a retained worktree without allocating or modifying a checkout.
+    fn validate_reopen<'a>(
+        &'a self,
+        _path: &'a std::path::Path,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send + 'a>> {
+        Box::pin(async {
+            Err(ToolError::Execution(
+                "this host cannot safely reopen retained worktrees".into(),
+            ))
+        })
+    }
+    /// Run a new summarized task in the exact retained worktree. Never fall back to HEAD.
+    fn run_subagent_reopened<'a>(
+        &'a self,
+        _request: SubagentRequest,
+        _progress: &'a ToolStream,
+        _cancel: &'a tokio_util::sync::CancellationToken,
+        _call_id: &'a str,
+        _path: &'a std::path::Path,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + 'a>> {
+        Box::pin(async {
+            Err(ToolError::Execution(
+                "this host cannot safely reopen retained worktrees".into(),
+            ))
+        })
+    }
+    /// Queue steering using the host's real child identity.
+    fn steer_subagent(&self, _call_id: &str, _message: &str) -> Result<(), ToolError> {
+        Err(ToolError::Execution(
+            "this host does not support live steering".into(),
+        ))
+    }
+    /// Remove known credentials before retaining output or publishing snapshots.
+    fn redact_text(&self, text: &str) -> String {
+        redact::redact_text(text)
+    }
     /// Runs one subagent to completion and returns its final answer.
     ///
     /// Implementations must honor `cancel` and report short status lines
@@ -68,12 +128,23 @@ pub trait AgentHost: Send + Sync + 'static {
 /// The built-in `agent` tool.
 pub struct AgentTool {
     host: Arc<dyn AgentHost>,
+    runtime: Arc<AgentRuntime>,
 }
 
 impl AgentTool {
     /// Binds one delegation host.
     pub fn new(host: Arc<dyn AgentHost>) -> Self {
-        Self { host }
+        Self {
+            host,
+            runtime: Arc::new(AgentRuntime::new(
+                std::env::temp_dir().join(format!("mycode-agent-{}", uuid::Uuid::new_v4())),
+            )),
+        }
+    }
+    /// Reuse the session registry across turns and control tools.
+    pub fn with_runtime(mut self, runtime: Arc<AgentRuntime>) -> Self {
+        self.runtime = runtime;
+        self
     }
 }
 
@@ -94,6 +165,12 @@ pub struct AgentArgs {
     /// applies only to write-capable roles.
     #[serde(default)]
     pub isolation: Option<String>,
+    /// Stable coordination phase. Duplicate retained phases are rejected.
+    #[serde(default)]
+    pub phase_id: Option<String>,
+    /// Exact path/symbol ownership claims; coordination only, not a sandbox.
+    #[serde(default)]
+    pub scope: Option<AgentScope>,
 }
 
 impl Tool for AgentTool {
@@ -152,7 +229,7 @@ impl Tool for AgentTool {
             .as_deref()
             .map(str::trim)
             .filter(|desc| !desc.is_empty())
-            .map(str::to_owned)
+            .map(|description| description.chars().take(240).collect())
             .unwrap_or_else(|| brief_label(&prompt));
         let request = SubagentRequest {
             agent,
@@ -160,16 +237,30 @@ impl Tool for AgentTool {
             description,
             isolation: args.isolation,
         };
-        let answer = self
-            .host
-            .run_subagent(request, out, &ctx.cancel, &ctx.call_id)
+        let run = self
+            .runtime
+            .run(
+                self.host.clone(),
+                request,
+                runtime::RunOptions {
+                    phase_id: args.phase_id,
+                    scope: args.scope,
+                    ..runtime::RunOptions::default()
+                },
+                out,
+                ctx,
+            )
             .await?;
-        let mut answer = answer;
-        if let Some((cut, _)) = answer.char_indices().nth(MAX_AGENT_ANSWER_CHARS) {
-            answer.truncate(cut);
-            answer.push_str("\n[answer truncated: the subagent replied with more text]");
-        }
-        Ok(ToolResult::text(answer))
+        let result = if run.status == AgentRunStatus::Completed {
+            ToolResult::text(run.result.clone().unwrap_or_default())
+        } else {
+            ToolResult::error(
+                run.error
+                    .clone()
+                    .unwrap_or_else(|| "subagent failed".into()),
+            )
+        };
+        Ok(result.with_details(serde_json::json!({"agent_states": [AgentStateEvent::Run(run)]})))
     }
 }
 
