@@ -13,7 +13,10 @@ use crate::ui::desk::Desk;
 use crate::ui::skin;
 use crate::workspace::Workspace;
 
-pub(super) fn render_mcp_section(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> AnyElement {
+pub(super) fn render_mcp_section(
+    workspace: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> AnyElement {
     render_mcp_list(workspace, cx)
 }
 

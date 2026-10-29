@@ -214,7 +214,6 @@ pub(super) fn choice_chips<V: AsRef<str>, L: AsRef<str>>(
         .into_any_element()
 }
 
-
 /// The data side of a [`dropdown_field`]: what the row shows and which
 /// option is current.
 pub(super) struct DropdownSpec<'a> {
