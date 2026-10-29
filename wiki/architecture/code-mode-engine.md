@@ -1,28 +1,34 @@
 # Code mode engine
 
-Code mode uses Rhai to compose registered tools in one script. It is implemented in Rust and shares the normal tool registry, preflight checks, cancellation and progress pipeline. It does not provide JavaScript, a second filesystem API or a separate MCP client.
+Code mode uses embedded QuickJS-NG through `rquickjs` to compose registered tools with real JavaScript. It shares the normal tool registry, preflight checks, cancellation and progress pipeline. The runtime is created on its script thread and adds no Node.js/browser filesystem, network API or separate MCP client. `rquickjs` ships bindings for Windows MSVC and Intel/Apple Silicon macOS; Windows MSVC is labeled experimental upstream and requires a C compiler at build time.
 
 ## 1. Model contract
 
 The main turn exposes the platform shell, `run_code` and `wait_code` in `Request.tools`. Other registered tools remain available inside the script. Native and bridge argument schemas appear under `Tools inside run_code` in the system prompt. Remote MCP schemas are discovery-only: registered remote tools marked `schema_on_demand()` are omitted from that bulk prompt section; retrieve their full schemas through `search_tool` or `tool_search`. Child roles build their own registry and exposure set; availability follows that role's permissions.
 
-Rhai object maps use `#{ ... }`. Each `call(name, args)` waits for its tool result before evaluation continues. A normal result has `content` and `is_error`. Text blocks use the enum key `Text`, with a capital T. Dispatch refusals also carry the legacy `__error__` field. Check errors before dependent work.
+`script` accepts JavaScript only, using ordinary object literals, arrays, arrow functions, `JSON`, string methods, and synchronous `call(name, args)`. Each call waits for its tool result before evaluation continues. Async/await, Promise jobs and module imports are unsupported; the host does not drive a JavaScript job queue. There are no `require`, `process`, `fs`, `fetch`, timers or other Node.js/browser globals. Use registered tools for file and network work.
 
-```rhai
-let result = call("read", #{ path: "Cargo.toml" });
-if result.is_error {
+A normal result has `content` and `is_error`. Text blocks use the enum key `Text`, with a capital T. Dispatch refusals also carry the legacy `__error__` field. Check errors before dependent work.
+
+```javascript
+const result = call("read", { path: "Cargo.toml" });
+if (result.is_error) {
     complete(result);
 }
 complete(result.content[0].Text);
 ```
 
-`complete(value)` records the final output and immediately ends evaluation. Without it, a non-unit final expression becomes output. `log(value)` appends output and publishes progress. Tool results are available to the script but do not automatically become its final output.
+`complete(value)` records the final output and immediately ends evaluation, including inside a function or `try`/`catch`/`finally`. Without it, the JavaScript script's non-`undefined` completion value becomes output. `log(value)` appends output and publishes progress. Strings render without quotes; objects/arrays use JSON, `undefined` at the bridge becomes `null`, and cyclic objects, BigInt and Promise values are rejected. JavaScript numbers follow IEEE-754 precision. Tool results are available to the script but do not automatically become its final text output.
+
+Native images returned by inner tools are queued on the cell and emitted as `ContentBlock::Image` in the next `run_code` or `wait_code` result, including a running or failed result. Each image is consumed once on delivery; later waits do not resend it. A cell queues at most 4 images and 6 MiB of base64 between deliveries. A tool result that would exceed either limit is rejected as a whole with `is_error: true` and an explicit error; previously accepted images remain available. Rejected images receive no delivery metadata. Script JSON retains an `Image` metadata entry (`mime_type`, `data_hash`, `delivery`) without base64. This keeps image payloads on the provider's native image path even when the script returns a text summary or the image arrives after the initial call yielded.
+
+Prefer in-process JavaScript plus `read`/`write`/`edit` for routine file/data transformations. Shell tools remain available for builds, tests, package managers, git and running user programs, including Python projects.
 
 ## 2. Submit and collect
 
 | Tool | Argument | Behavior |
 | --- | --- | --- |
-| `run_code` | `script` | Required Rhai source |
+| `run_code` | `script` | Required JavaScript source |
 | `run_code` | `yield_time_ms` | Default 30,000 ms; capped at 300,000 ms; zero returns without waiting |
 | `run_code` | `max_output_bytes` | Default 32 KiB; clamped to 1 KiB–4 MiB |
 | `wait_code` | `cell_id` | Required ID returned by an unfinished script |
@@ -39,31 +45,31 @@ The returned text names an unfinished cell and explains how to wait or stop it. 
 
 `run_code` and `wait_code` are not parallel-safe. The outer agent dispatcher gives each its own batch, preserving the model's order around writes. Inside a script, calls run sequentially through `prepare_tool_ctx` and the same registered tool implementation used by ordinary dispatch.
 
-The Rhai evaluator runs on a named OS thread. A Tokio task receives host requests and executes tools asynchronously; the evaluator waits for each reply. `RunCodeTool` holds a `Weak<ToolRegistry>` to avoid an ownership cycle. The running dispatcher upgrades and retains the registry until its work ends.
+The JavaScript evaluator runs on a named OS thread. Its QuickJS runtime and values stay on that thread. A Tokio task receives host requests and executes tools asynchronously; the evaluator waits for each reply. `RunCodeTool` holds a `Weak<ToolRegistry>` to avoid an ownership cycle. The running dispatcher upgrades and retains the registry until its work ends.
 
 ### 3.2 Host functions
 
 | Function | Purpose |
 | --- | --- |
-| `call(name, args)` | Execute a registry tool; map arguments must match its schema |
+| `call(name, args)` | Execute a registry tool; object arguments must match its schema |
 | `log(value)` | Append bounded output and emit progress |
-| `budget()` | Inspect calls used, operation count and fixed ceilings |
+| `budget()` | Inspect calls used, interrupt polls (`operations`, `max_operations`), output cap and heap ceiling |
 | `complete(value)` | Return a value and end evaluation |
 | `yield_control()` | Hand control back after earlier queued host requests |
 
-The engine rejects calls to `run_code` or `wait_code` from a script. It disables `eval`, `print`, `debug`, module imports, `sleep`, `exit` and `timestamp`. Observable host work goes through the registered functions.
+The engine rejects calls to `run_code` or `wait_code` from a script. Dynamic code entry points (`eval`, `Function`, function prototype constructors) are removed. There is no `print`, `debug`, `sleep`, `exit`, `timestamp`, `Date`, `performance` or `Math.random`; use `log` for observable output. Completion, exhausted host-call budgets and VM interrupts use uncatchable engine errors so JavaScript cannot suppress them.
 
 | Resource | Limit |
 | --- | --- |
-| Rhai operations | 1,000,000 |
+| QuickJS interrupt polls | 100 |
 | Host calls | 256 |
-| Call depth | 64 |
-| Expression / function-body depth | 64 / 32 |
-| String size | 4 MiB |
-| Array / map size | 65,536 entries each |
+| JavaScript heap (compiled code, strings, arrays, objects) | 32 MiB total |
+| JavaScript native stack | 256 KiB |
+| Script source | 4 MiB |
+| Pending native images per cell | 4 images, 6 MiB of base64 between deliveries |
 | Retained live and finished cells | 32 across the process |
 
-Operation and cancellation sampling runs every 4,096 engine callbacks. Output truncation respects UTF-8 boundaries and includes a truncation notice. These limits bound evaluation; the tools still run with the host user's permissions and their usual path rules.
+`operations` counts QuickJS interrupt callbacks, not JavaScript instructions. QuickJS-NG normally polls after approximately 10,000 loop/function checks and within selected native builtins. Cancellation is checked at every poll, while the existing dispatcher cancellation also interrupts blocked tool calls. Heap/stack limits replace the previous engine's individual string/container/depth limits. Output truncation respects UTF-8 boundaries and includes a truncation notice. These limits bound evaluation; tools retain their usual permissions and path rules.
 
 ## 4. MCP discovery and use
 
@@ -77,8 +83,8 @@ In the main code-mode turn, MCP tools and the three discovery tools are reached 
 | `tool_search` | BM25 `query` search returning up to eight JSON entries with `name`, `description` and `params_schema`; optional `limit` is 1–8 |
 | `use_tool` | Invoke the returned `name` with schema-matching `arguments` |
 
-```rhai
-let schemas = call("search_tool", #{ name: "list" });
+```javascript
+const schemas = call("search_tool", { name: "list" });
 complete(schemas.content[0].Text);
 ```
 
@@ -116,7 +122,7 @@ The journal records ordered host events and argument/result hashes. It provides 
 
 - [Tool arguments and lifecycle](../../crates/mycode-tools/src/code_mode.rs)
 - [Cell table and snapshots](../../crates/mycode-tools/src/code_mode/cell.rs)
-- [Rhai limits and host functions](../../crates/mycode-tools/src/code_mode/engine.rs)
+- [QuickJS limits and host functions](../../crates/mycode-tools/src/code_mode/engine.rs)
 - [Shared dispatch and preflight](../../crates/mycode-tools/src/code_mode/dispatch.rs)
 - [Progress envelope](../../crates/mycode-tools/src/code_mode/progress.rs)
 - [MCP catalog and collision handling](../../crates/mycode-app/src/mcp_tools.rs)

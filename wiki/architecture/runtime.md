@@ -11,7 +11,7 @@ MYCode is a Rust native agent with a GPUI desktop interface. UI state, applicati
 | `mycode-app` | CoreBridge command/event boundary, turn assembly, MCP, subagents, configuration and updates |
 | `mycode-agent` | Model/tool cycle, prompt assembly, session ledger and cancellation |
 | `mycode-providers` | OpenAI Chat Completions, OpenAI Responses and Anthropic Messages adapters |
-| `mycode-tools` | Registry, filesystem/search/shell tools and Rhai code mode |
+| `mycode-tools` | Registry, filesystem/search/shell tools and embedded JavaScript code mode |
 | `mycode-core` | Shared messages, events, tool specifications and provider interfaces |
 | `mycode-config` | Home layout, authority documents, resource discovery and owned-file transactions |
 
@@ -21,7 +21,7 @@ The desktop sends a `FrontendAction`. The frontend reducer updates product state
 
 The agent sends a provider request, consumes the stream, dispatches tools and appends events to the session ledger. Application projection and the frontend stream translate these events back into view-model actions. GPUI renders that state; it does not own the model loop.
 
-The main model sees the platform shell, `run_code` and `wait_code`. Hidden native and bridge tool schemas still reach the system prompt; remote MCP schemas remain discovery-only through `search_tool` or `tool_search`. A Rhai script can call native tools, `ask_user`, allowed subagents and MCP discovery using the same registry. See [Code mode engine](code-mode-engine.md).
+The main model sees the platform shell, `run_code` and `wait_code`. Hidden native and bridge tool schemas still reach the system prompt; remote MCP schemas remain discovery-only through `search_tool` or `tool_search`. A JavaScript script can call native tools, `ask_user`, allowed subagents and MCP discovery using the same registry. See [Code mode engine](code-mode-engine.md).
 
 ## Progressive MCP
 
