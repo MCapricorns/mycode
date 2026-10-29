@@ -188,50 +188,56 @@ impl SseTransport for ReqwestTransport {
                 )
                 .with_status(status.as_u16()));
             }
-            let cancel_for_body = cancel;
-            let (chunk_tx, chunk_rx) =
-                tokio::sync::mpsc::channel::<Result<Bytes, ProviderError>>(BYTE_STREAM_CAPACITY);
-            // Reads the body chunk by chunk on a dedicated task and forwards
-            // each chunk through the bounded channel. Cancellation and a chunk
-            // gap over the idle ceiling surface as one final `Err` item, then
-            // the stream ends; a dropped consumer stops the task and releases
-            // the response. Every delivered chunk starts the idle wait over.
-            tokio::spawn(async move {
-                let mut response = response;
-                loop {
-                    let chunk = tokio::select! {
-                        biased;
-                        () = cancel_for_body.cancelled() => {
-                            let _ = chunk_tx
-                                .send(Err(ProviderError::new(ProviderErrorKind::Cancelled)))
-                                .await;
-                            return;
-                        }
-                        chunk = tokio::time::timeout(idle, response.chunk()) => chunk,
-                    };
-                    match chunk {
-                        Ok(Ok(Some(bytes))) => {
-                            if chunk_tx.send(Ok(bytes)).await.is_err() {
-                                return;
-                            }
-                        }
-                        Ok(Ok(None)) => return,
-                        Ok(Err(error)) => {
-                            let _ = chunk_tx.send(Err(map_reqwest_error(error))).await;
-                            return;
-                        }
-                        Err(_elapsed) => {
-                            let _ = chunk_tx
-                                .send(Err(ProviderError::new(ProviderErrorKind::Timeout)))
-                                .await;
-                            return;
-                        }
-                    }
-                }
-            });
-            Ok(chunk_rx)
+            Ok(stream_response_body(response, idle, cancel))
         })
     }
+}
+
+fn stream_response_body(
+    mut response: reqwest::Response,
+    idle: Duration,
+    cancel: CancellationToken,
+) -> ByteStream {
+    let (chunk_tx, chunk_rx) =
+        tokio::sync::mpsc::channel::<Result<Bytes, ProviderError>>(BYTE_STREAM_CAPACITY);
+    // Reads the body chunk by chunk on a dedicated task and forwards
+    // each chunk through the bounded channel. Cancellation and a chunk
+    // gap over the idle ceiling surface as one final `Err` item, then
+    // the stream ends; a dropped consumer stops the task and releases
+    // the response. Every delivered chunk starts the idle wait over.
+    tokio::spawn(async move {
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    let _ = chunk_tx
+                        .send(Err(ProviderError::new(ProviderErrorKind::Cancelled)))
+                        .await;
+                    return;
+                }
+                chunk = tokio::time::timeout(idle, response.chunk()) => chunk,
+            };
+            match chunk {
+                Ok(Ok(Some(bytes))) => {
+                    if chunk_tx.send(Ok(bytes)).await.is_err() {
+                        return;
+                    }
+                }
+                Ok(Ok(None)) => return,
+                Ok(Err(error)) => {
+                    let _ = chunk_tx.send(Err(map_reqwest_error(error))).await;
+                    return;
+                }
+                Err(_elapsed) => {
+                    let _ = chunk_tx
+                        .send(Err(ProviderError::new(ProviderErrorKind::Timeout)))
+                        .await;
+                    return;
+                }
+            }
+        }
+    });
+    chunk_rx
 }
 
 /// Maximum bytes read from an error response body.
@@ -282,11 +288,13 @@ mod tests {
     use std::io::{Read, Write};
     use std::time::Duration;
 
+    use tokio::io::AsyncWriteExt;
     use tokio_util::sync::CancellationToken;
 
     use bytes::Bytes;
+    use mycode_config::ProviderErrorKind;
 
-    use super::{ReqwestTransport, SseTransport, TransportCall};
+    use super::{ReqwestTransport, SseTransport, TransportCall, stream_response_body};
 
     /// Reads the request head. The reply starts right away: waiting for the
     /// two-byte body can stall on Nagle against a delayed ACK (up to 200ms on
@@ -314,7 +322,7 @@ mod tests {
         while matches!(stream.read(&mut sink), Ok(count) if count > 0) {}
     }
 
-    fn spawn_drip_server(pieces: usize, gap: Duration) -> String {
+    fn spawn_success_server() -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
         std::thread::spawn(move || {
@@ -323,7 +331,7 @@ mod tests {
             if !read_request_head(&mut stream) {
                 return;
             }
-            let body: String = (0..pieces).map(|index| format!("data:{index}\n")).collect();
+            let body = "data:0\ndata:1\n";
             let header = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
@@ -332,13 +340,10 @@ mod tests {
                 return;
             }
             let _ = stream.flush();
-            for piece in body.split_inclusive('\n') {
-                std::thread::sleep(gap);
-                if stream.write_all(piece.as_bytes()).is_err() {
-                    return;
-                }
-                let _ = stream.flush();
+            if stream.write_all(body.as_bytes()).is_err() {
+                return;
             }
+            let _ = stream.flush();
             finish_response(stream);
         });
         format!("http://{addr}/v1/chat/completions")
@@ -396,14 +401,94 @@ mod tests {
         format!("http://{addr}/v1/chat/completions")
     }
 
-    #[tokio::test]
+    /// Uses an in-memory reqwest body so paused time cannot race socket I/O,
+    /// TCP buffering, delayed ACKs, or an OS thread's sleep.
+    fn streaming_response() -> (tokio::io::DuplexStream, reqwest::Response) {
+        let (writer, reader) = tokio::io::duplex(1024);
+        let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(reader));
+        (writer, http::Response::new(body).into())
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_slow_but_alive_stream_outlives_the_idle_limit() {
         let idle = Duration::from_millis(200);
         let gap = Duration::from_millis(80);
-        let pieces = 5;
-        let url = spawn_drip_server(pieces, gap);
-        let transport = ReqwestTransport::with_read_timeout(idle).expect("transport");
-        let started = std::time::Instant::now();
+        let (mut writer, response) = streaming_response();
+        let mut stream = stream_response_body(response, idle, CancellationToken::new());
+        let started = tokio::time::Instant::now();
+        tokio::task::yield_now().await;
+        for index in 0..5 {
+            tokio::time::advance(gap).await;
+            let piece = format!("data:{index}\n");
+            writer.write_all(piece.as_bytes()).await.expect("write");
+            let bytes = stream
+                .recv()
+                .await
+                .expect("stream is alive")
+                .expect("chunk arrived within the idle limit");
+            assert_eq!(bytes.as_ref(), piece.as_bytes());
+        }
+        assert_eq!(started.elapsed(), gap * 5);
+        assert!(started.elapsed() > idle);
+        drop(writer);
+        assert!(stream.recv().await.is_none(), "EOF ends the stream");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_stream_times_out_after_the_last_chunk() {
+        let idle = Duration::from_millis(200);
+        let (mut writer, response) = streaming_response();
+        let mut stream = stream_response_body(response, idle, CancellationToken::new());
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(80)).await;
+        writer.write_all(b"data:0\n").await.expect("write");
+        assert_eq!(
+            stream.recv().await.expect("first chunk").expect("chunk"),
+            Bytes::from_static(b"data:0\n")
+        );
+        let last_chunk = tokio::time::Instant::now();
+        tokio::time::advance(idle - Duration::from_millis(1)).await;
+        assert!(matches!(
+            stream.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        tokio::time::advance(Duration::from_millis(2)).await;
+        let error = tokio::time::timeout(idle, stream.recv())
+            .await
+            .expect("idle timeout is enforced")
+            .expect("one terminal error")
+            .expect_err("stalled body must time out");
+        assert_eq!(error.kind(), ProviderErrorKind::Timeout);
+        assert_eq!(last_chunk.elapsed(), idle + Duration::from_millis(1));
+        assert!(stream.recv().await.is_none(), "error ends the stream");
+        drop(writer);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_interrupts_an_idle_stream() {
+        let idle = Duration::from_secs(180);
+        let (writer, response) = streaming_response();
+        let cancel = CancellationToken::new();
+        let mut stream = stream_response_body(response, idle, cancel.clone());
+        tokio::task::yield_now().await;
+        let started = tokio::time::Instant::now();
+        cancel.cancel();
+        let error = stream
+            .recv()
+            .await
+            .expect("one terminal error")
+            .expect_err("cancelled body must fail");
+        assert_eq!(error.kind(), ProviderErrorKind::Cancelled);
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        assert!(stream.recv().await.is_none(), "error ends the stream");
+        drop(writer);
+    }
+
+    #[tokio::test]
+    async fn a_successful_response_forwards_its_body() {
+        let url = spawn_success_server();
+        let transport =
+            ReqwestTransport::with_read_timeout(Duration::from_secs(2)).expect("transport");
         let mut stream = transport
             .post(
                 TransportCall {
@@ -427,14 +512,7 @@ mod tests {
         })
         .await;
         let collected = outcome.expect("stream hung");
-        assert!(
-            started.elapsed() > idle,
-            "stream finished in {:?}, under the idle limit",
-            started.elapsed()
-        );
-        let text = String::from_utf8(collected).expect("utf8");
-        let expected: String = (0..pieces).map(|index| format!("data:{index}\n")).collect();
-        assert_eq!(text, expected);
+        assert_eq!(collected, b"data:0\ndata:1\n");
     }
 
     #[tokio::test]
