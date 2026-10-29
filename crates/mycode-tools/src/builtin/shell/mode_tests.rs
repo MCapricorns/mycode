@@ -78,7 +78,14 @@ fn powershell_and_bash_specs_are_mutually_exclusive() {
     );
     assert!(!pwsh_spec.description.contains("translated"));
     assert!(bash_spec.description.contains("bash -c"));
-    assert!(bash_spec.description.contains("quoted heredoc"));
+    assert!(bash_spec.description.contains("in-process JavaScript"));
+    assert!(
+        bash_spec
+            .description
+            .contains("Python projects remains supported")
+    );
+    assert!(!bash_spec.description.contains("run Python"));
+    assert!(!ps_spec.description.contains("here-string to Python"));
     assert!(!bash_spec.description.contains("osSandbox"));
     assert!(!bash_spec.description.contains("Get-ChildItem"));
     let registry = ToolRegistry::new();

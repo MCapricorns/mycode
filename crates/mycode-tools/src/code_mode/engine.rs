@@ -1,282 +1,288 @@
-//! The hardened Rhai engine and its host-function whitelist.
+//! Embedded QuickJS and the code-mode host-function whitelist.
 //!
-//! Every limit in this module is fixed; a model-written script cannot raise
-//! one. The whitelist is exactly `call`, `log`, `budget`, `complete` and
-//! `yield_control`: `agent` and the MCP meta tools are ordinary registry
-//! tools reached through `call`, so code mode never opens a second
-//! orchestration or filesystem channel. See
-//! `wiki/architecture/code-mode-engine.md` §3.2.
+//! The runtime lives entirely on the script thread. Tools, permissions and
+//! async work remain in the shared dispatcher; JavaScript calls it synchronously.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use rhai::{Dynamic, Engine, EvalAltResult, Position};
-use serde_json::Value;
+use rquickjs::context::intrinsic;
+use rquickjs::function::Opt;
+use rquickjs::{Context, Ctx, Exception, Function, Runtime, Value as JsValue};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use super::cell::ScriptCell;
+use super::cell::{ScriptCell, ScriptOutcome};
 use super::dispatch::{HostReply, HostRequest};
 
-/// Operation budget for one script.
-pub const MAX_OPERATIONS: u64 = 1_000_000;
-/// Call-stack ceiling.
-pub const MAX_CALL_LEVELS: usize = 64;
-/// Expression depth ceiling: (expressions, function bodies).
-pub const MAX_EXPR_DEPTHS: (usize, usize) = (64, 32);
-/// Largest script string, in bytes.
-pub const MAX_STRING_SIZE: usize = 4 * 1024 * 1024;
-/// Largest array the script may build.
-pub const MAX_ARRAY_SIZE: usize = 65_536;
-/// Largest map the script may build.
-pub const MAX_MAP_SIZE: usize = 65_536;
-/// Rhai invokes `on_progress` once per operation; the callback samples every
-/// this many operations, so a 1M-operation script does not take the cell
-/// lock a million times.
-pub const PROGRESS_CHECK_EVERY: u64 = 4096;
+/// QuickJS interrupt polls per script (not a JavaScript instruction count).
+/// QuickJS-NG polls after approximately 10,000 loop/function checks, and in
+/// selected builtins. These counters intentionally describe engine checkpoints.
+pub const MAX_OPERATIONS: u64 = 100;
+/// Total JavaScript heap, including strings, containers and compiled code.
+pub const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
+/// Native stack consumed by JavaScript evaluation.
+pub const MAX_STACK_BYTES: usize = 256 * 1024;
+/// Source limit, checked before parsing.
+pub const MAX_SCRIPT_BYTES: usize = 4 * 1024 * 1024;
 
-/// Marker `complete(value)` terminates evaluation with, so stopping the
-/// script is a control-flow fact rather than a race on the host channel.
-pub const COMPLETE_MARKER: &str = "__mycode_complete__";
-
-/// Knobs a caller cannot change from inside the script.
-pub struct EngineLimits {
-    /// Turn cancellation; a long evaluation stops at the next operation.
-    pub cancel: CancellationToken,
-}
-
-/// Builds one engine for one script.
-///
-/// The engine is `Send` (the `sync` feature is a hard requirement) so it can
-/// be moved onto the script's `std::thread`.
-#[must_use]
-pub fn hardened_engine(
+/// Runs one script; no QuickJS value or runtime crosses a thread boundary.
+pub(crate) fn evaluate(
+    script: &str,
     host_tx: UnboundedSender<HostRequest>,
     cell: Arc<ScriptCell>,
-    limits: EngineLimits,
-) -> Engine {
-    let mut engine = Engine::new();
-    engine
-        .set_max_operations(MAX_OPERATIONS)
-        .set_max_call_levels(MAX_CALL_LEVELS)
-        .set_max_expr_depths(MAX_EXPR_DEPTHS.0, MAX_EXPR_DEPTHS.1)
-        .set_max_string_size(MAX_STRING_SIZE)
-        .set_max_array_size(MAX_ARRAY_SIZE)
-        .set_max_map_size(MAX_MAP_SIZE);
-    // No `eval` and no module resolver: a script cannot build code at run
-    // time or import one. `print`/`debug` are disabled at the parser so a
-    // silent side channel cannot desynchronise the journal; anything
-    // observable must go through `log`.
-    engine.disable_symbol("eval");
-    engine.disable_symbol("print");
-    engine.disable_symbol("debug");
-    engine.set_module_resolver(rhai::module_resolvers::DummyModuleResolver::new());
-    // Belt and braces: should any remaining path reach a print, keep it off
-    // the host's stdout.
-    engine.on_print(|_| {});
-    engine.on_debug(|_, _, _| {});
-
-    let cancel = limits.cancel;
-    let probe = Arc::clone(&cell);
-    let ticks = AtomicU64::new(0);
-    engine.on_progress(move |operations: u64| {
-        let tick = ticks.fetch_add(1, Ordering::Relaxed) + 1;
-        if !tick.is_multiple_of(PROGRESS_CHECK_EVERY) {
-            return None;
-        }
-        probe.set_operations(operations);
-        if probe.terminated() || cancel.is_cancelled() {
-            Some(Dynamic::from("interrupted"))
-        } else {
-            None
-        }
+    cancel: CancellationToken,
+) -> ScriptOutcome {
+    if script.len() > MAX_SCRIPT_BYTES {
+        return ScriptOutcome::Failed(format!("script exceeds {MAX_SCRIPT_BYTES} bytes"));
+    }
+    let completed = Rc::new(Cell::new(false));
+    let exhausted = Rc::new(Cell::new(false));
+    let run = || -> Result<(), String> {
+        let runtime = Runtime::new().map_err(|error| error.to_string())?;
+        runtime.set_memory_limit(MAX_MEMORY_BYTES);
+        runtime.set_max_stack_size(MAX_STACK_BYTES);
+        let probe = Arc::clone(&cell);
+        let stop = cancel.clone();
+        let budget_exhausted = Rc::clone(&exhausted);
+        let mut operations = 0;
+        runtime.set_interrupt_handler(Some(Box::new(move || {
+            operations += 1;
+            probe.set_operations(operations);
+            if probe.terminated() || stop.is_cancelled() {
+                return true;
+            }
+            if operations >= MAX_OPERATIONS {
+                budget_exhausted.set(true);
+                return true;
+            }
+            false
+        })));
+        // RegExpCompiler and Promise initialize the regex and async-function
+        // prototypes used by the parser. Promise is hidden below; no job queue
+        // is driven. No module loader, OS or network APIs are installed.
+        let context = Context::custom::<(
+            intrinsic::Eval,
+            intrinsic::Json,
+            intrinsic::RegExpCompiler,
+            intrinsic::RegExp,
+            intrinsic::Promise,
+            intrinsic::MapSet,
+            intrinsic::TypedArrays,
+        )>(&runtime)
+        .map_err(|error| error.to_string())?;
+        context.with(|ctx| {
+            let execute = || -> rquickjs::Result<()> {
+                // Host evaluation needs the Eval intrinsic. Remove script entry
+                // points, including constructors reachable through prototypes.
+                ctx.eval::<(), _>(
+                    r#"
+for (const fn of [function(){}, function*(){}, async function(){}, async function*(){}]) {
+    Object.defineProperty(Object.getPrototypeOf(fn), "constructor", {
+        value: undefined, writable: false, configurable: false
     });
-
-    register_host_functions(&mut engine, host_tx, cell);
-    engine
+}
+delete globalThis.eval;
+delete globalThis.Function;
+delete globalThis.Promise;
+delete Math.random;
+"#,
+                )?;
+                register_host_functions(&ctx, host_tx, Arc::clone(&cell), Rc::clone(&completed))?;
+                let value: JsValue = ctx.eval(script)?;
+                if !value.is_undefined() {
+                    cell.push_output(&render_value(&ctx, &value)?);
+                }
+                Ok(())
+            };
+            execute().map_err(|error| {
+                if error.is_exception() {
+                    let exception = ctx.catch();
+                    if let Some(exception) = exception
+                        .clone()
+                        .into_object()
+                        .and_then(Exception::from_object)
+                    {
+                        return exception.to_string();
+                    }
+                    return render_value(&ctx, &exception)
+                        .unwrap_or_else(|_| "JavaScript exception".to_owned());
+                }
+                error.to_string()
+            })
+        })?;
+        if runtime.is_job_pending() {
+            return Err(
+                "Async JavaScript is not supported; use synchronous call(name, args)".to_owned(),
+            );
+        }
+        Ok(())
+    };
+    let result = run();
+    if cell.terminated() || cancel.is_cancelled() {
+        ScriptOutcome::Terminated
+    } else if completed.get() {
+        ScriptOutcome::Completed
+    } else if exhausted.get() {
+        ScriptOutcome::Failed("JavaScript operation budget exhausted".to_owned())
+    } else {
+        match result {
+            Ok(()) => ScriptOutcome::Completed,
+            Err(error) => ScriptOutcome::Failed(error),
+        }
+    }
 }
 
-fn register_host_functions(
-    engine: &mut Engine,
+fn register_host_functions<'js>(
+    ctx: &Ctx<'js>,
     host_tx: UnboundedSender<HostRequest>,
     cell: Arc<ScriptCell>,
-) {
-    // `call(name, args)`. Rhai reserves the name `call` for its own FnPtr
-    // invocation (`Op::CallFnPtr`), lowered by the compiler before any
-    // function lookup, so a registered `call` would never be reached. Custom
-    // syntax is matched before that lowering, which is what keeps the
-    // model-facing contract exactly `call(name, args)`.
+    completed: Rc<Cell<bool>>,
+) -> rquickjs::Result<()> {
     let call_tx = host_tx.clone();
     let call_cell = Arc::clone(&cell);
-    engine
-        .register_custom_syntax(
-            ["call", "(", "$expr$", ",", "$expr$", ")"],
-            false,
-            move |context, inputs| -> Result<Dynamic, Box<EvalAltResult>> {
-                let name = match context.eval_expression_tree(&inputs[0])?.into_string() {
-                    Ok(name) => name,
-                    Err(kind) => {
-                        return Err(runtime_error(format!(
-                            "call() takes a tool name string, got {kind}"
-                        )));
-                    }
-                };
-                let args = context.eval_expression_tree(&inputs[1])?;
-                let seq = call_cell.next_seq();
-                if name == "run_code" || name == "wait_code" {
-                    return Err(runtime_error(format!(
-                        "call(\"{name}\") is not allowed: code mode cannot invoke itself"
-                    )));
-                }
-                if !call_cell.begin_call() {
-                    return Err(runtime_error(format!(
-                        "host call budget exhausted ({} calls); split the work into several \
-                         scripts",
-                        super::cell::MAX_HOST_CALLS
-                    )));
-                }
-                let arguments = match dynamic_to_json(&args) {
-                    Ok(Value::Null) => Value::Object(serde_json::Map::new()),
-                    Ok(value) => value,
-                    Err(error) => return Err(error),
-                };
-                let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-                if call_tx
-                    .send(HostRequest::Call {
-                        seq,
-                        name,
-                        args: arguments,
-                        reply: reply_tx,
-                    })
-                    .is_err()
-                {
-                    return Err(runtime_error("the host dispatcher stopped"));
-                }
-                match reply_rx.recv() {
-                    Ok(HostReply::Value(value)) => json_to_dynamic(&value),
-                    Ok(HostReply::Abort(reason)) => Err(runtime_error(reason)),
-                    Err(_) => Err(runtime_error("the host dispatcher dropped the call")),
-                }
-            },
-        )
-        .expect("the `call` custom syntax is a valid pattern");
+    ctx.globals().set("call", Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String, args: Opt<JsValue<'js>>| {
+        if name == "run_code" || name == "wait_code" {
+            return Err(Exception::throw_message(&ctx, &format!(
+                "call(\"{name}\") is not allowed: code mode cannot invoke itself"
+            )));
+        }
+        if !call_cell.begin_call() {
+            return Err(stop_evaluation(&ctx, &format!(
+                "host call budget exhausted ({} calls); split the work into several scripts",
+                super::cell::MAX_HOST_CALLS
+            )));
+        }
+        let arguments = match args.0 {
+            Some(value) => to_json(&ctx, &value)?,
+            None => Value::Null,
+        };
+        let arguments = if arguments.is_null() { json!({}) } else { arguments };
+        let seq = call_cell.next_seq();
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        call_tx.send(HostRequest::Call { seq, name, args: arguments, reply: reply_tx })
+            .map_err(|_| Exception::throw_message(&ctx, "the host dispatcher stopped"))?;
+        match reply_rx.recv() {
+            Ok(HostReply::Value(value)) => ctx.json_parse(value.to_string()),
+            Ok(HostReply::Abort(reason)) => Err(Exception::throw_message(&ctx, &reason)),
+            Err(_) => Err(Exception::throw_message(&ctx, "the host dispatcher dropped the call")),
+        }
+    })?)?;
 
-    // log(text) → record it as output and as progress.
     let log_tx = host_tx.clone();
     let log_cell = Arc::clone(&cell);
-    engine.register_fn("log", move |value: Dynamic| {
-        let text = render_value(&value);
-        log_cell.push_output(&text);
-        let seq = log_cell.next_seq();
-        let _ = log_tx.send(HostRequest::Log { seq, text });
-    });
+    ctx.globals().set(
+        "log",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, value: JsValue<'js>| -> rquickjs::Result<()> {
+                let text = render_value(&ctx, &value)?;
+                log_cell.push_output(&text);
+                let seq = log_cell.next_seq();
+                let _ = log_tx.send(HostRequest::Log { seq, text });
+                Ok(())
+            },
+        )?,
+    )?;
 
-    // budget() → counters the script may branch on.
     let budget_cell = Arc::clone(&cell);
-    engine.register_fn("budget", move || -> rhai::Map {
-        let mut map = rhai::Map::new();
-        map.insert(
-            "calls_used".into(),
-            Dynamic::from(budget_cell.calls() as i64),
-        );
-        map.insert(
-            "max_calls".into(),
-            Dynamic::from(super::cell::MAX_HOST_CALLS as i64),
-        );
-        map.insert(
-            "operations".into(),
-            Dynamic::from(budget_cell.operations() as i64),
-        );
-        map.insert(
-            "max_operations".into(),
-            Dynamic::from(MAX_OPERATIONS as i64),
-        );
-        map.insert(
-            "max_output_bytes".into(),
-            Dynamic::from(budget_cell.max_output_bytes() as i64),
-        );
-        map
-    });
+    ctx.globals().set(
+        "budget",
+        Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+            ctx.json_parse(
+                json!({
+                    "calls_used": budget_cell.calls(),
+                    "max_calls": super::cell::MAX_HOST_CALLS,
+                    "operations": budget_cell.operations(),
+                    "max_operations": MAX_OPERATIONS,
+                    "max_output_bytes": budget_cell.max_output_bytes(),
+                    "max_memory_bytes": MAX_MEMORY_BYTES,
+                })
+                .to_string(),
+            )
+        })?,
+    )?;
 
-    // complete(value) → the final answer; evaluation stops right after.
     let complete_tx = host_tx.clone();
     let complete_cell = Arc::clone(&cell);
-    engine.register_fn(
+    ctx.globals().set(
         "complete",
-        move |value: Dynamic| -> Result<(), Box<EvalAltResult>> {
-            let text = render_value(&value);
-            let json = dynamic_to_json(&value).unwrap_or_else(|_| Value::String(text.clone()));
-            complete_cell.push_output(&text);
-            let seq = complete_cell.next_seq();
-            let _ = complete_tx.send(HostRequest::Complete { seq, value: json });
-            Err(Box::new(EvalAltResult::ErrorTerminated(
-                Dynamic::from(COMPLETE_MARKER),
-                Position::NONE,
-            )))
-        },
-    );
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, value: Opt<JsValue<'js>>| -> rquickjs::Result<()> {
+                let value = value
+                    .0
+                    .unwrap_or_else(|| JsValue::new_undefined(ctx.clone()));
+                let json = to_json(&ctx, &value)?;
+                let text = if let Some(text) = value.as_string() {
+                    text.to_string()?
+                } else {
+                    json.to_string()
+                };
+                complete_cell.push_output(&text);
+                let seq = complete_cell.next_seq();
+                let _ = complete_tx.send(HostRequest::Complete { seq, value: json });
+                completed.set(true);
+                Err(stop_evaluation(&ctx, "script completed"))
+            },
+        )?,
+    )?;
 
-    // yield_control() → hand control back after earlier queued requests.
-    let yield_tx = host_tx.clone();
-    let yield_cell = Arc::clone(&cell);
-    engine.register_fn("yield_control", move || {
-        let seq = yield_cell.next_seq();
-        let _ = yield_tx.send(HostRequest::Yield { seq });
-    });
-
-    // Anything that would leave the journal's view of the run incomplete.
-    // `sleep` is registered per numeric type: Rhai prefers an exact
-    // signature over a `Dynamic` one, and the core package already has
-    // `sleep(INT)` / `sleep(FLOAT)`.
-    engine.register_fn("sleep", |_: i64| -> Result<(), Box<EvalAltResult>> {
-        Err(runtime_error("sleep is not available in code mode"))
-    });
-    engine.register_fn("sleep", |_: f64| -> Result<(), Box<EvalAltResult>> {
-        Err(runtime_error("sleep is not available in code mode"))
-    });
-    engine.register_fn("exit", || -> Result<(), Box<EvalAltResult>> {
-        Err(runtime_error(
-            "exit is not available in code mode; call complete(value)",
-        ))
-    });
-    engine.register_fn("exit", |_: Dynamic| -> Result<(), Box<EvalAltResult>> {
-        Err(runtime_error(
-            "exit is not available in code mode; call complete(value)",
-        ))
-    });
-    engine.register_fn("timestamp", || -> Result<(), Box<EvalAltResult>> {
-        Err(runtime_error("timestamp is not available in code mode"))
-    });
+    ctx.globals().set(
+        "yield_control",
+        Function::new(ctx.clone(), move || {
+            let seq = cell.next_seq();
+            let _ = host_tx.send(HostRequest::Yield { seq });
+        })?,
+    )?;
+    Ok(())
 }
 
-fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
-    Box::new(EvalAltResult::ErrorRuntime(
-        Dynamic::from(message.into()),
-        Position::NONE,
-    ))
+/// Completion and exhausted host budgets must bypass JavaScript catch/finally,
+/// just like QuickJS's own interrupt errors. The exception belongs to this ctx.
+fn stop_evaluation(ctx: &Ctx<'_>, message: &str) -> rquickjs::Error {
+    match Exception::from_message(ctx.clone(), message) {
+        Ok(exception) => {
+            // SAFETY: both handles are live, belong to this thread/context and
+            // QuickJS only marks the existing Error object; ownership is retained.
+            unsafe {
+                rquickjs::qjs::JS_SetUncatchableError(
+                    ctx.as_raw().as_ptr(),
+                    exception.as_value().as_raw(),
+                );
+            }
+            exception.throw()
+        }
+        Err(error) => error,
+    }
 }
 
-/// Converts a script value to JSON.
-pub(crate) fn dynamic_to_json(value: &Dynamic) -> Result<Value, Box<EvalAltResult>> {
-    if value.is_unit() {
+/// JSON semantics at the bridge: undefined becomes null; cyclic objects and
+/// BigInt fail explicitly. Strings remain unquoted in model-visible output.
+fn to_json<'js>(ctx: &Ctx<'js>, value: &JsValue<'js>) -> rquickjs::Result<Value> {
+    if value.is_promise() {
+        return Err(Exception::throw_type(
+            ctx,
+            "Async JavaScript is not supported; use synchronous call(name, args)",
+        ));
+    }
+    let Some(text) = ctx.json_stringify(value.clone())? else {
         return Ok(Value::Null);
-    }
-    serde_json::to_value(value)
-        .map_err(|error| runtime_error(format!("cannot convert a script value to JSON: {error}")))
+    };
+    serde_json::from_str(&text.to_string()?).map_err(|error| {
+        Exception::throw_message(
+            ctx,
+            &format!("cannot convert JavaScript value to JSON: {error}"),
+        )
+    })
 }
 
-/// Converts a JSON value back to a script value.
-pub(crate) fn json_to_dynamic(value: &Value) -> Result<Dynamic, Box<EvalAltResult>> {
-    rhai::serde::to_dynamic(value)
-        .map_err(|error| runtime_error(format!("cannot convert a tool result: {error}")))
-}
-
-/// The text form used for `log` and `complete`.
-pub(crate) fn render_value(value: &Dynamic) -> String {
-    if let Some(text) = value.clone().try_cast::<String>() {
-        return text;
+fn render_value<'js>(ctx: &Ctx<'js>, value: &JsValue<'js>) -> rquickjs::Result<String> {
+    if let Some(text) = value.as_string() {
+        text.to_string()
+    } else {
+        Ok(to_json(ctx, value)?.to_string())
     }
-    dynamic_to_json(value)
-        .map(|json| json.to_string())
-        .unwrap_or_else(|_| value.to_string())
 }

@@ -19,19 +19,6 @@ pub fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
         .find(|name| mycode_tools::ShellKind::is_tool_name(name))
 }
 
-fn edit_hint(shell_tool: &str) -> &'static str {
-    match shell_tool {
-        "powershell" => {
-            "For a change they cannot express (a bulk or generated rewrite), use `mode` `script` and pipe a literal here-string to `python` or `python3` (`@'...'@ | python -`)."
-        }
-        "bash" | "zsh" | "sh" => {
-            "For a change they cannot express (a bulk or generated rewrite), use `mode` `script` and run Python (`python3` or `python`) with a quoted heredoc or a short script."
-        }
-        "cmd" => "`mode` `script` is cmd.exe, not bash or PowerShell; do not edit files with it.",
-        _ => "For a change they cannot express, use `mode` `script`.",
-    }
-}
-
 /// Calling rules follow the exposed registry. Child roles may expose tools
 /// directly, or expose only code mode without a shell.
 fn tool_calling(tools: &ToolRegistry, code_mode: bool) -> String {
@@ -39,11 +26,17 @@ fn tool_calling(tools: &ToolRegistry, code_mode: bool) -> String {
     if code_mode {
         rules.push_str(
             "- Only names under Available tools are directly callable. Tools under \
-Tools inside run_code are called from a Rhai script as `call(\"name\", #{ argument: value })`; \
-use their argument schemas below. Rhai maps use `#{ ... }`, not JavaScript object syntax.\n\
-- Batch related operations in one script. A `call` returns `{ content, is_error }`, or \
-`{ __error__ }` if dispatch was refused. Inspect errors before continuing dependent work; \
+Tools inside run_code are called from JavaScript as `call(\"name\", { argument: value })`; \
+use their argument schemas below. `script` accepts JavaScript only. It runs in embedded \
+QuickJS, with no Node.js, require, fs, fetch, filesystem or network globals. No imports, \
+async/await or Promise job execution are supported.\n\
+- Batch related operations in one script. A `call` returns `{ content, is_error }`; \
+text blocks use `result.content[0].Text`. Dispatch refusals also include `__error__`. \
+Inspect errors before continuing dependent work; \
 use `complete(value)` to return the result. Calls are synchronous inside the script.\n\
+- Prefer in-process JavaScript for routine file/data transformations: read with \
+`call(\"read\", ...)`, transform objects/arrays/strings, then use `call(\"write\", ...)` or \
+`call(\"edit\", ...)`. Use `log(value)` for output and progress.\n\
 - A `run_code` script cannot call `run_code` or `wait_code` itself.\n",
         );
     }
@@ -56,27 +49,28 @@ use `complete(value)` to return the result. Calls are synchronous inside the scr
 (pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n",
         );
     }
-    if let Some(shell_tool) = shell_tool_name(tools) {
-        let hint = edit_hint(&shell_tool);
-        let changes = if tools.get("write").is_some() && tools.get("edit").is_some() {
-            let names = if code_mode {
-                "`call(\"write\", …)` and `call(\"edit\", …)`"
-            } else {
-                "the registered `write` and `edit` tools"
-            };
-            format!("- Read existing content before changing it. Change files by {names}. {hint}\n")
+    if tools.get("write").is_some() && tools.get("edit").is_some() {
+        let names = if code_mode {
+            "`call(\"write\", …)` and `call(\"edit\", …)`"
         } else {
-            String::new()
+            "the registered `write` and `edit` tools"
         };
         let _ = writeln!(
             rules,
+            "- Read existing content before changing it. Change files by {names}."
+        );
+    }
+    if let Some(shell_tool) = shell_tool_name(tools) {
+        let _ = writeln!(
+            rules,
             "- Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, \
-git, package managers, and running programs. Never use it to list directories, read files, or search text.\n\
+git, package managers, and running programs (including the user's Python projects). \
+Never use it to list directories, read files, or search text.\n\
 - A `{shell_tool}` call waits for its command to exit. Do not start one that waits for \
 input or never exits (a dev server, a watcher, an interactive prompt): it holds the turn \
-until the timeout. Pass non-interactive flags instead.\n{changes}\
-- `{shell_tool}` `mode` `program` runs one executable with an explicit `args` vector and \
-no shell parsing. Prefer it when a command string would need fragile quoting.\n\
+until the timeout. Pass non-interactive flags instead.\n\
+- `{shell_tool}` `mode` `script` runs a command in the active shell. `mode` `program` \
+runs one executable with an explicit `args` vector and no shell parsing. Prefer it when a command string would need fragile quoting.\n\
 - Never use `{shell_tool}` to talk to the user."
         );
     }
@@ -214,7 +208,13 @@ mod tests {
             assert!(hidden.contains(&format!("\n- {name}:")));
             assert!(hidden.contains(&format!("Arguments JSON Schema: {}", spec.params_schema)));
         }
-        assert!(direct.contains("Rhai maps use `#{ ... }`"));
+        assert!(direct.contains("`script` accepts JavaScript only"));
+        assert!(direct.contains("no Node.js"));
+        assert!(
+            direct.contains("Prefer in-process JavaScript for routine file/data transformations")
+        );
+        assert!(!direct.contains("Rhai"));
+        assert!(!direct.contains("pipe a literal here-string to `python`"));
         assert!(direct.contains("Inspect errors before continuing dependent work"));
     }
 
@@ -272,7 +272,7 @@ mod tests {
         registry.register(Arc::new(mycode_tools::builtin::ReadTool));
         expose_code_mode(&registry, &["run_code", "wait_code"]);
         let prompt = build_system_prompt(&registry);
-        assert!(prompt.contains("call(\"name\", #{ argument: value })"));
+        assert!(prompt.contains("call(\"name\", { argument: value })"));
         assert!(prompt.contains("\n- read:"));
         assert!(prompt.contains("Arguments JSON Schema:"));
         assert!(!prompt.contains("`powershell`"));
@@ -310,8 +310,7 @@ mod tests {
         let prompt = build_system_prompt(&registry);
         assert!(prompt.contains("`powershell`"), "{prompt}");
         assert!(!prompt.contains("\n- bash:"), "{prompt}");
-        assert!(prompt.contains("here-string"), "{prompt}");
-        assert!(!prompt.contains("quoted heredoc"), "{prompt}");
+        assert!(prompt.contains("in-process JavaScript"), "{prompt}");
         assert!(!prompt.contains("translated"), "{prompt}");
         assert!(
             !prompt.contains("`shell`"),
@@ -320,11 +319,15 @@ mod tests {
     }
 
     #[test]
-    fn bash_prompt_teaches_a_quoted_heredoc() {
+    fn bash_prompt_prefers_javascript_for_file_transforms() {
         let registry = registry_with(ShellKind::Bash, "/bin/bash");
         let prompt = build_system_prompt(&registry);
         assert!(prompt.contains("`bash`"), "{prompt}");
-        assert!(prompt.contains("quoted heredoc"), "{prompt}");
+        assert!(prompt.contains("in-process JavaScript"), "{prompt}");
+        assert!(
+            prompt.contains("including the user's Python projects"),
+            "{prompt}"
+        );
         assert!(
             prompt.contains("Change files by `call(\"write\""),
             "write and edit are the file-change tools reached through call, got:\n{prompt}"
@@ -342,8 +345,8 @@ mod tests {
             "directory listing belongs to find, got:\n{prompt}"
         );
         assert!(
-            prompt.contains("`mode` `script`"),
-            "bulk edits stay on script mode, got:\n{prompt}"
+            prompt.contains("`mode` `program`"),
+            "external programs keep a direct invocation path, got:\n{prompt}"
         );
         assert!(
             !prompt.contains("only for pipelines"),
@@ -361,8 +364,8 @@ mod tests {
         });
         let description = shell.description();
         assert!(
-            description.contains("quoted heredoc"),
-            "bash description must allow Python heredocs, got:\n{description}"
+            !description.contains("run Python"),
+            "shell descriptions must not direct routine rewrites to Python, got:\n{description}"
         );
         assert!(
             description.contains("`mode` `program`"),
@@ -379,7 +382,7 @@ mod tests {
         let registry = registry_with(ShellKind::Pwsh, "pwsh.exe");
         let prompt = build_system_prompt(&registry);
         assert!(prompt.contains("powershell:"), "{prompt}");
-        assert!(prompt.contains("here-string"), "{prompt}");
+        assert!(prompt.contains("in-process JavaScript"), "{prompt}");
         let shell = ShellTool::forcing(DetectedShell {
             kind: ShellKind::Pwsh,
             program: PathBuf::from("pwsh.exe"),

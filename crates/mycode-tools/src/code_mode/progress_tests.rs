@@ -87,10 +87,10 @@ async fn inner_child_ids_match_host_registration_and_keep_independent_completion
         let _registry = registry;
         run.execute_dyn(
             json!({"script": r#"
-let first = call("agent", #{ agent: "scout", prompt: "cancel" });
-if !first.is_error { throw "first child should have been cancelled"; }
-let second = call("agent", #{ agent: "scout", prompt: "success" });
-if second.is_error { throw "second child should finish"; }
+let first = call("agent", { agent: "scout", prompt: "cancel" });
+if (!first.is_error) { throw "first child should have been cancelled"; }
+let second = call("agent", { agent: "scout", prompt: "success" });
+if (second.is_error) { throw "second child should finish"; }
 complete("done");
 "#}),
             &ctx,
@@ -162,7 +162,7 @@ async fn wait_code_forwards_live_child_progress_with_the_original_call_id() {
     let run = RunCodeTool::new(Arc::clone(&registry), Arc::clone(&cells), "s".to_owned());
     let ctx = ToolCtx::new(std::env::temp_dir()).with_call_id("outer");
     let running = run.execute_dyn(
-        json!({"script": "call(\"agent\", #{ agent: \"scout\", prompt: \"delayed\" });", "yield_time_ms": 20}),
+        json!({"script": "call(\"agent\", { agent: \"scout\", prompt: \"delayed\" });", "yield_time_ms": 20}),
         &ctx, &mut ToolStream::closed(),
     ).await.unwrap();
     assert_eq!(
@@ -215,7 +215,7 @@ async fn a_panicking_child_publishes_one_failed_inner_completion() {
     let (mut out, mut updates) = ToolStream::channel();
     let result = run
         .execute_dyn(
-            json!({"script": "call(\"agent\", #{ agent: \"scout\", prompt: \"panic\" });"}),
+            json!({"script": "call(\"agent\", { agent: \"scout\", prompt: \"panic\" });"}),
             &ToolCtx::new(std::env::temp_dir()).with_call_id("outer"),
             &mut out,
         )
@@ -251,7 +251,7 @@ async fn cancelling_the_parent_publishes_one_cancelled_inner_completion_before_r
     let task = tokio::spawn(async move {
         let _registry = registry;
         run.execute_dyn(
-            json!({"script": "call(\"agent\", #{ agent: \"scout\", prompt: \"cancel\" });"}),
+            json!({"script": "call(\"agent\", { agent: \"scout\", prompt: \"cancel\" });"}),
             &ctx,
             &mut out,
         )

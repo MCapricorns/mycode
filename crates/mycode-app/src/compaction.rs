@@ -832,9 +832,6 @@ fn compaction_transcript(
             &transcript[skip..]
         )
     } else {
-        // Explicit `&str`: `rhai`'s `smartstring` adds an
-        // `Add<SmartString> for String` impl to the graph, so an untyped
-        // `&String` right-hand side no longer infers a unique impl.
         prefix + transcript.as_str()
     }
 }

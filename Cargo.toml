@@ -78,9 +78,8 @@ image = { version = "0.25.10", default-features = false, features = [
 ] }
 # Session grouping follows the user's local calendar, including DST boundaries.
 chrono = "0.4.45"
-# Embedded code-mode scripting engine. `sync` is mandatory: the script runs on
-# its own std::thread, so `rhai::Engine` must be Send (wiki/architecture/code-mode-engine.md §1).
-rhai = { version = "1.27", features = ["serde", "sync"] }
+# Embedded QuickJS runtime, created and used only on each script thread.
+rquickjs = "0.14"
 # BM25 ranking for the `tool_search` meta tool over the MCP catalog.
 bm25 = "2.3.2"
 

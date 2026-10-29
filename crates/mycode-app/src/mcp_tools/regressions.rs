@@ -164,7 +164,7 @@ async fn code_mode_discovery_notes_teach_the_registered_call_contract() {
 }
 
 #[tokio::test]
-async fn discovery_and_use_tool_work_inside_a_rhai_script() {
+async fn discovery_and_use_tool_work_inside_a_javascript_script() {
     let registry = Arc::new(ToolRegistry::new());
     let catalog = McpCatalog::new(None, BTreeSet::new(), []);
     let index = ToolSearchIndex::new();
@@ -188,11 +188,11 @@ async fn discovery_and_use_tool_work_inside_a_rhai_script() {
     let result = tool
         .execute_dyn(
             json!({"script": r#"
-let schema = call("search_tool", #{ name: "lookup" });
-if schema.is_error { throw "discovery failed"; }
-let found = call("tool_search", #{ query: "docs lookup" });
-if found.is_error { throw "ranking failed"; }
-let result = call("use_tool", #{ name: "lookup", arguments: #{} });
+let schema = call("search_tool", { name: "lookup" });
+if (schema.is_error) { throw "discovery failed"; }
+let found = call("tool_search", { query: "docs lookup" });
+if (found.is_error) { throw "ranking failed"; }
+let result = call("use_tool", { name: "lookup", arguments: {} });
 complete(result);
 "#}),
             &ToolCtx::new(std::env::temp_dir()),
