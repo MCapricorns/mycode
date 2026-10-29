@@ -49,6 +49,13 @@ jobs:
         with:
           components: clippy
 
+      - name: Initialize Windows PowerShell
+        shell: powershell
+        timeout-minutes: 2
+        # Complete the fresh runner's .NET/PowerShell initialization before
+        # launch regressions start their per-command timeout.
+        run: '[Console]::WriteLine("Windows PowerShell ready: " + $PSVersionTable.PSVersion)'
+
       - name: cargo test --workspace
         shell: bash
         env:
@@ -80,6 +87,12 @@ jobs:
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Initialize Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: powershell
+        timeout-minutes: 2
+        run: '[Console]::WriteLine("Windows PowerShell ready: " + $PSVersionTable.PSVersion)'
 
       - name: cargo test --workspace
         shell: bash
