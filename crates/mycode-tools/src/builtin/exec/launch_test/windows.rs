@@ -273,40 +273,52 @@ async fn powershell_script_hides_later_console_allocation_and_keeps_native_outpu
             .join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
     };
     let script = r#"
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class ConsoleProbe {
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct Startup {
-        public uint cb;
-        public IntPtr reserved, desktop, title;
-        public uint x, y, width, height, columns, rows, fill, flags;
-        public ushort show, reservedSize;
-        public IntPtr reservedBytes, stdin, stdout, stderr;
-    }
-    [DllImport("kernel32.dll", EntryPoint = "GetStartupInfoW")]
-    public static extern void GetStartupInfo(out Startup info);
-    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-    [DllImport("kernel32.dll")] public static extern bool FreeConsole();
-    [DllImport("kernel32.dll")] public static extern bool AllocConsole();
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
-    public static bool HiddenStartup() {
-        Startup info; GetStartupInfo(out info);
-        return (info.flags & 1) != 0 && info.show == 0;
-    }
-}
-'@
-if (-not [ConsoleProbe]::HiddenStartup()) { throw 'missing hidden startup' }
+$ErrorActionPreference = 'Stop'
 Write-Output 'probe-script-stdout'
+# Define P/Invokes in memory: this launch probe must not depend on Add-Type's
+# external C# compiler and its cold-start cost on Windows PowerShell 5.1.
+$assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly(
+    [Reflection.AssemblyName]::new('ConsoleProbe'),
+    [Reflection.Emit.AssemblyBuilderAccess]::Run)
+$module = $assembly.DefineDynamicModule('ConsoleProbe')
+$type = $module.DefineType('ConsoleProbe', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
+foreach ($entry in @(
+    @('GetStartupInfoW', 'kernel32.dll', [void], [type[]]@([IntPtr])),
+    @('GetConsoleWindow', 'kernel32.dll', [IntPtr], [type[]]@()),
+    @('FreeConsole', 'kernel32.dll', [bool], [type[]]@()),
+    @('AllocConsole', 'kernel32.dll', [bool], [type[]]@()),
+    @('IsWindowVisible', 'user32.dll', [bool], [type[]]@([IntPtr]))
+)) {
+    $method = $type.DefinePInvokeMethod($entry[0], $entry[1],
+        [Reflection.MethodAttributes]'Public, Static, PinvokeImpl',
+        [Reflection.CallingConventions]::Standard, $entry[2], $entry[3],
+        [Runtime.InteropServices.CallingConvention]::Winapi,
+        [Runtime.InteropServices.CharSet]::Unicode)
+    $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
+}
+$probe = $type.CreateType()
+# STARTUPINFOW is at most 104 bytes; its flags follow cb, alignment, three
+# pointers and seven DWORDs. wShowWindow immediately follows the flags.
+$startup = [Runtime.InteropServices.Marshal]::AllocHGlobal(104)
+try {
+    $probe::GetStartupInfoW($startup)
+    $flagsOffset = 28 + 4 * [IntPtr]::Size
+    $flags = [Runtime.InteropServices.Marshal]::ReadInt32($startup, $flagsOffset)
+    $show = [Runtime.InteropServices.Marshal]::ReadInt16($startup, $flagsOffset + 4)
+    if (($flags -band 1) -eq 0 -or $show -ne 0) { throw 'missing hidden startup' }
+} finally {
+    [Runtime.InteropServices.Marshal]::FreeHGlobal($startup)
+}
+Write-Output 'probe-pinvoke-ready'
 Write-Error 'probe-script-stderr' -ErrorAction Continue
-& "$env:SystemRoot\System32\whoami.exe"
-if ($LASTEXITCODE -ne 0) { throw 'native command failed' }
+$native = & "$env:SystemRoot\System32\whoami.exe"
+if ($LASTEXITCODE -ne 0 -or -not $native) { throw 'native command failed or produced no output' }
+Write-Output "probe-native-output=$native"
 # Exercise a later allocation after native IO: FreeConsole invalidates PowerShell's cached console handles.
-[ConsoleProbe]::FreeConsole() | Out-Null
-if (-not [ConsoleProbe]::AllocConsole()) { throw 'console allocation failed' }
-if ([ConsoleProbe]::GetConsoleWindow() -eq [IntPtr]::Zero) { throw 'allocated console has no window' }
-if ([ConsoleProbe]::IsWindowVisible([ConsoleProbe]::GetConsoleWindow())) { throw 'visible allocated console' }
+$probe::FreeConsole() | Out-Null
+if (-not $probe::AllocConsole()) { throw 'console allocation failed' }
+if ($probe::GetConsoleWindow() -eq [IntPtr]::Zero) { throw 'allocated console has no window' }
+if ($probe::IsWindowVisible($probe::GetConsoleWindow())) { throw 'visible allocated console' }
 Write-Output 'probe-native-hidden'
 "#;
     let result = ShellTool::forcing(shell)
@@ -328,6 +340,7 @@ Write-Output 'probe-native-hidden'
     for marker in [
         "probe-script-stdout",
         "probe-script-stderr",
+        "probe-native-output=",
         "probe-native-hidden",
     ] {
         assert!(text.contains(marker), "{text}");
