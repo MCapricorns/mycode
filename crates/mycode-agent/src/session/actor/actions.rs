@@ -34,11 +34,20 @@ struct PreparedEvent {
 /// Owned fields of one fork or rewind, after the reservation is consumed.
 struct PreparedBranch {
     new_branch: BranchId,
-    position: u64,
+    event_count: u64,
     prefix_end: u64,
     source_count: u64,
     source_committed: u64,
     events: Vec<EventMeta>,
+}
+
+impl PreparedBranch {
+    fn head(&self) -> HeadStamp {
+        self.events
+            .last()
+            .map(|event| HeadStamp::Event(event.event_id.clone()))
+            .unwrap_or(HeadStamp::Empty)
+    }
 }
 
 impl SessionCore {
@@ -296,7 +305,8 @@ impl SessionCore {
             expected_count: prepared.source_count,
             expected_committed: prepared.source_committed,
             target_event,
-            position: prepared.position,
+            head: &prepared.head(),
+            event_count: prepared.event_count,
             prefix_end: prepared.prefix_end,
         };
         let commit = activity
@@ -306,11 +316,12 @@ impl SessionCore {
         drop(commit);
         let charge = committed.map_err(map_store)?;
         let new_branch = prepared.new_branch.clone();
+        let head = prepared.head();
         self.record_branch(session, prepared, charge);
         Ok(SessionPull::Complete(SessionResult::Branched(
             BranchedResult {
                 branch_id: new_branch,
-                head: HeadStamp::Event(target_event.clone()),
+                head,
             },
         )))
     }
@@ -555,13 +566,20 @@ impl SessionCore {
             .iter()
             .position(|row| &row.event_id == target_event)
             .ok_or(OpFail::Domain(SessionError::NotFound))?;
-        let boundary = &branch_state.events[position];
-        let prefix_end = boundary
-            .offset
-            .checked_add(boundary.record_len)
-            .ok_or(OpFail::Domain(SessionError::Limit))?;
+        let end = match kind {
+            BranchMutationKind::Fork | BranchMutationKind::Rewind => position + 1,
+            BranchMutationKind::RewindBefore => position,
+        };
+        let prefix = &branch_state.events[..end];
+        let prefix_end = match prefix.last() {
+            Some(boundary) => boundary
+                .offset
+                .checked_add(boundary.record_len)
+                .ok_or(OpFail::Domain(SessionError::Limit))?,
+            None => 0,
+        };
         let mut charge = 0_u64;
-        for event in &branch_state.events[..=position] {
+        for event in prefix {
             let part = store::charge(event.record_len, event.external, event.bytes)
                 .ok_or(OpFail::Domain(SessionError::Limit))?;
             charge = charge
@@ -577,12 +595,12 @@ impl SessionCore {
         }
         Ok(PreparedBranch {
             new_branch,
-            position: u64::try_from(position).map_err(|_| OpFail::Domain(SessionError::Limit))?,
+            event_count: u64::try_from(end).map_err(|_| OpFail::Domain(SessionError::Limit))?,
             prefix_end,
             source_count: u64::try_from(branch_state.events.len())
                 .map_err(|_| OpFail::Domain(SessionError::Limit))?,
             source_committed: branch_state.committed_bytes,
-            events: branch_state.events[..=position].to_vec(),
+            events: prefix.to_vec(),
         })
     }
 

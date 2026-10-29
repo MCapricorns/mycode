@@ -559,18 +559,22 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             session,
             branch,
             expected_head,
-            to_event,
+            before_event,
             edit,
         } => {
-            // `handle` already runs as its own task; an inner spawn only
-            // added a JoinError layer the match below then unwrapped.
+            if state.live_work(session.as_str()).is_some() {
+                return BridgeReply::Recalled(Err(
+                    "Wait for this session to finish sending or compacting before recalling a message."
+                        .to_owned(),
+                ));
+            }
             match recall_message(
                 &state.home,
                 &state.service,
                 &session,
                 &branch,
                 &expected_head,
-                &to_event,
+                &before_event,
             )
             .await
             {

@@ -165,8 +165,10 @@ pub(crate) struct BranchCommitRequest<'a> {
     pub(crate) expected_committed: u64,
     /// Prefix boundary event.
     pub(crate) target_event: &'a SessionEventId,
-    /// Zero-based index of the boundary event.
-    pub(crate) position: u64,
+    /// Head of the copied prefix, empty when no events survive.
+    pub(crate) head: &'a HeadStamp,
+    /// Number of events in the copied prefix.
+    pub(crate) event_count: u64,
     /// JSONL prefix length to copy.
     pub(crate) prefix_end: u64,
 }
@@ -481,8 +483,11 @@ impl SessionStore {
             let (parent_kind, at_event, to_event) = match request.kind {
                 BranchMutationKind::Fork => ("fork", Some(request.target_event.as_str()), None),
                 BranchMutationKind::Rewind => ("rewind", None, Some(request.target_event.as_str())),
+                BranchMutationKind::RewindBefore => {
+                    ("rewind_before", None, Some(request.target_event.as_str()))
+                }
             };
-            let new_count = request.position.checked_add(1).ok_or(StoreError::Limit)?;
+            let new_count = request.event_count;
             let tx = self.conn.transaction().map_err(|_| StoreError::Storage)?;
             let row = tx
                 .query_row(
@@ -530,7 +535,7 @@ impl SessionStore {
                 params![
                     request.session.as_str(),
                     request.new_branch.as_str(),
-                    request.target_event.as_str(),
+                    encode_head(request.head),
                     i64_from(new_count)?,
                     i64_from(request.prefix_end)?,
                     parent_kind,
@@ -548,12 +553,12 @@ impl SessionStore {
                  SELECT session_id, ?1, seq, event_id, kind, call_id, digest, bytes,
                         offset, record_len, external
                  FROM events
-                 WHERE session_id = ?2 AND branch_id = ?3 AND seq <= ?4",
+                 WHERE session_id = ?2 AND branch_id = ?3 AND seq < ?4",
                 params![
                     request.new_branch.as_str(),
                     request.session.as_str(),
                     request.source.as_str(),
-                    i64_from(request.position)?,
+                    i64_from(request.event_count)?,
                 ],
             )
             .map_err(|_| StoreError::Storage)?;
@@ -561,12 +566,8 @@ impl SessionStore {
                 .query_row(
                     "SELECT COALESCE(SUM(record_len + CASE WHEN external = 1 THEN bytes ELSE 0 END), 0)
                      FROM events
-                     WHERE session_id = ?1 AND branch_id = ?2 AND seq <= ?3",
-                    params![
-                        request.session.as_str(),
-                        request.new_branch.as_str(),
-                        i64_from(request.position)?,
-                    ],
+                     WHERE session_id = ?1 AND branch_id = ?2",
+                    params![request.session.as_str(), request.new_branch.as_str()],
                     |row| row.get(0),
                 )
                 .map_err(|_| StoreError::Storage)?;

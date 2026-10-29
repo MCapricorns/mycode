@@ -431,6 +431,26 @@ impl SessionCore {
                     },
                 )?
             }
+            SessionRequest::RewindBefore {
+                session,
+                branch,
+                before_event,
+                reservation,
+            } => {
+                if !is_canonical_digest(&reservation.mutation_digest) {
+                    return failed(admission, SessionError::InvalidArgument);
+                }
+                self.stage_for(
+                    session.clone(),
+                    Action::BranchCommit {
+                        session,
+                        kind: BranchMutationKind::RewindBefore,
+                        source_branch: branch,
+                        target_event: before_event,
+                        reservation,
+                    },
+                )?
+            }
             SessionRequest::LoadEvent {
                 session,
                 branch,

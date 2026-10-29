@@ -3,6 +3,7 @@ use crate::view_model::{FrontendAction, WorkspaceState, reduce};
 use mycode_app::ActiveConversation;
 
 mod catalog;
+mod recall;
 mod runtime_guards;
 
 fn conversation(session: &str, branch: &str) -> ActiveConversation {

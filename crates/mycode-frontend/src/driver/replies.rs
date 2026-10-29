@@ -1,6 +1,6 @@
 //! Folding core replies into actions. Each reply already passed its
 //! [`ReplyScope`] check in `poll`; the two scope-embedded kinds (a recall
-//! page walk and a row delete) resolve here before the generic match.
+//! result and a row delete) resolve here before the generic match.
 use mycode_app::{BridgeCommand, BridgeReply};
 
 use super::{Effect, FrontendDriver, ReplyScope, ToastKind};
