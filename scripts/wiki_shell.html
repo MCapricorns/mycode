@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="MYCode architecture, code mode reference and an offline source explorer for the Rust native agent.">
-<title>MYCode Wiki · 架构图谱</title>
+<meta name="description" content="MYCode 中文开发文档：运行时架构、代码模式、子代理工作流与可离线阅读的源码图谱。">
+<title>MYCode 文档 · 架构图谱</title>
 <link rel="icon" href="images/logo.svg" type="image/svg+xml">
 <style>
 :root {
@@ -227,29 +227,29 @@ h1 { font-size: 26px; font-weight: 650; letter-spacing: -.025em; line-height: 1.
 <body>
 <a class="skip" href="#main">跳到内容</a>
 <div class="app">
-  <aside class="sidebar" id="sidebar" aria-label="Wiki navigation">
+  <aside class="sidebar" id="sidebar" aria-label="知识库导航">
     <a class="brand" href="#v=graph" aria-label="MYCode Wiki 首页">
       <img src="images/logo.svg" width="30" height="30" alt="" aria-hidden="true">
-      <strong>MYCode<span>Engineering wiki</span></strong>
+      <strong>MYCode<span>工程文档</span></strong>
     </a>
     <div>
       <p class="nav-group">探索项目</p>
       <nav class="primary-nav" aria-label="文档">
         <a href="#v=graph" data-view="graph" aria-current="page"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="2" width="6" height="4" rx="1"/><rect x="1" y="14" width="6" height="4" rx="1"/><rect x="13" y="14" width="6" height="4" rx="1"/><path d="M10 6v4H4v4m6-4h6v4"/></svg>架构图谱</a>
         <a href="#v=architecture" data-view="architecture"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 2 8 4-8 4-8-4 8-4Zm-8 8 8 4 8-4m-16 4 8 4 8-4"/></svg>运行时架构</a>
-        <a href="#v=code-mode" data-view="code-mode"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 5-5 5 5 5m8-10 5 5-5 5m-2-13-4 16"/></svg>Code mode</a>
+        <a href="#v=code-mode" data-view="code-mode"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 5-5 5 5 5m8-10 5 5-5 5m-2-13-4 16"/></svg>代码模式</a>
       </nav>
     </div>
     <div class="sidebar-note">
-      <p>Rust native agent<br>从界面到工具，沿源码阅读。</p>
-      <div class="sidebar-links"><a href="https://github.com/MCapricorns/mycode#readme">README ↗</a><a href="https://github.com/MCapricorns/mycode/releases">Releases ↗</a><a href="https://github.com/MCapricorns/mycode/blob/main/CHANGELOG.md">更新日志 ↗</a></div>
+      <p>Rust 原生编码代理<br>从界面到工具，沿源码阅读。</p>
+      <div class="sidebar-links"><a href="https://github.com/MCapricorns/mycode#readme">项目说明 ↗</a><a href="https://github.com/MCapricorns/mycode/releases">版本下载 ↗</a><a href="https://github.com/MCapricorns/mycode/blob/main/CHANGELOG.md">更新日志 ↗</a></div>
     </div>
   </aside>
   <div class="workspace">
     <header class="topbar">
       <button class="control" id="menuToggle" aria-controls="sidebar" aria-expanded="false">目录</button>
-      <div class="breadcrumb">MYCode <span aria-hidden="true"> / </span><b id="breadcrumb">Wiki</b></div>
-      <div class="top-actions"><button class="control" id="themeToggle" aria-label="切换为深色主题">深色</button><a class="control" id="repoLink" href="https://github.com/MCapricorns/mycode">GitHub ↗</a></div>
+      <div class="breadcrumb">MYCode <span aria-hidden="true"> / </span><b id="breadcrumb">知识库</b></div>
+      <div class="top-actions"><button class="control" id="themeToggle" aria-label="切换为深色主题">深色</button><a class="control" id="repoLink" href="https://github.com/MCapricorns/mycode">项目仓库 ↗</a></div>
     </header>
     <main class="sheet-main" id="main" tabindex="-1">
       <div id="graphView">
@@ -266,12 +266,12 @@ h1 { font-size: 26px; font-weight: 650; letter-spacing: -.025em; line-height: 1.
         </div>
         <footer id="foot"></footer>
       </div>
-      <div id="docView" hidden><div class="doc-layout"><article class="document" id="document"></article><aside class="doc-aside" aria-label="本页目录"><p>On this page</p><nav id="docToc"></nav><div class="doc-source"><a id="docSource">Markdown 源文件 ↗</a></div></aside></div></div>
-      <noscript><p>交互图谱需要 JavaScript。你也可以直接阅读 <a href="architecture/runtime.md">运行时架构</a> 与 <a href="architecture/code-mode-engine.md">Code mode</a>。</p></noscript>
+      <div id="docView" hidden><div class="doc-layout"><article class="document" id="document"></article><aside class="doc-aside" aria-label="本页目录"><p>本页目录</p><nav id="docToc"></nav><div class="doc-source"><a id="docSource">查看文档源码 ↗</a></div></aside></div></div>
+      <noscript><p>交互图谱需要 JavaScript。你也可以直接阅读 <a href="architecture/runtime.md">运行时架构</a> 与 <a href="architecture/code-mode-engine.md">代码模式</a>。</p></noscript>
     </main>
   </div>
 </div>
-<dialog id="codeView" aria-labelledby="codePath"><div class="code-sheet"><header class="code-header"><h2 class="path" id="codePath"></h2><span class="meta" id="codeMeta"></span><a class="control" id="codeGithub" target="_blank" rel="noopener noreferrer">GitHub ↗</a><button class="control" id="codeCopy">复制</button><button class="control" id="codeClose">关闭</button></header><div class="scroll" tabindex="0" aria-label="源码"><div class="cols"><div class="gutter" id="codeGutter" aria-hidden="true"></div><pre class="code" id="codeBody"></pre></div></div></div></dialog>
+<dialog id="codeView" aria-labelledby="codePath"><div class="code-sheet"><header class="code-header"><h2 class="path" id="codePath"></h2><span class="meta" id="codeMeta"></span><a class="control" id="codeGithub" target="_blank" rel="noopener noreferrer">在 GitHub 查看 ↗</a><button class="control" id="codeCopy">复制</button><button class="control" id="codeClose">关闭</button></header><div class="scroll" tabindex="0" aria-label="源码"><div class="cols"><div class="gutter" id="codeGutter" aria-hidden="true"></div><pre class="code" id="codeBody"></pre></div></div></div></dialog>
 <script type="application/json" id="graph-data">__GRAPH_JSON__</script>
 <script type="application/json" id="file-data">__FILE_JSON__</script>
 <script type="application/json" id="doc-data">__DOC_JSON__</script>
@@ -285,7 +285,7 @@ const NS = "http://www.w3.org/2000/svg", REPO = "https://github.com/MCapricorns/
 const $ = (id) => document.getElementById(id);
 const escapeHTML = (value) => String(value).replace(/[&<>"']/g, (c) => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
 const byId = new Map(NODES.map((node) => [node.id, node]));
-const GROUP_LABELS = { crate: "Crate", module: "模块", flow: "流程", data: "数据" };
+const GROUP_LABELS = { crate: "代码包", module: "模块", flow: "流程", data: "数据" };
 const mobile = window.matchMedia("(max-width: 700px)");
 let selectedId = null, currentFile = null, currentView = "graph", listMode = window.matchMedia("(max-width: 1100px)").matches;
 let zoom = 1, manualZoom = false, fileTrigger = null, restoring = false;
@@ -299,6 +299,9 @@ function svgElement(tag, attributes, parent) {
   return el;
 }
 const SLOT = 180, ROW_H = 70, NODE_H = 40, LABEL_W = 94, MARGIN = 16;
+const labelMeasure = document.createElement("canvas").getContext("2d");
+if (labelMeasure) labelMeasure.font = "500 14px " + getComputedStyle(document.body).fontFamily;
+const nodeWidth = (label) => Math.min(SLOT - 8, Math.max(126, Math.ceil((labelMeasure?.measureText(label).width ?? label.length * 14) + 36)));
 const columns = Math.max(...LANES.map((_, lane) => NODES.filter((node) => node.lane === lane).length), 1);
 const graphW = MARGIN * 2 + LABEL_W + SLOT * columns, graphH = MARGIN * 2 + ROW_H * LANES.length;
 const svg = svgElement("svg", {width: graphW, height: graphH, viewBox: `0 0 ${graphW} ${graphH}`, role: "group", "aria-label": "MYCode 模块关联图"});
@@ -311,7 +314,7 @@ LANES.forEach((name, lane) => {
   svgElement("rect", {class: "lane-band", x: 0, y, width: graphW, height: ROW_H - 6, rx: 6}, svg);
   const label = svgElement("text", {class: "lane-label", x: 12, y: y + 36}, svg);
   label.textContent = name;
-  NODES.filter((node) => node.lane === lane).forEach((node, index) => positions.set(node.id, {x: MARGIN + LABEL_W + index * SLOT + SLOT / 2, y: y + 10, w: Math.min(172, Math.max(126, node.label.length * 7.8 + 30))}));
+  NODES.filter((node) => node.lane === lane).forEach((node, index) => positions.set(node.id, {x: MARGIN + LABEL_W + index * SLOT + SLOT / 2, y: y + 10, w: nodeWidth(node.label)}));
 });
 const edgeLayer = svgElement("g", {"aria-hidden": "true"}, svg), nodeLayer = svgElement("g", {}, svg);
 const edges = [], nodeEls = new Map();
@@ -533,8 +536,8 @@ function setView(view) {
   $("graphView").hidden = currentView !== "graph"; $("docView").hidden = currentView === "graph";
   document.querySelectorAll("[data-view]").forEach((link) => { if (link.dataset.view === currentView) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); });
   const title = currentView === "graph" ? "架构图谱" : DOCS[currentView].title;
-  $("breadcrumb").textContent = currentView === "graph" ? "Wiki" : currentView === "architecture" ? "运行时架构" : "Code mode";
-  document.title = "MYCode Wiki · " + title;
+  $("breadcrumb").textContent = currentView === "graph" ? "知识库" : currentView === "architecture" ? "运行时架构" : "代码模式";
+  document.title = "MYCode 文档 · " + title;
   if (DOCS[currentView]) {
     const doc = DOCS[currentView]; $("document").innerHTML = doc.html;
     $("docToc").innerHTML = doc.headings.map((heading) => '<a href="#v=' + currentView + '&s=' + encodeURIComponent(heading.id) + '">' + escapeHTML(heading.label) + '</a>').join("");

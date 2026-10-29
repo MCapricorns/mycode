@@ -74,7 +74,12 @@ def validate_graph(graph: dict) -> None:
 
 def doc_link(target: str, source: Path) -> str:
     """Resolve wiki documents locally and repository source links on GitHub."""
-    if target.startswith(("https://", "http://", "#")):
+    if target.startswith(("https://", "http://", "#v=", "#n=", "#f=")):
+        return target
+    if target.startswith("#"):
+        for key, doc in DOCS.items():
+            if source.resolve() == doc.resolve():
+                return f"#v={key}&s={target[1:]}"
         return target
     path, _, anchor = target.partition("#")
     resolved = (source.parent / path).resolve()
@@ -113,11 +118,21 @@ def render_doc(source: Path) -> dict:
     """
     lines = source.read_text(encoding="utf-8").splitlines()
     output, headings = [], []
+    ids = set()
     title = ""
     i = 0
     while i < len(lines):
         line = lines[i]
         if not line.strip():
+            i += 1
+            continue
+        # Preserve published section links while visible headings are translated.
+        anchor = re.fullmatch(r'<a id="([a-z][a-z0-9-]*)"></a>', line)
+        if anchor:
+            if anchor[1] in ids:
+                raise SystemExit(f"duplicate document anchor {anchor[1]} in {source}")
+            ids.add(anchor[1])
+            output.append(line)
             i += 1
             continue
         if line.startswith("```"):
@@ -137,6 +152,9 @@ def render_doc(source: Path) -> dict:
             level, label = len(heading[1]), heading[2]
             slug = re.sub(r"[^\w -]", "", label.lower())
             slug = re.sub(r"^\d+\s+", "", slug).strip().replace(" ", "-")
+            if slug in ids:
+                raise SystemExit(f"duplicate document anchor {slug} in {source}")
+            ids.add(slug)
             if level == 1:
                 title = label
             else:
@@ -151,7 +169,7 @@ def render_doc(source: Path) -> dict:
                 if not all(re.fullmatch(r":?-+:?", cell) for cell in cells):
                     rows.append(cells)
                 i += 1
-            table = ['<div class="table-scroll" tabindex="0" role="region" aria-label="Reference table"><table>']
+            table = ['<div class="table-scroll" tabindex="0" role="region" aria-label="参考表格"><table>']
             for index, cells in enumerate(rows):
                 tag = "th" if index == 0 else "td"
                 table.append("<tr>" + "".join(f"<{tag}>{inline(cell, source)}</{tag}>" for cell in cells) + "</tr>")
@@ -166,7 +184,7 @@ def render_doc(source: Path) -> dict:
             continue
         paragraph = [line]
         i += 1
-        while i < len(lines) and lines[i].strip() and not lines[i].startswith(("#", "```", "|", "- ")):
+        while i < len(lines) and lines[i].strip() and not lines[i].startswith(("#", "```", "|", "- ", '<a id="')):
             paragraph.append(lines[i])
             i += 1
         output.append("<p>" + inline(" ".join(paragraph), source) + "</p>")
@@ -194,7 +212,7 @@ def brand_assets() -> dict[Path, str]:
     """Reuse the native mark verbatim; never maintain a second M polygon."""
     icon = ICON.read_text(encoding="utf-8")
     mark = icon.split(">", 1)[1].rsplit("</svg>", 1)[0]
-    banner = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="MYCode — Rust native coding agent">
+    banner = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="MYCode — Rust 原生编码代理">
   <rect width="1280" height="360" rx="20" fill="#F3EDE2"/>
   <rect x="12" y="12" width="1256" height="336" rx="12" fill="#FAF6EE"/>
   <svg x="64" y="90" width="180" height="180" viewBox="0 0 256 256">{mark}</svg>
