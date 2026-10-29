@@ -298,6 +298,35 @@ impl SessionService {
         }
     }
 
+    /// Copies the branch strictly before `before_event` into a new branch.
+    ///
+    /// An event at index zero produces an empty branch. The source branch
+    /// stays intact. Requires a [`BranchMutationKind::RewindBefore`] reservation.
+    ///
+    /// # Errors
+    ///
+    /// Mirrors [`SessionService::fork`].
+    pub async fn rewind_before(
+        &self,
+        session: &SessionId,
+        branch: &BranchId,
+        before_event: &SessionEventId,
+        reservation: &super::dto::BranchReservationView,
+    ) -> Result<BranchedResult, SessionError> {
+        match self
+            .run(SessionRequest::RewindBefore {
+                session: session.clone(),
+                branch: branch.clone(),
+                before_event: before_event.clone(),
+                reservation: reservation.clone(),
+            })
+            .await?
+        {
+            SessionResult::Branched(branched) => Ok(branched),
+            _ => Err(SessionError::Unavailable),
+        }
+    }
+
     /// Loads one committed event with its digest-verified payload.
     ///
     /// # Errors

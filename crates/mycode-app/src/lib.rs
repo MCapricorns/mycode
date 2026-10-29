@@ -230,8 +230,8 @@ pub enum BridgeCommand {
         /// Head the UI observed; a stale head fails the rewind with the same
         /// moved-on error a stale `SendMessage` gets.
         expected_head: HeadStamp,
-        /// Event to rewind to (the entry before the recalled message).
-        to_event: String,
+        /// User message event to exclude, together with everything after it.
+        before_event: String,
         /// Edited text to prefill for re-sending.
         edit: Option<String>,
     },

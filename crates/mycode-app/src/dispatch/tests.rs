@@ -2,6 +2,56 @@ use super::*;
 use crate::{BranchId, HeadStamp, SessionId};
 
 #[tokio::test]
+async fn recall_is_rejected_during_turns_and_manual_compaction() {
+    let root = std::env::temp_dir().join(format!(
+        "mycode-recall-busy-{}-{}",
+        std::process::id(),
+        crate::unix_now().as_nanos()
+    ));
+    let home = HomeLayout::from_root(&root).unwrap();
+    let state = CoreState::new(home, Vec::new());
+    let session = SessionId::generate().unwrap();
+    let branch = BranchId::generate().unwrap();
+    for kind in [
+        crate::state::WorkKind::Turn,
+        crate::state::WorkKind::Compaction,
+    ] {
+        let token = Arc::new(tokio_util::sync::CancellationToken::new());
+        state.turn_cancels.lock().insert(
+            session.to_string(),
+            crate::state::LiveWork {
+                token: Arc::clone(&token),
+                kind,
+            },
+        );
+        let reply = handle(
+            &state,
+            BridgeCommand::RecallMessage {
+                session: session.clone(),
+                branch: branch.clone(),
+                expected_head: HeadStamp::Empty,
+                before_event: "evt1-00000000000000000000000000000001".into(),
+                edit: Some("original".into()),
+            },
+        )
+        .await;
+        assert!(
+            matches!(reply, BridgeReply::Recalled(Err(message)) if message.contains("finish sending or compacting"))
+        );
+        assert!(!token.is_cancelled(), "recall must not stop ongoing work");
+    }
+    state.service.clone().shutdown().await;
+    drop(state);
+    for _ in 0..100 {
+        if !root.exists() || std::fs::remove_dir_all(&root).is_ok() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("temporary session store remained open");
+}
+
+#[tokio::test]
 async fn a_second_turn_waits_for_the_first_terminal_even_after_stop() {
     let root = std::env::temp_dir().join(format!(
         "mycode-turn-admission-{}-{}",

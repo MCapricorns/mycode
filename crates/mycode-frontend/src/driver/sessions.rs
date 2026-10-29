@@ -1,27 +1,15 @@
-//! Conversation lifetime: open, create, park, delete, the rewind page-walk,
+//! Conversation lifetime: open, create, park, delete, message recall,
 //! older-history paging, and the durable UI state that follows them.
 use mycode_app::{
     ActiveConversation, BranchId, BridgeCommand, BridgeReply, SessionEventId, SessionId,
 };
 
-use super::{Effect, FrontendDriver, RecallRequest, ReplyScope, ToastKind, parse_head};
-use crate::view_model::{ConversationEntry, EntryKind, FrontendAction};
-
-/// The last committed ledger event strictly before `entries[index]`.
-/// Transient tool placeholders have no parseable event id and are skipped.
-fn previous_event(entries: &[ConversationEntry], index: usize) -> Option<&str> {
-    entries
-        .get(..index)?
-        .iter()
-        .rev()
-        .find_map(|entry| SessionEventId::parse(&entry.event_id).map(|_| entry.event_id.as_str()))
-}
+use super::{Effect, FrontendDriver, RecallRequest, ReplyScope, parse_head};
+use crate::view_model::{EntryKind, FrontendAction};
 
 fn can_rewind(conversation: &ActiveConversation, index: usize) -> bool {
     conversation.entries.get(index).is_some_and(|entry| {
-        entry.kind == EntryKind::UserMessage
-            && (previous_event(&conversation.entries, index).is_some()
-                || conversation.older_before.is_some())
+        entry.kind == EntryKind::UserMessage && SessionEventId::parse(&entry.event_id).is_some()
     })
 }
 
@@ -157,15 +145,14 @@ impl FrontendDriver {
         );
     }
 
-    /// Whether the message at `index` can be rewound to: a committed user
-    /// message with an earlier event resident or older history to walk to.
+    /// Whether the committed user message at `index` can be recalled.
+    /// Includes the first message; sending and manual compaction lock recall.
     pub fn can_rewind_message(&self, index: usize) -> bool {
         !self.vm.sending
-            && self
-                .vm
-                .active
-                .as_ref()
-                .is_some_and(|active| can_rewind(active, index))
+            && !self.vm.compacting
+            && self.vm.active.as_ref().is_some_and(|active| {
+                !active.running && !active.compacting && can_rewind(active, index)
+            })
     }
 
     /// Rewinds to before this message and restores its text to the composer.
@@ -188,34 +175,21 @@ impl FrontendDriver {
             edit: active.entries[index].text.to_string(),
             generation: self.recall_generation,
         };
-        if let Some(target) = previous_event(&active.entries, index).map(str::to_owned) {
-            self.finish_recall(request, target);
-        } else if let Some(before) = active.older_before.clone() {
-            self.resolve_recall_page(request, before, out);
-        }
-    }
-
-    /// A resident-window boundary is not a branch boundary. Resolve the
-    /// preceding committed event without prepending or disturbing the viewport.
-    pub(crate) fn resolve_recall_page(
-        &mut self,
-        request: RecallRequest,
-        before: String,
-        _out: &mut Vec<Effect>,
-    ) {
+        let before_event = active.entries[index].event_id.clone();
         self.dispatch_scoped(
-            BridgeCommand::LoadOlder {
+            BridgeCommand::RecallMessage {
                 session: request.session.clone(),
                 branch: request.branch.clone(),
                 expected_head: parse_head(&request.head),
-                before,
+                before_event,
+                edit: Some(request.edit.clone()),
             },
             ReplyScope::Recall(Box::new(request)),
         );
+        let _ = out;
     }
 
-    /// One `LoadOlder` page answering a recall walk: find the event before
-    /// the rewind target in this page or keep walking.
+    /// A recall reply belongs to the exact idle view that requested it.
     pub(crate) fn resolve_recall_reply(
         &mut self,
         request: RecallRequest,
@@ -223,47 +197,22 @@ impl FrontendDriver {
         out: &mut Vec<Effect>,
     ) {
         let current = self.recall_generation == request.generation
+            && self.pending_open.is_none()
             && !self.vm.sending
+            && !self.vm.compacting
             && self.vm.active.as_ref().is_some_and(|active| {
                 active.session_id == request.session.as_str()
                     && active.branch_id == request.branch.as_str()
                     && active.head == request.head
+                    && !active.running
+                    && !active.compacting
             });
         if !current {
             return;
         }
-        match reply {
-            BridgeReply::Older(Ok(page)) => {
-                if let Some(target) = previous_event(&page.entries, page.entries.len()) {
-                    self.finish_recall(request, target.to_owned());
-                } else if let Some(older) =
-                    page.older.filter(|older| older != &page.requested_before)
-                {
-                    self.resolve_recall_page(request, older, out);
-                } else {
-                    self.toast(
-                        crate::i18n::t(
-                            "The first message has no earlier event to recall to.",
-                            "第一条消息之前没有可以回退到的位置。",
-                        ),
-                        ToastKind::Info,
-                        out,
-                    );
-                }
-            }
-            BridgeReply::Older(Err(message)) => self.act(FrontendAction::Failed(message), out),
-            _ => {}
+        if matches!(reply, BridgeReply::Recalled(_)) {
+            self.on_reply(ReplyScope::Global, reply, out);
         }
-    }
-
-    fn finish_recall(&mut self, request: RecallRequest, to_event: String) {
-        self.dispatch(BridgeCommand::RecallMessage {
-            session: request.session,
-            branch: request.branch,
-            expected_head: parse_head(&request.head),
-            to_event,
-            edit: Some(request.edit),
-        });
     }
 
     /// Loads the next older page when the viewport is near the top.
@@ -308,7 +257,7 @@ impl FrontendDriver {
 
 #[cfg(test)]
 mod tests {
-    use super::{can_rewind, previous_event};
+    use super::can_rewind;
     use crate::view_model::{ConversationEntry, EntryKind};
     use mycode_app::ActiveConversation;
 
@@ -323,28 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn rewind_skips_cancelled_live_tool_placeholders() {
-        let entries = [
-            entry(
-                "evt1-00000000000000000000000000000001",
-                EntryKind::AssistantMessage,
-            ),
-            entry("call-live", EntryKind::ToolCall),
-            entry(
-                "evt1-00000000000000000000000000000002",
-                EntryKind::UserMessage,
-            ),
-        ];
-        assert_eq!(
-            previous_event(&entries, 2),
-            Some(entries[0].event_id.as_str())
-        );
-        assert_eq!(previous_event(&entries, 0), None);
-        assert_eq!(previous_event(&entries, 8), None);
-    }
-
-    #[test]
-    fn first_resident_user_message_can_resolve_older_history() {
+    fn first_committed_user_message_is_recallable_with_or_without_older_history() {
         let mut active = ActiveConversation {
             session_id: "session".to_owned(),
             branch_id: "branch".to_owned(),
@@ -362,7 +290,14 @@ mod tests {
         };
         assert!(can_rewind(&active, 0));
         active.older_before = None;
-        assert!(!can_rewind(&active, 0));
+        assert!(can_rewind(&active, 0), "the first message is recallable");
         assert!(!can_rewind(&active, 1));
+        active.entries[0].event_id = "pending-user".to_owned();
+        assert!(!can_rewind(&active, 0));
+        active.entries[0] = entry(
+            "evt1-00000000000000000000000000000001",
+            EntryKind::AssistantMessage,
+        );
+        assert!(!can_rewind(&active, 0));
     }
 }

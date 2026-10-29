@@ -133,7 +133,7 @@ pub(crate) enum ReplyScope {
     /// A row delete: the reply decides whether the session actually went
     /// away before the UI forgets its bindings.
     DeletedSession(String),
-    /// A `LoadOlder` page resolving a rewind target, not a history prepend.
+    /// A recall result guarded by the requesting view, head, and generation.
     Recall(Box<RecallRequest>),
     /// A steer: a refusal hands `text` back to its chat's queue, on screen
     /// or parked.
@@ -149,8 +149,7 @@ pub(crate) enum ReplyScope {
     },
 }
 
-/// The rewind a `LoadOlder` reply is resolving. The page walk chains until
-/// it finds the event before the message being recalled.
+/// The view and text associated with one pending message recall.
 #[derive(Clone, Debug)]
 pub(crate) struct RecallRequest {
     pub(crate) session: SessionId,

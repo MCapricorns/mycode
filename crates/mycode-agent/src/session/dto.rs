@@ -124,6 +124,8 @@ pub enum BranchMutationKind {
     Fork,
     /// Copy the current branch prefix through one event.
     Rewind,
+    /// Copy the prefix strictly before one event, including an empty prefix.
+    RewindBefore,
 }
 
 impl BranchMutationKind {
@@ -133,6 +135,7 @@ impl BranchMutationKind {
         match self {
             Self::Fork => 0,
             Self::Rewind => 1,
+            Self::RewindBefore => 2,
         }
     }
 }
@@ -245,6 +248,17 @@ pub enum SessionRequest {
         branch: BranchId,
         /// The prefix boundary event.
         to_event: SessionEventId,
+        /// The single-use reservation.
+        reservation: BranchReservationView,
+    },
+    /// Consumes one exclusive rewind reservation under source-head CAS.
+    RewindBefore {
+        /// The session to mutate.
+        session: SessionId,
+        /// The branch whose prefix is copied.
+        branch: BranchId,
+        /// The first event excluded from the copied prefix.
+        before_event: SessionEventId,
         /// The single-use reservation.
         reservation: BranchReservationView,
     },

@@ -23,6 +23,9 @@ use crate::protocol::{
 /// window.
 const VISIBLE_EVENTS: u16 = 40;
 
+#[cfg(test)]
+mod recall_tests;
+
 /// Rendered wording for a lost expected-head compare-and-swap.
 pub(crate) const HEAD_MOVED_ON: &str = "the session moved on; reopen it";
 
@@ -343,9 +346,9 @@ fn order_tool_results(history: &mut [Arc<Message>]) {
     }
 }
 
-/// Rewinds the branch so everything from the recalled message onward is
-/// gone, then returns the truncated conversation. The caller pairs it with
-/// the edited text.
+/// Copies the prefix strictly before the recalled user message to a new
+/// branch and returns its conversation. The original branch stays intact.
+/// The caller pairs the result with the original text.
 ///
 /// Workspace files are left unchanged: recall does not restore or delete
 /// them.
@@ -355,25 +358,41 @@ pub(crate) async fn recall_message(
     session: &SessionId,
     branch: &BranchId,
     expected_head: &HeadStamp,
-    to_event: &str,
+    before_event: &str,
 ) -> Result<ActiveConversation, String> {
     // The rewind must land on the branch the UI still sees; a stale head
     // fails closed with the same moved-on error SendMessage's
     // compare-and-swap produces.
     ensure_branch_head(service, session, branch, expected_head).await?;
-    let target = SessionEventId::parse(to_event)
+    let target = SessionEventId::parse(before_event)
         .ok_or_else(|| "the rewind target is not a valid event id".to_owned())?;
+    let loaded = service
+        .load_event(session, branch, &target)
+        .await
+        .map_err(render_error)?;
+    if !project_replayed_entry_with_meter(&loaded.event, &loaded.payload)
+        .0
+        .is_some_and(|entry| entry.kind == EntryKind::UserMessage)
+    {
+        return Err("the recall target is not a user message".to_owned());
+    }
     let reservation = service
         .reserve_branch(
             session,
-            session::BranchMutationKind::Rewind,
+            session::BranchMutationKind::RewindBefore,
             branch,
             &target,
         )
         .await
         .map_err(render_error)?;
+    // The reservation freezes the source head. Check it against the UI
+    // head too: an append between the initial check and reservation must
+    // not silently make a stale recall valid. Commit performs the final CAS.
+    if &reservation.source_head != expected_head {
+        return Err(HEAD_MOVED_ON.to_owned());
+    }
     let branched = service
-        .rewind(session, branch, &target, &reservation)
+        .rewind_before(session, branch, &target, &reservation)
         .await
         .map_err(render_error)?;
     // A checkpoint whose covered messages all survive on the rewound branch
