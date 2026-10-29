@@ -12,6 +12,10 @@ pub mod message;
 pub mod provider;
 pub mod tool;
 
+// Retain the dependency for its Windows CRT link-search build script.
+#[cfg(windows)]
+use vc_ltl as _;
+
 /// Global allocator for every binary that links this leaf crate (the whole
 /// chain does). A second `#[global_allocator]` in the graph is a compile
 /// error, which is the intended guard.
