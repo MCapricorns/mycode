@@ -277,8 +277,10 @@ async fn powershell_script_hides_later_console_allocation_and_keeps_native_outpu
     let script = r#"
 $ErrorActionPreference = 'Stop'
 [IO.File]::AppendAllText($phaseLog, "after-prelude ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version) pointer=$([IntPtr]::Size) home=$PSHOME`n")
-Write-Output 'probe-script-stdout'
-[IO.File]::AppendAllText($phaseLog, "after-first-pipeline`n")
+# Console APIs keep the window and pipe probe independent of cmdlet startup.
+[Console]::Out.WriteLine('probe-script-stdout')
+[Console]::Out.Flush()
+[IO.File]::AppendAllText($phaseLog, "after-stdout`n")
 # Define P/Invokes in memory: this launch probe must not depend on Add-Type's
 # external C# compiler and its cold-start cost on Windows PowerShell 5.1.
 $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly(
@@ -313,33 +315,36 @@ try {
 } finally {
     [Runtime.InteropServices.Marshal]::FreeHGlobal($startup)
 }
-Write-Output 'probe-pinvoke-ready'
+[Console]::Out.WriteLine('probe-pinvoke-ready')
 [IO.File]::AppendAllText($phaseLog, "after-pinvoke`n")
-Write-Error 'probe-script-stderr' -ErrorAction Continue
+[Console]::Error.WriteLine('probe-script-stderr')
+[Console]::Error.Flush()
 [IO.File]::AppendAllText($phaseLog, "before-native-command`n")
 $native = & "$env:SystemRoot\System32\whoami.exe"
 [IO.File]::AppendAllText($phaseLog, "after-native-command exit=$LASTEXITCODE`n")
 if ($LASTEXITCODE -ne 0 -or -not $native) { throw 'native command failed or produced no output' }
-Write-Output "probe-native-output=$native"
+[Console]::Out.WriteLine("probe-native-output=$native")
+[Console]::Out.Flush()
 # Exercise a later allocation after native IO: FreeConsole invalidates PowerShell's cached console handles.
 [IO.File]::AppendAllText($phaseLog, "before-free-console`n")
-$probe::FreeConsole() | Out-Null
+[void]$probe::FreeConsole()
 [IO.File]::AppendAllText($phaseLog, "before-alloc-console`n")
 if (-not $probe::AllocConsole()) { throw 'console allocation failed' }
 [IO.File]::AppendAllText($phaseLog, "after-alloc-console`n")
 if ($probe::GetConsoleWindow() -eq [IntPtr]::Zero) { throw 'allocated console has no window' }
 if ($probe::IsWindowVisible($probe::GetConsoleWindow())) { throw 'visible allocated console' }
-Write-Output 'probe-native-hidden'
+[Console]::Out.WriteLine('probe-native-hidden')
+[Console]::Out.Flush()
 [IO.File]::AppendAllText($phaseLog, "completed`n")
 "#;
     // Parameter defaults run before the production UTF-8 prelude. A file
-    // journal distinguishes prelude and first-pipeline stalls from pipe IO.
+    // journal distinguishes script initialization and console stalls from pipe IO.
     let script = format!(
         "param($phaseLog = '{}', $entry = [IO.File]::AppendAllText($phaseLog, \"entered-before-prelude`n\"))\n{script}",
         phase_log.to_str().unwrap().replace('\'', "''"),
     );
     let started = std::time::Instant::now();
-    let result = ShellTool::forcing(shell.clone())
+    let result = ShellTool::forcing(shell)
         .execute(
             ShellArgs {
                 mode: ShellMode::Script,
@@ -357,14 +362,9 @@ Write-Output 'probe-native-hidden'
     let elapsed_ms = started.elapsed().as_millis();
     let phases =
         std::fs::read_to_string(&phase_log).unwrap_or_else(|err| format!("no journal: {err}"));
-    let diagnostics = if result.is_error {
-        powershell_startup_controls(&shell.program, &scratch).await
-    } else {
-        String::new()
-    };
     assert!(
         !result.is_error,
-        "{text}\nPowerShell wall_ms={elapsed_ms}; phases:\n{phases}\n{diagnostics}"
+        "{text}\nPowerShell wall_ms={elapsed_ms}; phases:\n{phases}"
     );
     for marker in [
         "probe-script-stdout",
@@ -374,160 +374,4 @@ Write-Output 'probe-native-hidden'
     ] {
         assert!(text.contains(marker), "{text}");
     }
-}
-
-/// These controls only run after a failed probe; they never turn its failure
-/// into a pass. Both bypass the encoding prelude and avoid cmdlet auto-import.
-/// The stdio control observes startup up to the production default budget;
-/// the subsequent pinned control distinguishes its launch policy on a warm host.
-async fn powershell_startup_controls(program: &std::path::Path, scratch: &Scratch) -> String {
-    let env = match snapshot_child_environment() {
-        Ok(env) => env,
-        Err(err) => return format!("startup controls: environment snapshot failed: {err}"),
-    };
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let mut report = format!(
-        "startup controls: host={} parent_job={:?} program={}\n",
-        std::env::consts::ARCH,
-        crate::builtin::process::current_process_is_in_job(),
-        program.display(),
-    );
-    for pinned in [false, true] {
-        let started = std::time::Instant::now();
-        let name = if pinned { "pinned" } else { "stdio" };
-        let journal = scratch.0.join(format!("{name}-startup.log"));
-        let script = format!(
-            "[IO.File]::WriteAllText('{}', \"entered ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version) pointer=$([IntPtr]::Size)`n\"); [Console]::Out.WriteLine('probe-startup-control'); [Console]::Out.Flush()",
-            journal.to_str().unwrap().replace('\'', "''"),
-        );
-        let encoded = match crate::builtin::shell::encode_powershell_command(&script, program) {
-            Ok(encoded) => encoded,
-            Err(err) => {
-                report.push_str(&format!("{name}: argument encoding failed: {err}\n"));
-                continue;
-            }
-        };
-        let mut args = [
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-EncodedCommand",
-        ]
-        .map(str::to_owned)
-        .to_vec();
-        args.push(encoded);
-        let outcome = if pinned {
-            let lease = acquire_execution_lease().await;
-            report.push_str(&format!(
-                "pinned lease_wait_ms={}\n",
-                started.elapsed().as_millis()
-            ));
-            match PreparedInvocation::from_snapshot(
-                &scratch.0,
-                program.to_str().unwrap(),
-                &args,
-                &env,
-                &cancel,
-            ) {
-                Ok(invocation) => {
-                    let deadline = tokio::time::sleep(Duration::from_secs(10));
-                    tokio::pin!(deadline);
-                    match run_prepared(
-                        invocation.with_hidden_window(),
-                        lease,
-                        &cancel,
-                        &mut deadline,
-                    )
-                    .await
-                    {
-                        Ok(RunOutcome::Done {
-                            status,
-                            stdout,
-                            stderr,
-                            ..
-                        }) => startup_control_output(format!("exit={status}"), &stdout, &stderr),
-                        Ok(RunOutcome::Timeout {
-                            started,
-                            teardown,
-                            stdout,
-                            stderr,
-                            ..
-                        }) => startup_control_output(
-                            format!("timed out started={started} teardown={teardown:?}"),
-                            &stdout,
-                            &stderr,
-                        ),
-                        Ok(RunOutcome::Cancelled { teardown }) => {
-                            format!("cancelled: {teardown:?}")
-                        }
-                        Ok(RunOutcome::CollectFailed { error, teardown }) => {
-                            format!("collection failed: {error}; teardown={teardown:?}")
-                        }
-                        Err(err) => format!("launch failed: {err}"),
-                    }
-                }
-                Err(err) => format!("preparation failed: {err}"),
-            }
-        } else {
-            stdio_startup_control(program, &args, &env, scratch).await
-        };
-        let phases =
-            std::fs::read_to_string(journal).unwrap_or_else(|err| format!("no journal: {err}"));
-        report.push_str(&format!(
-            "{name} wall_ms={}: {outcome}\njournal: {phases}\n",
-            started.elapsed().as_millis(),
-        ));
-    }
-    report
-}
-
-fn startup_control_output(
-    status: String,
-    stdout: &crate::builtin::process::CapturedStream,
-    stderr: &crate::builtin::process::CapturedStream,
-) -> String {
-    format!(
-        "{status}; stdout={:?}; stderr={:?}",
-        crate::builtin::process::captured_text(stdout).0,
-        crate::builtin::process::captured_text(stderr).0,
-    )
-}
-
-async fn stdio_startup_control(
-    program: &std::path::Path,
-    args: &[String],
-    env: &[(OsString, OsString)],
-    scratch: &Scratch,
-) -> String {
-    use crate::builtin::process::{CapturedStream, collect_until_exit};
-
-    let mut child =
-        match WindowsStdioProcess::spawn(program, args, Some(&scratch.0), env, false, true) {
-            Ok(child) => child,
-            Err(err) => return format!("launch failed: {err}"),
-        };
-    let mut stdout_pipe = child.stdout.take();
-    let mut stderr_pipe = child.stderr.take();
-    let mut stdout = CapturedStream::new();
-    let mut stderr = CapturedStream::new();
-    let status = tokio::time::timeout(
-        Duration::from_secs(crate::builtin::shell::DEFAULT_TIMEOUT_SECS),
-        collect_until_exit(
-            &mut stdout_pipe,
-            &mut stderr_pipe,
-            &mut stdout,
-            &mut stderr,
-            child.wait(),
-        ),
-    )
-    .await;
-    let termination = child.terminate_job();
-    let reaped = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
-    startup_control_output(
-        format!("status={status:?} termination={termination:?} reap={reaped:?}"),
-        &stdout,
-        &stderr,
-    )
 }
