@@ -50,11 +50,6 @@ impl Workspace {
             .and_then(|key| key.strip_prefix(SESSION_DELETE_PREFIX))
     }
 
-    /// Whether a trash button keyed `key` is waiting for its second click.
-    pub(crate) fn delete_armed(&self, key: &str) -> bool {
-        self.armed_delete.as_deref() == Some(key)
-    }
-
     /// Two-click confirmation shared by the irreversible row deletes.
     ///
     /// Returns `true` on the second click within [`DELETE_CONFIRM_WINDOW`];

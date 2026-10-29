@@ -58,28 +58,9 @@ impl Workspace {
         self.driver_do(|d, fx| d.add_workspace_root(project, fx), cx);
     }
 
-    /// Drops one linked folder, including the one the open chat works in.
-    ///
-    /// The folder's chats go with it: every session bound to that directory
-    /// is deleted. Sessions bound to other folders are untouched. A folder
-    /// that still has sessions takes the same second click as a session
-    /// delete; an empty one goes at once.
+    /// Removes the project shortcut; conversations and files stay available.
     pub(crate) fn on_remove_workspace_root(&mut self, project: &str, cx: &mut Context<Self>) {
-        let deletes_sessions =
-            !crate::view_model::sessions_removed_with_root(self.vm(), project).is_empty();
-        if deletes_sessions && !self.confirm_delete(&root_delete_key(project), cx) {
-            return;
-        }
         self.driver_do(|d, fx| d.remove_workspace_root(project, fx), cx);
-    }
-
-    /// The folder whose remove button is waiting for its second click.
-    pub(crate) fn armed_root_delete(&self) -> Option<&str> {
-        self.vm()
-            .workspace_roots
-            .iter()
-            .map(String::as_str)
-            .find(|root| self.delete_armed(&root_delete_key(root)))
     }
 
     /// Removes one directory from the remembered projects list.
@@ -209,15 +190,14 @@ impl Workspace {
         self.driver_do(|d, fx| d.open_recent(project, fx), cx);
     }
 
+    pub(crate) fn on_open_unassigned_conversations(&mut self, cx: &mut Context<Self>) {
+        self.driver_do(|d, fx| d.open_unassigned_conversations(fx), cx);
+    }
+
     /// Opens the folder's newest chat, or starts a fresh one bound to it
     /// when the folder has none. Clicking a folder never rebinds the open
     /// chat — moving a chat's folder goes through the folder picker.
     pub(crate) fn on_open_workspace_folder(&mut self, project: &str, cx: &mut Context<Self>) {
         self.driver_do(|d, fx| d.open_workspace_folder(project, fx), cx);
     }
-}
-
-/// Two-click key for removing a folder together with its sessions.
-fn root_delete_key(project: &str) -> String {
-    format!("root:{project}")
 }

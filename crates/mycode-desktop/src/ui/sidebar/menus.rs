@@ -39,10 +39,7 @@ pub(crate) fn render_project_menu_layer(
         .child(
             skin::popover_panel("project-menu", theme)
                 .absolute()
-                .top(project_menu_top(
-                    crate::view_model::has_open_folder(workspace.vm()),
-                    workspace.session_filter_input().is_some(),
-                ))
+                .top(project_menu_top())
                 .left(px(8.))
                 .w(px(244.))
                 .max_h(px(360.))

@@ -83,10 +83,8 @@ pub(super) fn render_composer(
     }
     let model_label: SharedString = model_button_label(workspace.vm()).into();
     let thinking_label: SharedString = thinking_button_label(workspace.vm()).into();
-    // A long `Provider · Model` keeps its model end: the chip clips from the
-    // left, so "…DeepSeek V4.1 Flash" stays readable, and the picker lists
-    // the full name. No hover tooltip here: it covered the thinking chip
-    // beside it without saying more than the picker already does.
+    // Keep the source at the start of a long model label visible; the picker
+    // provides the full model name. A hover tooltip would cover nearby chips.
     let show_thinking = selected_model_supports_reasoning(workspace.vm());
     // A manual compact is not a turn, but it locks the composer the same
     // way: Enter waits, Ctrl+Enter stops it and sends the draft.
@@ -127,7 +125,6 @@ pub(super) fn render_composer(
                     icon: None,
                     label: thinking_label.clone(),
                     tooltip: None,
-                    clip_start: false,
                     open: workspace.vm().reasoning_menu_open,
                     max_w: px(116.),
                 },
@@ -153,7 +150,6 @@ pub(super) fn render_composer(
                     icon: None,
                     label: model_label,
                     tooltip: None,
-                    clip_start: true,
                     open: workspace.vm().model_menu_open,
                     max_w: px(240.),
                 },
@@ -242,21 +238,15 @@ pub(super) fn render_composer(
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(
-                    div()
-                        .id("command-dock-label")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(t("Command dock", "指令坞"))
-                        .when_some(context_meter(workspace), |this, meter| {
-                            this.child(composer_meter_chip(meter, theme))
-                        }),
-                )
+                .when_some(context_meter(workspace), |column, meter| {
+                    column.child(
+                        div()
+                            .id("composer-context")
+                            .flex()
+                            .justify_end()
+                            .child(composer_meter_chip(meter, theme)),
+                    )
+                })
                 .when_some(steer_panel, |this, steers| this.child(steers))
                 .when_some(compact_card, |this, card| this.child(card))
                 .when_some(ask_card, |this, card| this.child(card))
@@ -330,7 +320,6 @@ pub(super) fn render_composer(
                                         icon: Some(IconName::Folder),
                                         label: project_chip_label,
                                         tooltip: project_tooltip,
-                                        clip_start: false,
                                         open: false,
                                         max_w: px(148.),
                                     },
@@ -458,14 +447,12 @@ fn composer_steer_button(cx: &Context<Workspace>) -> impl IntoElement {
 
 /// One pill chip in the composer row (folder, model, thinking). The label
 /// truncates at `max_w`; when `tooltip` is set, hovering shows the
-/// untruncated text. `clip_start` drops the label's head instead of its
-/// tail, so a `Provider · Model` keeps the model visible.
+/// untruncated text.
 struct ComposerChip {
     id: &'static str,
     icon: Option<IconName>,
     label: SharedString,
     tooltip: Option<SharedString>,
-    clip_start: bool,
     open: bool,
     max_w: gpui_kit::Pixels,
 }
@@ -481,16 +468,7 @@ fn composer_pill_chip(
     } else {
         theme.muted_foreground
     };
-    let label = if chip.clip_start {
-        div()
-            .min_w_0()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_ellipsis_start()
-            .child(chip.label)
-    } else {
-        div().min_w_0().truncate().child(chip.label)
-    };
+    let label = div().min_w_0().truncate().child(chip.label);
     div()
         .id(format!("composer-{}-chip", chip.id))
         .flex()

@@ -28,8 +28,6 @@ pub const MAX_RECENT_PROJECTS: usize = 16;
 /// document merged from legacy workspaces may hold up to
 /// `MAX_WORKSPACES * MAX_WORKSPACE_ROOTS`.
 pub const MAX_WORKSPACE_ROOTS: usize = 8;
-/// Maximum remembered session-to-project bindings.
-pub const MAX_SESSION_PROJECTS: usize = 256;
 /// Maximum legacy workspaces kept by salvage. Their folders migrate into
 /// `workspace_roots`; the count also bounds the merged-list validation cap.
 pub const MAX_WORKSPACES: usize = 16;
@@ -192,7 +190,8 @@ pub struct UiState {
     /// Last selected model id.
     pub selected_model: Option<String>,
     /// Session-to-project bindings (session id, project path), most recent
-    /// first. Advisory: restores each chat's tool working directory.
+    /// first. Retained until forgotten, within the encoded document size
+    /// limit. Restores each chat's tool working directory and project scope.
     pub session_projects: Vec<(String, String)>,
     /// Workspace folders, most recently added first. Sessions bind one of
     /// them as their working directory; the others stay reachable extras.
@@ -327,9 +326,6 @@ impl UiState {
         if let Some(project) = &self.last_project
             && !valid_project_path(project)
         {
-            return Err(invalid());
-        }
-        if self.session_projects.len() > MAX_SESSION_PROJECTS {
             return Err(invalid());
         }
         for (session_id, project) in &self.session_projects {
@@ -542,6 +538,9 @@ fn replace_bytes(state: &UiState) -> Result<Vec<u8>, ConfigError> {
     let mut bytes = serde_json::to_vec_pretty(&document)
         .map_err(|_| ConfigError::new(ConfigErrorKind::Serialization))?;
     bytes.push(b'\n');
+    if bytes.len() > MAX_UI_STATE_BYTES {
+        return Err(ConfigError::new(ConfigErrorKind::Oversized));
+    }
     Ok(bytes)
 }
 
@@ -575,11 +574,12 @@ fn decode_ui_state(bytes: &[u8]) -> Result<UiState, ConfigError> {
 
 /// Extracts the still-valid fields of a document the strict read rejected,
 /// so a reset keeps whatever still decodes. `None` when the bytes are not a
-/// JSON object or the result still fails validation.
+/// JSON object or the result still fails validation. Adopted fields must
+/// also fit the encoded document size limit so the repair can be saved.
 #[must_use]
 pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
     let object = document.as_object()?;
-    let valid = |probe: &UiState| probe.validate().is_ok();
+    let valid = |probe: &UiState| probe.validate().is_ok() && replace_bytes(probe).is_ok();
     let mut state = UiState::default();
     for project in crate::document_repair::salvage_list::<String>(object, "recentProjects") {
         if state.recent_projects.len() >= MAX_RECENT_PROJECTS {
@@ -617,9 +617,6 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
     });
     for entry in crate::document_repair::salvage_list::<(String, String)>(object, "sessionProjects")
     {
-        if state.session_projects.len() >= MAX_SESSION_PROJECTS {
-            break;
-        }
         crate::document_repair::salvage_adopt(&mut state, valid, |probe| {
             probe.session_projects.push(entry);
         });
@@ -720,6 +717,196 @@ pub fn salvage_ui_state(document: &serde_json::Value) -> Option<UiState> {
 #[cfg(test)]
 mod tests {
     use super::{MAX_RECENT_MODELS, ModelPin, decode_ui_state, remember_model, salvage_ui_state};
+
+    struct TempHome(crate::HomeLayout);
+
+    impl TempHome {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "mycode-ui-state-{}-{}",
+                std::process::id(),
+                crate::unix_now().as_nanos()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            Self(crate::HomeLayout::from_root(root).unwrap())
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(self.0.root());
+        }
+    }
+
+    fn project_bindings(count: usize, project: &str) -> Vec<(String, String)> {
+        (0..count)
+            .map(|index| (format!("ses-{index:04}"), project.to_owned()))
+            .collect()
+    }
+
+    fn document(state: &super::UiState) -> serde_json::Value {
+        serde_json::to_value(super::SerializedUiState {
+            format_version: super::UI_STATE_FORMAT_VERSION,
+            kind: super::UI_STATE_KIND,
+            state,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn session_projects_beyond_256_survive_replace_update_and_reload() {
+        let home = TempHome::new();
+        let project = home.0.root().join("project").to_str().unwrap().to_owned();
+        let mut state = super::UiState {
+            session_projects: project_bindings(512, &project),
+            ..super::UiState::default()
+        };
+        super::replace_ui_state(&home.0, &state).unwrap();
+        assert_eq!(
+            super::read_ui_state_with_repair(&home.0).unwrap(),
+            (state.clone(), None)
+        );
+
+        let binding = ("new-session".to_owned(), project);
+        super::update_ui_state(&home.0, |stored| {
+            stored.session_projects.insert(0, binding.clone());
+        })
+        .unwrap();
+        state.session_projects.insert(0, binding);
+        assert_eq!(
+            super::read_ui_state_with_repair(&home.0).unwrap(),
+            (state, None)
+        );
+    }
+
+    #[test]
+    fn salvage_keeps_bindings_beyond_256_and_drops_only_malformed_rows() {
+        let home = TempHome::new();
+        let project = home.0.root().join("project").to_str().unwrap().to_owned();
+        let state = super::UiState {
+            session_projects: project_bindings(512, &project),
+            ..super::UiState::default()
+        };
+        let mut damaged = document(&state);
+        let rows = damaged["sessionProjects"].as_array_mut().unwrap();
+        rows.insert(0, serde_json::json!(["bad-path", "relative/path"]));
+        rows.insert(257, serde_json::json!(["bad\n-id", project]));
+        rows.insert(258, serde_json::json!([42, project]));
+        rows.push(serde_json::Value::Null);
+        let bytes = serde_json::to_vec(&damaged).unwrap();
+        assert!(bytes.len() < super::MAX_UI_STATE_BYTES);
+        assert!(decode_ui_state(&bytes).is_err());
+        crate::write_owned_test_bytes(&home.0, super::UI_STATE_PATH, &bytes).unwrap();
+        let (repaired, repair) = super::read_ui_state_with_repair(&home.0).unwrap();
+        assert_eq!(repaired, state);
+        let repair = repair.expect("malformed rows require repair");
+        assert_eq!(
+            std::fs::read(home.0.root().join(repair.backup)).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            super::read_ui_state_with_repair(&home.0).unwrap(),
+            (state, None)
+        );
+    }
+
+    #[test]
+    fn oversized_binding_payload_cannot_replace_or_update_saved_state() {
+        let home = TempHome::new();
+        let saved = super::UiState::default();
+        super::replace_ui_state(&home.0, &saved).unwrap();
+        let path = home.0.root().join(super::UI_STATE_PATH);
+        let original = std::fs::read(&path).unwrap();
+        let project = home
+            .0
+            .root()
+            .join("p".repeat(600))
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let oversized = super::UiState {
+            session_projects: project_bindings(512, &project),
+            ..super::UiState::default()
+        };
+        oversized.validate().unwrap();
+        assert_eq!(
+            super::replace_bytes(&oversized).unwrap_err().kind(),
+            crate::ConfigErrorKind::Oversized
+        );
+        assert_eq!(
+            super::replace_ui_state(&home.0, &oversized)
+                .unwrap_err()
+                .kind(),
+            crate::ConfigErrorKind::Oversized
+        );
+        assert_eq!(
+            super::update_ui_state(&home.0, |state| {
+                state.session_projects = oversized.session_projects;
+            })
+            .unwrap_err()
+            .kind(),
+            crate::ConfigErrorKind::Oversized
+        );
+        assert_eq!(std::fs::read(path).unwrap(), original);
+        assert_eq!(
+            super::read_ui_state_with_repair(&home.0).unwrap(),
+            (saved, None)
+        );
+    }
+
+    #[test]
+    fn salvage_respects_encoded_byte_limit_when_compact_input_expands() {
+        let home = TempHome::new();
+        let project = home
+            .0
+            .root()
+            .join("p".repeat(400))
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let mut state = super::UiState {
+            session_projects: project_bindings(1, &project),
+            ..super::UiState::default()
+        };
+        let one = serde_json::to_vec_pretty(&document(&state)).unwrap().len() + 1;
+        state.session_projects = project_bindings(2, &project);
+        let per_row = serde_json::to_vec_pretty(&document(&state)).unwrap().len() + 1 - one;
+        let count = 2 + (super::MAX_UI_STATE_BYTES - one) / per_row;
+        assert!(count > 256);
+        state.session_projects = project_bindings(count, &project);
+        let mut damaged = document(&state);
+        damaged["unknown"] = serde_json::json!(true);
+        let bytes = serde_json::to_vec(&damaged).unwrap();
+        assert!(bytes.len() <= super::MAX_UI_STATE_BYTES);
+        assert!(serde_json::to_vec_pretty(&damaged).unwrap().len() > super::MAX_UI_STATE_BYTES);
+        crate::write_owned_test_bytes(&home.0, super::UI_STATE_PATH, &bytes).unwrap();
+
+        let (repaired, repair) = super::read_ui_state_with_repair(&home.0).unwrap();
+        let repair = repair.expect("unknown field requires repair");
+        assert_eq!(
+            std::fs::read(home.0.root().join(repair.backup)).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            repaired.session_projects,
+            state.session_projects[..count - 1]
+        );
+        assert!(
+            std::fs::read(home.0.root().join(super::UI_STATE_PATH))
+                .unwrap()
+                .len()
+                <= super::MAX_UI_STATE_BYTES
+        );
+        assert_eq!(
+            super::read_ui_state_with_repair(&home.0).unwrap(),
+            (repaired, None)
+        );
+    }
 
     #[test]
     fn missing_pin_fields_decode_empty() {

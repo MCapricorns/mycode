@@ -37,7 +37,7 @@ pub(super) fn render_model_menu(
 ) -> gpui_kit::AnyElement {
     composer_menu_layer(
         "model-menu-layer",
-        model_menu_anchor(),
+        MenuAnchor::ChipStart,
         crate::ui::model_picker::render_model_picker(
             workspace,
             window,
@@ -64,48 +64,16 @@ pub(super) const JUMP_LATEST_BUTTON_PX: f32 = 30.;
 /// Padding under the jump-to-latest row, in pixels.
 pub(super) const JUMP_LATEST_ROW_PAD: f32 = 4.;
 
-/// Gap between the jump-to-latest button and a menu above it, in pixels.
-const JUMP_LATEST_GAP: f32 = 8.;
+/// Gap between a composer menu and its trigger button.
+const COMPOSER_MENU_GAP: f32 = 8.;
 
-/// Clearance that already keeps a menu above the composer card.
-const COMPOSER_CARD_CLEARANCE: f32 = 88.;
-
-/// Pixels from the composer bottom edge to the bottom of a chip menu.
-///
-/// The chips sit inside the composer card (input row, gap, and padding above
-/// them). The base clearance puts the menu fully above that card. The jump
-/// button is the next row up, so the menu also clears that button. The menu
-/// paints with the composer, after the jump row; the extra gap is what keeps
-/// their pixels from stacking.
-/// Must keep the card clearance plus the jump row so the menu clears both
-/// instead of sitting on the card's top edge.
-pub(super) const COMPOSER_MENU_CLEARANCE: f32 =
-    COMPOSER_CARD_CLEARANCE + JUMP_LATEST_BUTTON_PX + JUMP_LATEST_ROW_PAD + JUMP_LATEST_GAP;
-
-/// Height cap that keeps an upward-opening menu inside the window.
-///
-/// The layer's bottom edge sits [`COMPOSER_MENU_CLEARANCE`] above the chip,
-/// and the chip itself rests near the composer's bottom padding. In a short
-/// window that leaves less room than the panel cap, so the panel is cut to
-/// what fits (at least three rows) and scrolls inside instead of losing its
-/// top rows to the window edge.
+/// Height cap for an upward-opening menu. Reserve room for the footer
+/// (including a wrapped row) and top margin; the anchor follows the button.
 pub(super) fn menu_height_cap(window: &Window, cap: f32) -> gpui_kit::Pixels {
-    let below_menu = COMPOSER_MENU_CLEARANCE + 72.;
+    let below_menu = COMPOSER_MENU_GAP + 72.;
     let headroom = 32.;
     let available = f32::from(window.viewport_size().height) - below_menu - headroom;
     px(available.clamp(110., cap))
-}
-
-/// The thinking menu shares the chip's right edge so it stays inside the column.
-#[must_use]
-pub(super) fn thinking_menu_anchor() -> MenuAnchor {
-    MenuAnchor::ChipEnd
-}
-
-/// The model menu shares the chip's left edge, above the model button.
-#[must_use]
-pub(super) fn model_menu_anchor() -> MenuAnchor {
-    MenuAnchor::ChipStart
 }
 
 /// Keep the preferred chip edge, but clamp the panel when a wrapped footer
@@ -117,7 +85,11 @@ fn composer_menu_layer(
     anchor: MenuAnchor,
     panel: impl IntoElement,
 ) -> impl IntoElement {
-    let layer = div().id(id).absolute().bottom(px(COMPOSER_MENU_CLEARANCE));
+    let layer = div()
+        .id(id)
+        .absolute()
+        .bottom_full()
+        .mb(px(COMPOSER_MENU_GAP));
     let (layer, corner) = match anchor {
         MenuAnchor::ChipStart => (layer.left_0(), gpui_kit::Anchor::BottomLeft),
         MenuAnchor::ChipEnd => (layer.right_0(), gpui_kit::Anchor::BottomRight),
@@ -147,7 +119,7 @@ pub(super) fn render_thinking_menu(
     let weak = cx.weak_entity();
     composer_menu_layer(
         "thinking-menu-layer",
-        thinking_menu_anchor(),
+        MenuAnchor::ChipEnd,
         menu_panel("thinking-menu", theme)
             .w(px(220.))
             .max_h(menu_height_cap(window, 320.))
@@ -323,10 +295,7 @@ fn mention_label(item: &crate::view_model::MentionItem) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        COMPOSER_MENU_CLEARANCE, JUMP_LATEST_BUTTON_PX, JUMP_LATEST_ROW_PAD, MENTION_MENU_MAX_H,
-        MENTION_VISIBLE_ROWS, MenuAnchor, model_menu_anchor, thinking_menu_anchor,
-    };
+    use super::{MENTION_MENU_MAX_H, MENTION_VISIBLE_ROWS};
 
     #[test]
     fn mention_menu_caps_at_three_rows_and_composer_width() {
@@ -352,21 +321,5 @@ mod tests {
             super::mention_row_id(0, &command),
             super::mention_row_id(1, &skill)
         );
-    }
-
-    #[test]
-    fn thinking_menu_clears_the_jump_button() {
-        const {
-            assert!(
-                COMPOSER_MENU_CLEARANCE >= 88. + JUMP_LATEST_BUTTON_PX + JUMP_LATEST_ROW_PAD + 8.
-            );
-        }
-        assert_eq!(thinking_menu_anchor(), MenuAnchor::ChipEnd);
-    }
-
-    #[test]
-    fn composer_menus_anchor_to_their_chips() {
-        assert_eq!(thinking_menu_anchor(), MenuAnchor::ChipEnd);
-        assert_eq!(model_menu_anchor(), MenuAnchor::ChipStart);
     }
 }

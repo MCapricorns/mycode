@@ -1,4 +1,4 @@
-//! First working page: the MYCode stamp, local scope, and recent folders.
+//! Empty conversation: a prompt to begin and recent projects when none is selected.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::theme::Theme;
@@ -6,7 +6,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, Focusable as _, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, div, img, px,
+    StatefulInteractiveElement, Styled, div, px,
 };
 
 use crate::i18n::t;
@@ -14,12 +14,10 @@ use crate::ui::{element_id, hover_delete_button, project_label, skin};
 use crate::view_model::has_open_folder;
 use crate::workspace::Workspace;
 
-const NEW_TASK_LABEL: (&str, &str) = ("New task", "新建任务");
-const WORDMARK: &str = "MYCode";
+const NEW_TASK_LABEL: (&str, &str) = ("New conversation", "新对话");
 const MAX_WELCOME_RECENTS: usize = 6;
-const TAGLINE_NO_FOLDER: (&str, &str) = ("Open a folder to get started", "打开一个目录即可开始");
-const TAGLINE_HAS_FOLDER: (&str, &str) =
-    ("Start a task in this workspace", "在此工作区开始一个任务");
+const TAGLINE_NO_FOLDER: (&str, &str) = ("Choose a project", "选择一个项目");
+const TAGLINE_HAS_FOLDER: (&str, &str) = ("Start a conversation", "开始一段对话");
 
 #[must_use]
 pub(crate) fn new_task_label() -> &'static str {
@@ -48,7 +46,6 @@ pub(super) fn render_welcome(
         .collect();
     let has_folder = has_open_folder(workspace.vm());
     let (tagline_en, tagline_zh) = empty_desk_tagline(has_folder);
-    let (slogan_en, slogan_zh) = crate::ui::workbench::SLOGAN;
     div()
         .id("welcome")
         .w_full()
@@ -59,28 +56,10 @@ pub(super) fn render_welcome(
         .pb_4()
         .child(
             div()
-                .id("welcome-brand")
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_4()
-                .child(img("brand/icon.ico").size(px(56.)).flex_shrink_0())
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(div().id("welcome-title").text_size(px(24.)).font_weight(skin::WEIGHT_STRONG).child(WORDMARK))
-                        .child(div().id("welcome-slogan").text_sm().text_color(theme.muted_foreground).child(t(slogan_en, slogan_zh))),
-                ),
-        )
-        .child(
-            div()
                 .id("welcome-start")
-                .mt_4()
                 .flex()
-                .flex_row()
-                .items_center()
+                .flex_col()
+                .items_start()
                 .gap_4()
                 .child(
                     div()
@@ -89,17 +68,18 @@ pub(super) fn render_welcome(
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(div().id("welcome-tagline").text_size(px(18.)).child(t(tagline_en, tagline_zh)))
-                        .child(div().text_sm().text_color(theme.muted_foreground).child(t(
-                            "Work in your files. Keep the decisions, tool steps and changes together.",
-                            "在本地文件中工作，把决策、工具操作和代码改动留在同一页。",
-                        ))),
+                        .child(div().id("welcome-tagline").text_size(px(22.)).font_weight(skin::WEIGHT_STRONG).child(t(tagline_en, tagline_zh)))
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(if has_folder {
+                            t("Ask a question, describe a change, or drop files and images here.", "提出问题、描述修改需求，或拖入文件和图片。")
+                        } else {
+                            t("Open a local folder, then start your conversation.", "打开本地目录，然后开始对话。")
+                        })),
                 )
                 .child(
                     welcome_action(
                         if has_folder { "welcome-begin-task" } else { "welcome-open-project" },
                         if has_folder { IconName::ArrowRight } else { IconName::FolderOpen },
-                        if has_folder { t("Begin task", "开始任务") } else { t("Open folder", "打开目录") },
+                        if has_folder { t("Write a message", "写消息") } else { t("Open project", "打开项目") },
                         theme,
                     )
                         .flex_shrink_0()
@@ -177,18 +157,11 @@ fn welcome_action(
 
 #[cfg(test)]
 mod tests {
-    use super::{NEW_TASK_LABEL, TAGLINE_HAS_FOLDER, TAGLINE_NO_FOLDER, empty_desk_tagline};
+    use super::{TAGLINE_HAS_FOLDER, TAGLINE_NO_FOLDER, empty_desk_tagline};
 
     #[test]
-    fn empty_desk_copy_is_folder_or_task_and_never_chat() {
-        for (english, chinese) in [TAGLINE_NO_FOLDER, TAGLINE_HAS_FOLDER, NEW_TASK_LABEL] {
-            for text in [english, chinese] {
-                assert!(!text.to_ascii_lowercase().contains("chat"));
-                assert!(!text.contains("对话"));
-            }
-        }
+    fn empty_conversation_starts_with_project_selection_when_unbound() {
         assert_eq!(empty_desk_tagline(false), TAGLINE_NO_FOLDER);
         assert_eq!(empty_desk_tagline(true), TAGLINE_HAS_FOLDER);
-        assert_eq!(NEW_TASK_LABEL.0, "New task");
     }
 }

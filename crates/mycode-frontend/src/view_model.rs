@@ -40,7 +40,7 @@ pub use self::nav::{
 };
 pub use self::projects::{
     has_open_folder, newest_session_in_project, open_session_is_empty, project_label,
-    project_of_session, same_project_path, session_rows, sessions_removed_with_root,
+    project_of_session, project_session_rows, same_project_path, session_rows,
     task_surface_visible,
 };
 pub use self::reduce::{

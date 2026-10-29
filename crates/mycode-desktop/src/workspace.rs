@@ -267,7 +267,7 @@ impl Workspace {
         workspace.update(cx, |workspace, cx| {
             let filter = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder(crate::i18n::t("Search sessions", "搜索会话"))
+                    .placeholder(crate::i18n::t("Search conversations", "搜索对话"))
             });
             cx.subscribe_in(&filter, window, |workspace, entity, event, _, cx| {
                 if matches!(event, InputEvent::Change) {

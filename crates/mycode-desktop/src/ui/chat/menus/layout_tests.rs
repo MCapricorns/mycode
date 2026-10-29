@@ -10,6 +10,8 @@ use super::{MenuAnchor, composer_menu_layer, menu_height_cap};
 struct MenuProbe {
     x: f32,
     width: f32,
+    chip_height: f32,
+    chip_bottom: f32,
     anchor: MenuAnchor,
 }
 
@@ -20,9 +22,9 @@ impl Render for MenuProbe {
                 .id("probe-chip")
                 .absolute()
                 .left(px(self.x))
-                .bottom(px(12.))
+                .bottom(px(self.chip_bottom))
                 .w(px(96.))
-                .h(px(24.))
+                .h(px(self.chip_height))
                 .overflow_hidden()
                 .test_support()
                 .child(composer_menu_layer(
@@ -41,13 +43,15 @@ impl Render for MenuProbe {
 #[gpui_kit::test]
 fn composer_menus_clamp_inside_short_narrow_windows(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
-    for (x, width, anchor) in [
-        (300., 340., MenuAnchor::ChipStart),
-        (8., 220., MenuAnchor::ChipEnd),
+    for (x, width, anchor, chip_height, chip_bottom) in [
+        (300., 340., MenuAnchor::ChipStart, 24., 12.),
+        (8., 220., MenuAnchor::ChipEnd, 36., 44.),
     ] {
         let handle = cx.open_window(size(px(420.), px(360.)), move |_, _| MenuProbe {
             x,
             width,
+            chip_height,
+            chip_bottom,
             anchor,
         });
         cx.update_window(handle.into(), |_, window, cx| {
@@ -57,7 +61,8 @@ fn composer_menus_clamp_inside_short_narrow_windows(cx: &mut TestAppContext) {
             let chip = window.find("probe-chip").bounds();
             assert!(menu.visible(), "deferred menus must escape the chip's clip: {bounds:?}");
             assert!(bounds.left() >= px(0.) && bounds.right() <= px(420.), "the menu must stay inside the window: {bounds:?}");
-            assert!(bounds.top() >= px(0.) && bounds.bottom() < chip.top(), "a short window must keep the menu above the composer: menu {bounds:?} chip {chip:?}");
+            assert!(bounds.top() >= px(0.) && bounds.bottom() < chip.top(), "a short window must keep the menu above its button: menu {bounds:?} chip {chip:?}");
+            assert!((chip.top() - bounds.bottom() - px(8.)).abs() <= px(1.), "menus must sit 8px above the button at either footer height: menu {bounds:?} chip {chip:?}");
             assert!((bounds.size.width - px(width)).abs() <= px(1.), "the menu must retain a readable width: {bounds:?}");
         }).unwrap();
     }

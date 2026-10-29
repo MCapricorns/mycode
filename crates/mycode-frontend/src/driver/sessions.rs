@@ -130,7 +130,8 @@ impl FrontendDriver {
             session_id: session_id.to_owned(),
             path: Some(project.clone()),
         });
-        self.act(FrontendAction::WorkspaceRootAdded(project.clone()), out);
+        // Restoring a conversation is not an explicit request to add a
+        // project shortcut; refreshes must respect a removed navigation item.
         let already = self
             .vm
             .project_dir

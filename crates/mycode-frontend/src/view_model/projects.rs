@@ -45,6 +45,22 @@ pub fn session_rows(state: &WorkspaceState) -> Vec<(&SessionSummary, Option<&str
         .collect()
 }
 
+/// Conversations visible in the current project, in stored order. Unbound
+/// conversations are visible only when no project is selected.
+#[must_use]
+pub fn project_session_rows(state: &WorkspaceState) -> Vec<(&SessionSummary, Option<&str>)> {
+    session_rows(state)
+        .into_iter()
+        .filter(
+            |(_, project)| match (state.project_dir.as_deref(), *project) {
+                (Some(current), Some(bound)) => same_project_path(current, bound),
+                (None, None) => true,
+                _ => false,
+            },
+        )
+        .collect()
+}
+
 /// Task cards belong to the open session's project. Leaving that project
 /// hides them instead of leaving another project's work on screen.
 #[must_use]
@@ -99,19 +115,6 @@ pub fn open_session_is_empty(state: &WorkspaceState) -> bool {
     })
 }
 
-/// The sessions that leave with a removed folder: every chat bound to that
-/// directory. A folder only ever takes its own chats — sessions bound to a
-/// different folder are untouched.
-#[must_use]
-pub fn sessions_removed_with_root(state: &WorkspaceState, project: &str) -> Vec<String> {
-    state
-        .session_projects
-        .iter()
-        .filter(|(_, bound)| same_project_path(bound, project))
-        .map(|(session, _)| session.clone())
-        .collect()
-}
-
 /// Newest session already bound to `project`. `sessions` is newest-first.
 #[must_use]
 pub fn newest_session_in_project<'a>(
@@ -129,21 +132,6 @@ pub fn newest_session_in_project<'a>(
 mod tests {
     use super::{has_open_folder, open_session_is_empty};
     use crate::view_model::WorkspaceState;
-
-    #[test]
-    fn removing_a_root_drops_only_its_own_sessions() {
-        let pair = |left: &str, right: &str| (left.to_owned(), right.to_owned());
-        let state = WorkspaceState {
-            session_projects: vec![
-                pair("here", "/app"),
-                pair("there", "/other"),
-                pair("also-here", "/app"),
-            ],
-            ..WorkspaceState::default()
-        };
-        let removed = super::sessions_removed_with_root(&state, "/app");
-        assert_eq!(removed, ["here", "also-here"]);
-    }
 
     #[test]
     fn session_rows_pair_each_summary_with_its_project() {
@@ -174,6 +162,48 @@ mod tests {
                 .and_then(|(_, project)| *project),
             Some("/other"),
             "the first binding wins, matching bind_session_project"
+        );
+    }
+
+    #[test]
+    fn conversation_scope_follows_the_selected_project() {
+        let session = |id: &str| crate::view_model::SessionSummary {
+            session_id: id.to_owned(),
+            root_branch_id: "br".to_owned(),
+            title: "Same search result".to_owned(),
+            updated_at_ms: None,
+            event_count: 1,
+            active: false,
+            corrupt: false,
+        };
+        let mut state = WorkspaceState {
+            sessions: ["app", "nested", "other", "unbound"]
+                .into_iter()
+                .map(session)
+                .collect(),
+            session_projects: vec![
+                ("app".to_owned(), "/app/".to_owned()),
+                ("nested".to_owned(), "/app/nested".to_owned()),
+                ("other".to_owned(), "/other".to_owned()),
+            ],
+            ..WorkspaceState::default()
+        };
+        for (project, expected) in [
+            (Some("/app"), "app"),
+            (Some("/other"), "other"),
+            (None, "unbound"),
+        ] {
+            state.project_dir = project.map(str::to_owned);
+            let rows = super::project_session_rows(&state);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].0.session_id, expected);
+        }
+        state.project_dir = Some("/empty".to_owned());
+        assert!(super::project_session_rows(&state).is_empty());
+        assert_eq!(
+            state.sessions.len(),
+            4,
+            "switching projects never deletes conversations"
         );
     }
 

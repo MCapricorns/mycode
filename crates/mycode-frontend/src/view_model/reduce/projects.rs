@@ -11,9 +11,6 @@ pub(super) fn bind_session_project(
         .session_projects
         .retain(|(existing, _)| existing != &session_id);
     state.session_projects.insert(0, (session_id, project));
-    state
-        .session_projects
-        .truncate(mycode_app::MAX_SESSION_PROJECTS);
 }
 
 /// The `WorkspaceRootAdded` transition: a folder joined the list.
@@ -90,7 +87,70 @@ pub(super) fn session_bindings_forgotten(state: &mut WorkspaceState, session_id:
 
 #[cfg(test)]
 mod tests {
-    use crate::view_model::WorkspaceState;
+    use crate::view_model::{
+        FrontendAction, SessionSummary, WorkspaceState, project_session_rows, reduce,
+    };
+
+    #[test]
+    fn binding_another_session_preserves_older_project_conversations_beyond_256() {
+        let bindings: Vec<_> = (0..512)
+            .map(|index| (format!("ses-{index}"), "/app".to_owned()))
+            .collect();
+        let mut state = WorkspaceState {
+            project_dir: Some("/app".to_owned()),
+            sessions: bindings
+                .iter()
+                .map(|(session_id, _)| SessionSummary {
+                    session_id: session_id.clone(),
+                    root_branch_id: "branch".to_owned(),
+                    title: "Existing conversation".to_owned(),
+                    updated_at_ms: None,
+                    event_count: 1,
+                    active: false,
+                    corrupt: false,
+                })
+                .collect(),
+            session_projects: bindings.clone(),
+            ..WorkspaceState::default()
+        };
+        reduce(
+            &mut state,
+            FrontendAction::SessionProjectBound {
+                session_id: "new-session".to_owned(),
+                project: "/other".to_owned(),
+            },
+        );
+        assert_eq!(state.session_projects.len(), 513);
+        assert_eq!(state.session_projects[1..], bindings);
+        let rows = project_session_rows(&state);
+        assert_eq!(rows.len(), 512);
+        assert_eq!(rows.last().unwrap().0.session_id, "ses-511");
+        assert!(rows.iter().all(|(_, project)| *project == Some("/app")));
+
+        // Rebinding to the same project refreshes order without dropping peers.
+        reduce(
+            &mut state,
+            FrontendAction::SessionProjectBound {
+                session_id: "ses-511".to_owned(),
+                project: "/app".to_owned(),
+            },
+        );
+        assert_eq!(state.session_projects.len(), 513);
+        assert_eq!(state.session_projects[0], bindings[511]);
+        assert_eq!(project_session_rows(&state).len(), 512);
+
+        // The retained binding still prevents moving an existing conversation.
+        reduce(
+            &mut state,
+            FrontendAction::SessionProjectBound {
+                session_id: "ses-510".to_owned(),
+                project: "/other".to_owned(),
+            },
+        );
+        assert_eq!(project_session_rows(&state).len(), 512);
+        state.project_dir = Some("/other".to_owned());
+        assert!(project_session_rows(&state).is_empty());
+    }
 
     #[test]
     fn adding_a_folder_keeps_a_merged_legacy_list() {

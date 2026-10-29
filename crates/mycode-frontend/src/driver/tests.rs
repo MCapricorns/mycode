@@ -159,6 +159,144 @@ fn scratch_driver(label: &str) -> (super::FrontendDriver, std::path::PathBuf) {
     (super::FrontendDriver::start(home, || {}), root)
 }
 
+/// Removing project navigation must not dispose a running conversation or
+/// its draft. Conversation deletion has its own action and confirmation.
+#[test]
+fn removing_a_project_keeps_its_conversation_and_working_directory() {
+    let (mut driver, root) = scratch_driver("unlink-project");
+    let project = root.to_string_lossy().into_owned();
+    let session = mycode_app::SessionId::generate()
+        .unwrap()
+        .as_str()
+        .to_owned();
+    let mut active = conversation(&session, "branch");
+    active.running = true;
+    driver.vm.active = Some(active.clone());
+    driver.vm.sending = true;
+    driver.vm.project_dir = Some(project.clone());
+    driver.vm.workspace_roots = vec![project.clone()];
+    driver.vm.session_projects = vec![(session.clone(), project.clone())];
+    driver.vm.composer_draft = "Keep this follow-up".to_owned();
+    driver.vm.sessions = vec![mycode_app::SessionSummary {
+        session_id: session.clone(),
+        root_branch_id: "branch".to_owned(),
+        title: "Image capability investigation".to_owned(),
+        updated_at_ms: None,
+        event_count: 2,
+        active: true,
+        corrupt: false,
+    }];
+    let mut effects = Vec::new();
+    driver.remove_workspace_root(&project, &mut effects);
+    assert!(driver.vm.workspace_roots.is_empty());
+    assert_eq!(driver.vm.active.as_ref(), Some(&active));
+    assert_eq!(driver.vm.project_dir.as_deref(), Some(project.as_str()));
+    assert_eq!(
+        driver.vm.session_projects,
+        [(session.clone(), project.clone())]
+    );
+    assert_eq!(driver.vm.sessions[0].session_id, session);
+    assert_eq!(driver.vm.composer_draft, "Keep this follow-up");
+    assert!(driver.vm.sending);
+    assert!(effects.is_empty(), "unlinking must not reset the composer");
+    // The turn completion reloads its snapshot. That passive reply must not
+    // recreate the project shortcut the user just removed.
+    active.running = false;
+    driver.pending_open = Some(session.clone());
+    driver.on_reply(
+        ReplyScope::Open(session),
+        mycode_app::BridgeReply::Conversation(Ok(active)),
+        &mut effects,
+    );
+    assert!(driver.vm.workspace_roots.is_empty());
+    assert_eq!(driver.vm.project_dir.as_deref(), Some(project.as_str()));
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn unassigned_navigation_recovers_legacy_history_without_rebinding_sessions() {
+    use crate::view_model::{PaletteCommand, palette_catalog, project_session_rows};
+    use mycode_app::{BridgeReply, SessionId, SessionSummary, UiState};
+
+    let (mut driver, root) = scratch_driver("unassigned-history");
+    let project = root.to_string_lossy().into_owned();
+    let bound = SessionId::generate().unwrap().to_string();
+    let unbound = SessionId::generate().unwrap().to_string();
+    let bindings = vec![(bound.clone(), project.clone())];
+    let mut effects = Vec::new();
+    driver.on_reply(
+        ReplyScope::Global,
+        BridgeReply::UiState(Ok((
+            UiState {
+                last_project: Some(project.clone()),
+                workspace_roots: vec![project.clone()],
+                session_projects: bindings.clone(),
+                ..UiState::default()
+            },
+            Vec::new(),
+        ))),
+        &mut effects,
+    );
+    driver.vm.sessions = [&bound, &unbound]
+        .into_iter()
+        .map(|session_id| SessionSummary {
+            session_id: session_id.clone(),
+            root_branch_id: "branch".to_owned(),
+            title: "Legacy conversation".to_owned(),
+            updated_at_ms: None,
+            event_count: 1,
+            active: session_id == &bound,
+            corrupt: false,
+        })
+        .collect();
+    driver.vm.active = Some(conversation(&bound, "branch"));
+    driver.pending_open = Some(bound.clone());
+    assert_eq!(project_session_rows(&driver.vm)[0].0.session_id, bound);
+
+    driver.open_unassigned_conversations(&mut effects);
+    assert!(
+        driver.vm.active.is_none(),
+        "the previous chat must be parked"
+    );
+    assert!(driver.pending_open.is_none(), "stale opens must be ignored");
+    assert!(driver.vm.project_dir.is_none());
+    let rows = project_session_rows(&driver.vm);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.session_id, unbound);
+    let searchable: Vec<_> = palette_catalog(&driver.vm)
+        .groups
+        .into_iter()
+        .flat_map(|group| group.items)
+        .filter_map(|item| match item.command {
+            PaletteCommand::OpenSession(id) => Some((id, item.label)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        searchable,
+        [(unbound.clone(), "Legacy conversation".to_owned())]
+    );
+
+    driver.open_session(&unbound, &mut effects);
+    assert_eq!(driver.pending_open.as_deref(), Some(unbound.as_str()));
+    driver.on_reply(
+        ReplyScope::Open(unbound.clone()),
+        BridgeReply::Conversation(Ok(conversation(&unbound, "branch"))),
+        &mut effects,
+    );
+    assert_eq!(driver.open_session_id().as_deref(), Some(unbound.as_str()));
+    assert!(driver.vm.project_dir.is_none());
+    assert_eq!(driver.vm.session_projects, bindings);
+    assert_eq!(driver.vm.workspace_roots, [project]);
+    driver.vm.composer_draft = "Keep this draft".to_owned();
+    driver.open_unassigned_conversations(&mut effects);
+    assert_eq!(driver.open_session_id().as_deref(), Some(unbound.as_str()));
+    assert_eq!(driver.vm.composer_draft, "Keep this draft");
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// A reopen during `/compact` restores the compaction, not a running turn.
 /// `CompactFinished` is the only event that ends it; a reopen that set
 /// `sending` left the composer stuck on Stop after the compaction ended.
