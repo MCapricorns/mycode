@@ -121,8 +121,8 @@ fn command_element(
 ) -> Command {
     let mut command = Command::new(state)
         .placeholder(t(
-            "Search sessions, models, commands, settings",
-            "搜索会话、模型、命令、设置",
+            "Search conversations, models, commands, settings",
+            "搜索对话、模型、命令、设置",
         ))
         .bordered(false)
         .max_h(px(380.))
@@ -194,7 +194,7 @@ fn command_item(item: &PaletteItem) -> CommandItem {
 
 fn group_heading(id: PaletteGroupId) -> &'static str {
     match id {
-        PaletteGroupId::Sessions => t("Sessions", "会话"),
+        PaletteGroupId::Sessions => t("Conversations", "对话"),
         PaletteGroupId::Models => t("Models", "模型"),
         PaletteGroupId::Commands => t("Commands", "命令"),
         PaletteGroupId::Settings => t("Settings", "设置"),

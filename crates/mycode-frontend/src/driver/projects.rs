@@ -161,19 +161,18 @@ impl FrontendDriver {
 
     /// Prefills an explicit request to apply one skill.
     fn insert_skill_draft(&mut self, slug: &str, out: &mut Vec<Effect>) {
-        let (title, path) = if let Some(cached) =
-            self.vm.skills.iter().find(|skill| skill.slug == slug)
-        {
-            (cached.title.clone(), cached.path.clone())
-        } else {
-            let Some(skill) = mycode_app::discover_skills(Some(self.home.root()))
-                .into_iter()
-                .find(|skill| skill.slug == slug)
-            else {
-                return;
+        let (title, path) =
+            if let Some(cached) = self.vm.skills.iter().find(|skill| skill.slug == slug) {
+                (cached.title.clone(), cached.path.clone())
+            } else {
+                let Some(skill) = mycode_app::discover_skills(Some(self.home.root()))
+                    .into_iter()
+                    .find(|skill| skill.slug == slug)
+                else {
+                    return;
+                };
+                (skill.title, skill.path.display().to_string())
             };
-            (skill.title, skill.path.display().to_string())
-        };
         // Native tools run directly: ask for a plain read of the skill file.
         let text = if crate::i18n::is_chinese() {
             format!("/{slug}\n\n遵循「{title}」技能。用 read 工具读取 {path} 并应用，再继续。\n")
@@ -223,29 +222,13 @@ impl FrontendDriver {
         self.persist_ui_state();
     }
 
-    /// Drops one linked folder, including the one the open chat works in.
-    ///
-    /// The folder's chats go with it: every session bound to that directory
-    /// is deleted. Sessions bound to other folders are untouched.
+    /// Removes a project shortcut without deleting or rebinding conversations.
+    /// The active conversation keeps its working directory and running turn.
     pub fn remove_workspace_root(&mut self, project: &str, out: &mut Vec<Effect>) {
-        let chat_uses_it = self
-            .vm
-            .project_dir
-            .as_deref()
-            .is_some_and(|current| crate::view_model::same_project_path(current, project));
-        let removed_sessions = crate::view_model::sessions_removed_with_root(&self.vm, project);
         self.act(
             FrontendAction::WorkspaceRootRemoved(project.to_owned()),
             out,
         );
-        if chat_uses_it {
-            self.park_conversation(out);
-            self.act(FrontendAction::ActiveProjectChanged(None), out);
-            self.refresh_skills(out);
-        }
-        for session_id in removed_sessions {
-            self.delete_session(&session_id);
-        }
         self.persist_ui_state();
     }
 
@@ -266,7 +249,20 @@ impl FrontendDriver {
     /// when the folder has none. Clicking a folder never rebinds the open
     /// chat — moving a chat's folder goes through the folder picker.
     pub fn open_workspace_folder(&mut self, project: &str, out: &mut Vec<Effect>) {
-        self.focus_project_chat(project, true, out);
+        self.focus_project_chat(project, out);
+    }
+
+    /// Shows conversations whose project binding is missing, including legacy history.
+    pub fn open_unassigned_conversations(&mut self, out: &mut Vec<Effect>) {
+        if self.vm.project_dir.is_none() {
+            self.show_main_view(MainView::Chat, out);
+            return;
+        }
+        self.park_conversation(out);
+        self.act(FrontendAction::ActiveProjectChanged(None), out);
+        self.show_main_view(MainView::Chat, out);
+        self.refresh_skills(out);
+        self.persist_ui_state();
     }
 
     /// Makes one workspace folder the open chat's working directory.
@@ -323,19 +319,20 @@ impl FrontendDriver {
             self.attach_project(&session_id, project, out);
             return;
         }
-        self.focus_project_chat(project, true, out);
+        self.focus_project_chat(project, out);
     }
 
-    /// Shows `project` and either opens its newest chat or, when `create`
-    /// is set and it has none, starts a fresh chat bound only to it.
-    pub(crate) fn focus_project_chat(
-        &mut self,
-        project: &str,
-        create: bool,
-        out: &mut Vec<Effect>,
-    ) {
+    /// Opens the project's newest chat, or creates one bound to it when none exists.
+    pub(crate) fn focus_project_chat(&mut self, project: &str, out: &mut Vec<Effect>) {
         self.act(FrontendAction::ProjectOpened(project.to_owned()), out);
-        self.act(FrontendAction::WorkspaceRootAdded(project.to_owned()), out);
+        if !self
+            .vm
+            .workspace_roots
+            .iter()
+            .any(|root| crate::view_model::same_project_path(root, project))
+        {
+            self.act(FrontendAction::WorkspaceRootAdded(project.to_owned()), out);
+        }
         if let Some(session_id) = crate::view_model::newest_session_in_project(
             &self.vm.sessions,
             &self.vm.session_projects,
@@ -346,14 +343,12 @@ impl FrontendDriver {
                 self.park_conversation(out);
             }
             self.request_open_session(&session_id);
-        } else if create {
+        } else {
             self.park_conversation(out);
             self.pending_project = Some(project.to_owned());
             self.dispatch(BridgeCommand::CreateSession {
                 project: Some(project.to_owned()),
             });
-        } else if !self.active_is_project(project) {
-            self.park_conversation(out);
         }
         self.refresh_skills(out);
         self.persist_ui_state();

@@ -1,5 +1,6 @@
-//! The session notebook: a searchable ledger with a stable short session ID.
-//! Project scope lives on the workbench shelf above this column.
+//! Separate vertical project and conversation navigation.
+//! At 1440 px: 248 px sidebar + 1184 px conversation + 8 px inset.
+//! At the 960 px minimum: 216 px sidebar + 420 px conversation + 316 px inspector + 8 px inset.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::{Input, InputState};
@@ -17,29 +18,29 @@ use crate::view_model::{MainView, SessionSummary};
 use crate::workspace::Workspace;
 
 mod menus;
+mod projects;
 mod time;
 pub(super) use self::menus::render_project_menu_layer;
 use self::time::{DateGroup, classify_session_group, format_session_relative_time};
 
-/// The notebook gives narrow native windows more room for the work.
-pub(super) const WIDTH_PX: f32 = 232.;
-const NEW_TASK_H: f32 = 32.;
+/// Navigation keeps enough room for titles without squeezing the conversation.
+pub(super) const WIDTH_PX: f32 = 248.;
+const NEW_TASK_H: f32 = 36.;
 const SEARCH_H: f32 = 32.;
 const ACTION_PAD_Y: f32 = 12.;
-const ACTION_GAP: f32 = 8.;
 const SECTION_HEAD_H: f32 = 36.;
 
 pub(super) fn width(window: &Window) -> f32 {
     if f32::from(window.viewport_size().width) < 1100. {
-        196.
+        216.
     } else {
         WIDTH_PX
     }
 }
 
-/// The add-folder control lives in the project shelf, above the ledger.
-fn project_menu_top(_has_folder: bool, _has_search: bool) -> gpui_kit::Pixels {
-    px(super::title_bar::BAR_HEIGHT + super::workbench::SHELF_HEIGHT - 4.)
+/// The add-project menu starts below the fixed project heading.
+fn project_menu_top() -> gpui_kit::Pixels {
+    px(super::title_bar::BAR_HEIGHT + NEW_TASK_H + ACTION_PAD_Y * 2. + SECTION_HEAD_H)
 }
 
 pub(super) fn render_sidebar(
@@ -49,10 +50,9 @@ pub(super) fn render_sidebar(
 ) -> impl IntoElement {
     let cwd = workspace.vm().project_dir.clone();
     let view = workspace.vm().view;
-    // Every session lists here; the project binding only decorates the row.
-    // Rows are filtered by reference; only the shown ones are cloned.
+    // Project scope applies before text search, including empty search results.
     let filter = workspace.vm().session_filter.clone();
-    let rows = crate::view_model::session_rows(workspace.vm());
+    let rows = crate::view_model::project_session_rows(workspace.vm());
     let session_count = rows.len();
     let filtering = !filter.trim().is_empty();
     let visible_sessions: Vec<(SessionSummary, Option<String>)> = rows
@@ -70,7 +70,6 @@ pub(super) fn render_sidebar(
     let filter_input = workspace.session_filter_input();
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
-    let has_folder = crate::view_model::has_open_folder(workspace.vm());
     let armed_delete = workspace.armed_session_delete().map(str::to_owned);
 
     div()
@@ -80,13 +79,16 @@ pub(super) fn render_sidebar(
         .flex()
         .flex_col()
         .flex_shrink_0()
+        .min_h_0()
+        .overflow_hidden()
         .bg(skin::glass_sidebar(theme))
-        .child(action_strip(has_folder, filter_input, cx))
+        .child(action_strip(cx))
+        .child(projects::render_projects(workspace, window, cx))
         .child(sessions_section(
             cx,
             &visible_sessions,
             cwd.as_deref(),
-            visible_sessions.len(),
+            filter_input,
             filter_miss,
             desk.faint,
             armed_delete.as_deref(),
@@ -94,45 +96,27 @@ pub(super) fn render_sidebar(
         .child(render_sidebar_footer(view, cx))
 }
 
-/// New task and session search. A strip, not rows in the session list.
-fn action_strip(
-    has_folder: bool,
-    filter_input: Option<gpui_kit::Entity<InputState>>,
-    cx: &mut Context<Workspace>,
-) -> impl IntoElement + use<> {
+/// A new conversation is always reachable, including before the first project.
+fn action_strip(cx: &Context<Workspace>) -> impl IntoElement + use<> {
     let theme = cx.theme();
     div()
         .id("sidebar-actions")
         .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .gap(px(ACTION_GAP))
-        .px_2()
+        .px_3()
         .py(px(ACTION_PAD_Y))
-        .border_b_1()
-        .border_color(skin::glass_border(theme))
-        .when(has_folder, |strip| {
-            strip.child(
-                skin::glass_button("new-task", false, theme)
-                    .w_full()
-                    .h(px(NEW_TASK_H))
-                    .justify_start()
-                    .on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_new_session(cx);
-                    }))
-                    .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
-                    .child(super::chat::new_task_label()),
-            )
-        })
-        .when_some(filter_input, |strip, input| {
-            strip.child(
-                div()
-                    .id("sidebar-search")
-                    .h(px(SEARCH_H))
-                    .text_sm()
-                    .child(Input::new(&input)),
-            )
-        })
+        .child(
+            skin::glass_button("new-task", false, theme)
+                .w_full()
+                .h(px(NEW_TASK_H))
+                .justify_start()
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    if !workspace.on_new_session(cx) {
+                        workspace.on_open_project_dialog(cx);
+                    }
+                }))
+                .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
+                .child(super::chat::new_task_label()),
+        )
 }
 
 fn section_label(text: &str, theme: &Theme) -> impl IntoElement {
@@ -148,7 +132,7 @@ fn sessions_section(
     cx: &mut Context<Workspace>,
     sessions: &[(SessionSummary, Option<String>)],
     cwd: Option<&str>,
-    session_count: usize,
+    filter_input: Option<gpui_kit::Entity<InputState>>,
     filter_miss: bool,
     faint: gpui_kit::Hsla,
     armed_delete: Option<&str>,
@@ -162,8 +146,8 @@ fn sessions_section(
         .min_h_0()
         .flex()
         .flex_col()
-        .border_t_1()
-        .border_color(skin::glass_border(theme))
+        .mt_3()
+        .overflow_hidden()
         .child(
             div()
                 .id("sidebar-sessions-head")
@@ -171,19 +155,21 @@ fn sessions_section(
                 .px_4()
                 .flex_shrink_0()
                 .flex()
-                .flex_row()
                 .items_center()
-                .justify_between()
-                .gap_2()
-                .child(section_label(t("Session ledger", "会话账本"), theme))
-                .child(
-                    div()
-                        .text_xs()
-                        .flex_shrink_0()
-                        .text_color(faint)
-                        .child(format!("{} {}", session_count, t("pages", "页"))),
-                ),
+                .child(section_label(t("Conversations", "对话"), theme)),
         )
+        .when_some(filter_input, |section, input| {
+            section.child(
+                div()
+                    .id("sidebar-search")
+                    .flex_shrink_0()
+                    .mx_3()
+                    .mb_2()
+                    .h(px(SEARCH_H))
+                    .text_sm()
+                    .child(Input::new(&input)),
+            )
+        })
         .child(
             div()
                 .id("sidebar-session-list")
@@ -201,8 +187,8 @@ fn sessions_section(
                             .px_2()
                             .py_1()
                             .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(t("No matching sessions", "没有匹配的会话")),
+                            .text_color(faint)
+                            .child(t("No matching conversations", "没有匹配的对话")),
                     )
                 })
                 .when(sessions.is_empty() && !filter_miss, |list| {
@@ -211,8 +197,8 @@ fn sessions_section(
                             .px_2()
                             .py_1()
                             .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(t("No sessions yet", "还没有会话")),
+                            .text_color(faint)
+                            .child(t("No conversations yet", "还没有对话")),
                     )
                 })
                 .children(grouped_rows),
@@ -279,13 +265,11 @@ fn date_group_header(group: DateGroup, first: bool, theme: &Theme) -> impl IntoE
         .child(group.label())
 }
 
-fn displayed_session_title(summary: &SessionSummary, project: Option<&str>) -> String {
+fn displayed_session_title(summary: &SessionSummary, _project: Option<&str>) -> String {
     if summary.corrupt {
-        t("Unreadable session", "无法读取的会话").to_owned()
+        t("Unreadable conversation", "无法读取的对话").to_owned()
     } else if !summary.title.is_empty() {
         summary.title.clone()
-    } else if let Some(project) = project {
-        project_label(project)
     } else {
         super::chat::new_task_label().to_owned()
     }
@@ -316,7 +300,6 @@ fn session_row(
         .flatten()
         .collect::<Vec<_>>()
         .join(" · ");
-    let page_id = super::workbench::session_page_id(&summary.session_id);
     let session_id = summary.session_id.clone();
     let open_listener = {
         let session_id = session_id.clone();
@@ -327,8 +310,8 @@ fn session_row(
     let corrupt_listener = cx.listener(move |workspace, _, _, cx| {
         workspace.push_toast(
             t(
-                "That session's stored data is unreadable; delete it to clean up.",
-                "该会话的存储数据无法读取；删除它以清理。",
+                "That conversation's stored data is unreadable; delete it to clean up.",
+                "该对话的存储数据无法读取；可删除此对话进行清理。",
             ),
             crate::workspace::ToastKind::Info,
             cx,
@@ -355,14 +338,13 @@ fn session_row(
         })
         .when(summary.corrupt, |this| this.on_click(corrupt_listener))
         .when(!summary.corrupt, |this| this.on_click(open_listener))
+        .min_w_0()
+        .flex_shrink_0()
         .child(
-            div()
-                .w(px(44.))
+            Icon::new(IconName::MessageSquare)
+                .xsmall()
                 .flex_shrink_0()
-                .font_family(theme.mono_font_family.clone())
-                .text_size(px(11.))
-                .text_color(theme.muted_foreground)
-                .child(page_id),
+                .text_color(theme.muted_foreground),
         )
         .child(
             div()
@@ -370,7 +352,7 @@ fn session_row(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .child(div().text_sm().line_clamp(2).child(title))
+                .child(div().text_sm().truncate().child(title))
                 .child(
                     div()
                         .text_xs()
@@ -436,6 +418,7 @@ fn render_sidebar_footer(view: MainView, cx: &mut Context<Workspace>) -> impl In
     let theme = cx.theme();
     div()
         .id("sidebar-footer")
+        .flex_shrink_0()
         .flex()
         .flex_row()
         .items_center()

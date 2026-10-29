@@ -138,9 +138,6 @@ pub fn render_root(
         }))
         .font_family(ui_font)
         .child(title_bar::render_title_bar(workspace, window, cx))
-        .when(workspace.vm().view == MainView::Chat, |this| {
-            this.child(workbench::render_project_shelf(workspace, window, cx))
-        })
         .child(
             div()
                 .id("body")
@@ -244,8 +241,7 @@ fn main_pane(
     )
 }
 
-/// Settings header clearance below the title bar. The workbench also clears
-/// its project shelf and session band, so notices do not cover scope or actions.
+/// Header clearance keeps notices below conversation and settings actions.
 const TOAST_TOP_GAP: f32 = 52.;
 /// Gap between the toast stack and the right edge of the chat surface.
 const TOAST_EDGE_GAP: f32 = 16.;
@@ -264,7 +260,7 @@ fn render_toasts(
     let toasts = workspace.toasts();
     let top = title_bar::BAR_HEIGHT
         + if workspace.vm().view == MainView::Chat {
-            workbench::SHELF_HEIGHT + 80.
+            workbench::HEADER_HEIGHT + 8.
         } else {
             TOAST_TOP_GAP
         };

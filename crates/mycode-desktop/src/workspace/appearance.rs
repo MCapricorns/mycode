@@ -77,7 +77,7 @@ impl Workspace {
         let pairs: [(&Option<Entity<InputState>>, &str); 3] = [
             (
                 &self.session_filter_input,
-                crate::i18n::t("Search sessions", "搜索会话"),
+                crate::i18n::t("Search conversations", "搜索对话"),
             ),
             (
                 &self.settings_search_input,

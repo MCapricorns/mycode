@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use super::chat::COMPOSER_COMMANDS;
 use super::models::{canonical_model_id, model_display_name, provider_display_name};
-use super::projects::{project_label, project_of_session};
+use super::projects::{project_label, project_session_rows};
 use super::settings::SettingsSection;
 use super::state::{MainView, WorkspaceState};
 use crate::i18n::t;
@@ -119,23 +119,20 @@ fn session_items(state: &WorkspaceState) -> Vec<PaletteItem> {
         .map(|conversation| conversation.session_id.as_str());
     let mut items = vec![PaletteItem {
         command: PaletteCommand::NewSession,
-        label: t("New task", "新建任务").to_owned(),
-        keywords: words(&["new", "session", "task", "新建", "会话", "任务"]),
+        label: t("New conversation", "新对话").to_owned(),
+        keywords: words(&["new", "session", "chat", "新建", "对话", "会话"]),
         checked: false,
     }];
-    for session in &state.sessions {
+    for (session, project) in project_session_rows(state) {
         if session.corrupt {
             continue;
         }
-        let project = project_of_session(&state.session_projects, &session.session_id);
         let title = if !session.title.trim().is_empty() {
             one_line(session.title.trim())
-        } else if let Some(project) = project {
-            project_label(project)
         } else {
-            t("New task", "新建任务").to_owned()
+            t("New conversation", "新对话").to_owned()
         };
-        let mut keywords = words(&["session", "会话"]);
+        let mut keywords = words(&["session", "chat", "对话", "会话"]);
         keywords.push(session.session_id.clone());
         if let Some(project) = project {
             keywords.push(project_label(project));
@@ -419,6 +416,22 @@ mod tests {
             .filter(|item| palette_matches(item, query))
             .map(|item| item.label)
             .collect()
+    }
+
+    #[test]
+    fn palette_search_cannot_reveal_another_projects_conversation() {
+        let mut state = populated();
+        state
+            .sessions
+            .push(session("ses-other", "Other project parser", false));
+        state.session_projects = vec![
+            ("ses-live".to_owned(), "/current".to_owned()),
+            ("ses-other".to_owned(), "/other".to_owned()),
+        ];
+        state.project_dir = Some("/current".to_owned());
+        assert_eq!(labels_matching(&state, "parser"), ["Fix the parser"]);
+        state.project_dir = Some("/other".to_owned());
+        assert_eq!(labels_matching(&state, "parser"), ["Other project parser"]);
     }
 
     #[test]
