@@ -209,30 +209,35 @@ pub(crate) fn spawn_windows_helper(
 
 #[cfg(windows)]
 fn spawn_detached(program: &Path, args: &[String]) -> Result<(), String> {
-    use std::os::windows::process::CommandExt as _;
-    use std::process::Command;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    let mut command = Command::new(program);
-    command.args(args);
-    command.creation_flags(
-        DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
-    );
-    match command.spawn() {
+    match detached_command(program, args, true).spawn() {
         Ok(_) => Ok(()),
-        Err(error) if error.raw_os_error() == Some(5) => {
-            let mut retry = Command::new(program);
-            retry.args(args);
-            retry.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-            retry
-                .spawn()
-                .map(|_| ())
-                .map_err(|error| format!("updater spawn: {error}"))
-        }
+        Err(error) if error.raw_os_error() == Some(5) => detached_command(program, args, false)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("updater spawn: {error}")),
         Err(error) => Err(format!("updater spawn: {error}")),
     }
+}
+
+#[cfg(windows)]
+fn detached_command(program: &Path, args: &[String], breakaway: bool) -> std::process::Command {
+    use std::os::windows::process::CommandExt as _;
+    use windows_sys::Win32::System::Threading::{
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW,
+    };
+
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    // DETACHED_PROCESS makes Windows ignore CREATE_NO_WINDOW. The latter
+    // already runs console images without a console window. Keep the group
+    // and Job breakaway behavior so the helper can outlive the desktop.
+    let mut flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    if breakaway {
+        flags |= CREATE_BREAKAWAY_FROM_JOB;
+    }
+    command.creation_flags(flags);
+    // Do not set SW_HIDE: this also relaunches the foreground desktop GUI.
+    command
 }
 
 #[derive(Debug)]
@@ -425,6 +430,63 @@ fn relaunch_target(target: &Path) -> Result<(), String> {
 mod tests {
     use super::{helper_arguments, parse_apply_update_args, replace_verified_executable};
     use std::path::Path;
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "child-side updater console probe"]
+    fn detached_console_probe() {
+        use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
+        use windows_sys::Win32::System::Threading::{
+            GetStartupInfoW, STARTF_USESHOWWINDOW, STARTUPINFOW,
+        };
+
+        let mut pids = [0_u32; 1];
+        // SAFETY: these APIs query only this process and use writable storage.
+        assert!(unsafe { GetConsoleWindow() }.is_null());
+        let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), 1) };
+        assert!(
+            count <= 1,
+            "updater shares a console with {count} processes"
+        );
+        if count == 1 {
+            assert_eq!(pids[0], std::process::id());
+        }
+        let mut startup = STARTUPINFOW::default();
+        unsafe { GetStartupInfoW(&raw mut startup) };
+        assert_eq!(
+            startup.dwFlags & STARTF_USESHOWWINDOW,
+            0,
+            "desktop relaunch must keep the default GUI show behavior"
+        );
+        println!("updater-consoleless-stdout");
+        eprintln!("updater-consoleless-stderr");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn detached_updater_has_no_console_window_and_preserves_output_and_gui_show_behavior() {
+        let args = [
+            "--exact",
+            "updates::apply::tests::detached_console_probe",
+            "--ignored",
+            "--nocapture",
+        ]
+        .map(str::to_owned);
+        for breakaway in [false, true] {
+            let output =
+                super::detached_command(&std::env::current_exe().unwrap(), &args, breakaway)
+                    .output();
+            // Some enclosing Jobs prohibit breakaway; production retries with
+            // the same no-window flags and without breakaway in that case.
+            let output = match output {
+                Err(error) if breakaway && error.raw_os_error() == Some(5) => continue,
+                result => result.unwrap(),
+            };
+            assert!(output.status.success(), "{:?}", output);
+            assert!(String::from_utf8_lossy(&output.stdout).contains("updater-consoleless-stdout"));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("updater-consoleless-stderr"));
+        }
+    }
 
     #[test]
     fn absent_flag_is_a_normal_launch() {

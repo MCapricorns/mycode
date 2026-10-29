@@ -396,6 +396,11 @@ async fn prepare_shell(
         let env = snapshot_child_environment()?;
         let invocation = prepare_from_snapshot(&pin_cwd, program, &args, &env, &worker_cancel)
             .map_err(ResolveError::into_tool_error)?;
+        // PowerShell can call AllocConsole before running a native command.
+        // CREATE_NO_WINDOW covers only the initial launch; STARTUPINFO also
+        // keeps a subsequently allocated console hidden from its first frame.
+        #[cfg(windows)]
+        let invocation = invocation.with_hidden_window();
         Ok(PreparedShell {
             identifier,
             invocation,

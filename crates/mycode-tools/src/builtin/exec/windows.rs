@@ -40,8 +40,8 @@ use windows_sys::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, GetProcessId, INFINITE,
     InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
-    PROCESS_NAME_WIN32, QueryFullProcessImageNameW, STARTF_USESTDHANDLES, STARTUPINFOEXW,
-    STARTUPINFOW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    PROCESS_NAME_WIN32, QueryFullProcessImageNameW, STARTF_USESHOWWINDOW, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, STARTUPINFOW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 use super::argv::windows_command_line_utf16;
@@ -115,6 +115,7 @@ pub(super) fn spawn_windows(
     args: &[String],
     cwd: &Path,
     env: &[(OsString, OsString)],
+    hide_window: bool,
     gate: &SpawnGate,
 ) -> Result<(WindowsChild, ProcessTree, PinnedImage), SpawnFailure> {
     verify_pinned_digest(&mut pinned, gate)?;
@@ -124,7 +125,7 @@ pub(super) fn spawn_windows(
     })?;
     gate.begin_spawn()?;
     let spawned = launch_with_nested_job_fallback(parent_job, |breakaway| {
-        spawn_attempt(&pinned, argv0, args, cwd, env, breakaway, gate)
+        spawn_attempt(&pinned, argv0, args, cwd, env, hide_window, breakaway, gate)
     })?;
     let child = WindowsChild {
         process: spawned.process,
@@ -355,12 +356,17 @@ impl Drop for ProcThreadAttributeList {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "spawn uses the pinned snapshot, window policy, and nested-Job retry mode"
+)]
 fn spawn_attempt(
     pinned: &PinnedImage,
     argv0: &str,
     args: &[String],
     cwd: &Path,
     env: &[(OsString, OsString)],
+    hide_window: bool,
     breakaway: bool,
     gate: &SpawnGate,
 ) -> Result<SpawnedSuspended, SpawnFailure> {
@@ -396,7 +402,8 @@ fn spawn_attempt(
     let startup = STARTUPINFOEXW {
         StartupInfo: STARTUPINFOW {
             cb: u32::try_from(size_of::<STARTUPINFOEXW>()).expect("STARTUPINFOEXW fits u32"),
-            dwFlags: STARTF_USESTDHANDLES,
+            dwFlags: STARTF_USESTDHANDLES | if hide_window { STARTF_USESHOWWINDOW } else { 0 },
+            wShowWindow: 0, // SW_HIDE; only used for background script launches.
             hStdInput: inherited[0],
             hStdOutput: inherited[1],
             hStdError: inherited[2],

@@ -25,6 +25,10 @@ const INVOCATION_DIGEST_VERSION: u64 = 2;
 #[derive(Debug)]
 pub(crate) struct PreparedInvocation {
     pinned: PinnedImage,
+    /// Script interpreters may allocate a console after their initial launch.
+    /// Program mode keeps the default show behavior for foreground GUI apps.
+    #[cfg(windows)]
+    pub(super) hide_window: bool,
     // `argv0`, `args`, and `cwd` are read only through `into_spawn_parts`,
     // whose callers are the platform spawn paths; on a platform without
     // one they are written at preparation and never read back.
@@ -158,6 +162,8 @@ impl PreparedInvocation {
         );
         Ok(Self {
             pinned,
+            #[cfg(windows)]
+            hide_window: false,
             argv0,
             args: launch_args,
             cwd: session_cwd.to_path_buf(),
@@ -165,6 +171,13 @@ impl PreparedInvocation {
             invocation_digest,
             wrapper,
         })
+    }
+
+    /// Hides an interpreter's first window, including a later `AllocConsole`.
+    #[cfg(windows)]
+    pub(crate) fn with_hidden_window(mut self) -> Self {
+        self.hide_window = true;
+        self
     }
 
     /// Script path when this launch followed a shebang wrapper.
