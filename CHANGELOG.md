@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.33] - 2026-10-29
+
 ### Added
 
 - 子代理支持四种角色、保留运行记录、继续与引导，以及固定工作流；工作流在整合后由独立 sentinel 验收，保留的 worktree 和运行状态可在重开会话后恢复。
@@ -529,7 +531,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.32...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.33...HEAD
+[0.12.33]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.33
 [0.12.32]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.32
 [0.12.31]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.31
 [0.12.30]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.30
