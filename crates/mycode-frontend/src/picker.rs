@@ -3,7 +3,9 @@
 //!
 //! Rendering stays in each frontend; the decisions about which rows exist
 //! and which one Enter activates live here so every surface agrees.
-use crate::view_model::{WorkspaceState, model_display_name, provider_display_name};
+use crate::view_model::{
+    WorkspaceState, canonical_model_id, model_display_name, provider_display_name,
+};
 
 /// One model the picker can show.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,7 +87,9 @@ pub fn merge_model_choices(
         std::collections::HashSet::with_capacity(catalog.len() + configured.len());
     let mut choices = Vec::with_capacity(catalog.len() + configured.len());
     for (id, name) in catalog {
-        seen.insert(id.as_str());
+        if !seen.insert(id.as_str()) {
+            continue;
+        }
         let name = if name.is_empty() {
             id.clone()
         } else {
@@ -149,11 +153,31 @@ fn squash_separators(text: &str) -> String {
 /// enabled and settings do not hide the model.
 pub fn offers_model(vm: &WorkspaceState, provider: &str, model: &str) -> bool {
     vm.settings.as_ref().is_some_and(|settings| {
-        settings
-            .providers
-            .iter()
-            .any(|entry| entry.id == provider && entry.enabled && entry.shows_model(model))
+        settings.providers.iter().any(|entry| {
+            entry.id == provider && entry.enabled && provider_shows_model(vm, entry, model)
+        })
     })
+}
+
+fn provider_shows_model(
+    vm: &WorkspaceState,
+    provider: &mycode_app::ProviderSettings,
+    model: &str,
+) -> bool {
+    let catalog_model = vm
+        .catalog
+        .as_ref()
+        .and_then(|catalog| catalog.model(&provider.id, model));
+    catalog_model.map_or_else(
+        || provider.shows_model(model),
+        |model| {
+            provider.shows_model(&model.id)
+                && model
+                    .aliases
+                    .iter()
+                    .all(|alias| provider.shows_model(alias))
+        },
+    )
 }
 
 /// How many recently used models the picker suggests above the providers.
@@ -174,12 +198,22 @@ pub fn visible_recent(
 
 /// The recent models this picker suggests.
 pub fn recent_pins(vm: &WorkspaceState) -> Vec<mycode_app::ModelPin> {
-    visible_recent(&vm.recent_models, |pin| {
-        offers_model(vm, &pin.provider, &pin.model)
-    })
-    .into_iter()
-    .cloned()
-    .collect()
+    let mut seen = std::collections::HashSet::new();
+    let recent: Vec<_> = vm
+        .recent_models
+        .iter()
+        .map(|pin| {
+            mycode_app::ModelPin::new(
+                &pin.provider,
+                canonical_model_id(vm, &pin.provider, &pin.model),
+            )
+        })
+        .filter(|pin| seen.insert((pin.provider.clone(), pin.model.clone())))
+        .collect();
+    visible_recent(&recent, |pin| offers_model(vm, &pin.provider, &pin.model))
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 /// Row Enter should activate.
@@ -198,22 +232,18 @@ pub fn preferred_index<T: AsRef<str>>(ids: &[T], query: &str, selected: Option<&
         .unwrap_or(0)
 }
 
-/// Composer and default-model label: `Provider · Model`, so a chip can say
-/// which gateway the model runs through instead of showing a bare name that
-/// two providers could share.
+/// Composer and default-model label: `Source · Model`, including unlisted ids.
 pub fn selected_model_label(vm: &WorkspaceState) -> String {
-    match (
-        vm.selected_provider.as_deref(),
-        vm.selected_model.as_deref(),
-    ) {
-        (Some(provider), Some(model)) => format!(
-            "{} · {}",
-            provider_display_name(vm, provider),
-            model_display_name(vm, provider, model)
-        ),
-        (_, Some(model)) => model.to_owned(),
-        _ => crate::i18n::t("Select model", "选择模型").to_owned(),
-    }
+    vm.selected_model
+        .as_deref()
+        .map(|model| {
+            model_display_name(
+                vm,
+                vm.selected_provider.as_deref().unwrap_or_default(),
+                model,
+            )
+        })
+        .unwrap_or_else(|| crate::i18n::t("Select model", "选择模型").to_owned())
 }
 
 /// Every model the chat picker shows for one configured provider: the
@@ -226,7 +256,7 @@ pub fn provider_model_choices(vm: &WorkspaceState, provider_id: &str) -> Vec<Mod
             .iter()
             .find(|provider| provider.id == provider_id)
     }) {
-        choices.retain(|choice| provider.shows_model(&choice.id));
+        choices.retain(|choice| provider_shows_model(vm, provider, &choice.id));
     }
     choices
 }
@@ -255,9 +285,19 @@ pub fn all_provider_model_choices(vm: &WorkspaceState, provider_id: &str) -> Vec
                 .iter()
                 .find(|provider| provider.id == provider_id)
         })
-        .map(|provider| provider.models.clone())
+        .map(|provider| {
+            provider
+                .models
+                .iter()
+                .map(|id| canonical_model_id(vm, provider_id, id))
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
-    merge_model_choices(&catalog, &configured)
+    let mut choices = merge_model_choices(&catalog, &configured);
+    for choice in &mut choices {
+        choice.name = model_display_name(vm, provider_id, &choice.id);
+    }
+    choices
 }
 
 /// The provider the pick target currently resolves to.
@@ -278,7 +318,7 @@ pub fn selected_in_provider(
     target: &ModelPickerTarget,
     provider_id: &str,
 ) -> Option<String> {
-    match target {
+    let selected = match target {
         ModelPickerTarget::Session => vm
             .selected_provider
             .as_deref()
@@ -290,7 +330,8 @@ pub fn selected_in_provider(
             .and_then(|settings| settings.subagents.role(role))
             .filter(|entry| entry.provider.as_deref() == Some(provider_id))
             .and_then(|entry| entry.model.clone()),
-    }
+    };
+    selected.map(|model| canonical_model_id(vm, provider_id, &model))
 }
 
 /// Enabled providers as `(id, display name)` rows.
@@ -320,7 +361,7 @@ mod tests {
     use mycode_app::ModelPin;
 
     #[test]
-    fn the_selected_model_label_names_the_provider() {
+    fn the_selected_model_label_names_the_source_even_without_a_catalog() {
         let mut state = crate::view_model::WorkspaceState::default();
         assert_eq!(
             selected_model_label(&state),
@@ -328,24 +369,25 @@ mod tests {
         );
         state.selected_provider = Some("magpie".to_owned());
         state.selected_model = Some("gpt-5".to_owned());
-        // Without a catalog both halves fall back to the raw ids.
-        assert_eq!(selected_model_label(&state), "magpie · gpt-5");
+        let unknown = format!("{} · gpt-5", crate::i18n::t("Source unknown", "来源未提供"));
+        assert_eq!(selected_model_label(&state), unknown);
         state.catalog = Some(std::sync::Arc::new(mycode_app::catalog::CatalogDocument {
             providers: vec![mycode_app::catalog::CatalogProvider {
                 id: "magpie".to_owned(),
                 name: "Magpie".to_owned(),
                 models: vec![mycode_app::catalog::CatalogModel {
                     id: "gpt-5".to_owned(),
+                    source: "openai".to_owned(),
                     name: "GPT-5".to_owned(),
                     ..mycode_app::catalog::CatalogModel::default()
                 }],
                 ..mycode_app::catalog::CatalogProvider::default()
             }],
         }));
-        assert_eq!(selected_model_label(&state), "Magpie · GPT-5");
-        // A model picked without a provider half keeps the bare name.
+        assert_eq!(selected_model_label(&state), "openai · GPT-5");
+        // A missing gateway identity cannot establish the upstream source.
         state.selected_provider = None;
-        assert_eq!(selected_model_label(&state), "gpt-5");
+        assert_eq!(selected_model_label(&state), unknown);
     }
 
     #[test]
@@ -388,10 +430,15 @@ mod tests {
 
     #[test]
     fn merge_appends_configured_ids_without_a_cap() {
-        let catalog: Vec<(String, String)> = (0..300)
+        let mut catalog: Vec<(String, String)> = (0..300)
             .map(|index| (format!("m{index}"), format!("Name {index}")))
             .collect();
-        let configured = vec!["m0".to_owned(), "custom-only".to_owned()];
+        catalog.push(("m42".to_owned(), "Duplicate entry".to_owned()));
+        let configured = vec![
+            "m0".to_owned(),
+            "custom-only".to_owned(),
+            "custom-only".to_owned(),
+        ];
         let merged = merge_model_choices(&catalog, &configured);
         assert_eq!(merged.len(), 301);
         assert_eq!(merged[0].name, "Name 0");
@@ -399,6 +446,227 @@ mod tests {
             merged.last().map(|choice| choice.id.as_str()),
             Some("custom-only")
         );
+    }
+
+    fn gateway_alias_state() -> crate::view_model::WorkspaceState {
+        let provider = mycode_app::catalog::magpie::provider_from_models(
+            br#"{"data":[
+            {"id":"copilot/claude-opus-5","display_name":"Claude Opus 5","owned_by":"copilot"},
+            {"id":"claude-opus-5","display_name":"Claude Opus 5","owned_by":"copilot"},
+            {"id":"copilot/gpt-6.1-terra","display_name":"GPT-6.1 Terra","owned_by":"copilot"},
+            {"id":"codex/gpt-6.1-terra","display_name":"GPT-6.1 Terra","owned_by":"codex"},
+            {"id":"gpt-6.1-terra","display_name":"GPT-6.1 Terra","owned_by":"copilot"}
+        ]}"#,
+            "http://127.0.0.1:3425/v1",
+        )
+        .expect("gateway catalog");
+        let catalog = mycode_app::catalog::CatalogDocument {
+            providers: vec![provider],
+        };
+        let document = mycode_app::AppSettings {
+            magpie: mycode_app::MagpieSettings {
+                enabled: true,
+                base_url: "http://127.0.0.1:3425/v1".into(),
+                api_key: "fixture-key".into(),
+                model: "gpt-6.1-terra".into(),
+                hidden_models: Vec::new(),
+            },
+            ..Default::default()
+        };
+        let mut settings = crate::view_model::SettingsState::from_settings(&document, 1);
+        settings.providers = vec![
+            mycode_app::magpie_provider_row(&document.magpie, &catalog).expect("active provider"),
+        ];
+        crate::view_model::WorkspaceState {
+            settings: Some(settings),
+            catalog: Some(std::sync::Arc::new(catalog)),
+            selected_provider: Some("magpie".into()),
+            selected_model: Some("gpt-6.1-terra".into()),
+            recent_models: vec![
+                ModelPin::new("magpie", "gpt-6.1-terra"),
+                ModelPin::new("magpie", "copilot/gpt-6.1-terra"),
+                ModelPin::new("magpie", "claude-opus-5"),
+                ModelPin::new("magpie", "codex/gpt-6.1-terra"),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn gateway_aliases_do_not_duplicate_search_recents_or_palette() {
+        use crate::view_model::{PaletteCommand, PaletteGroupId, palette_catalog};
+        let state = gateway_alias_state();
+        let choices = super::provider_model_choices(&state, "magpie");
+        assert_eq!(choices.len(), 3);
+        let matched = filter_model_choices(&choices, "opus 5");
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].id, "copilot/claude-opus-5");
+        assert_eq!(matched[0].name, "copilot · Claude Opus 5");
+        let selected =
+            super::selected_in_provider(&state, &super::ModelPickerTarget::Session, "magpie");
+        assert_eq!(selected.as_deref(), Some("copilot/gpt-6.1-terra"));
+        assert_eq!(
+            choices[preferred_index(&choices, "", selected.as_deref())].id,
+            "copilot/gpt-6.1-terra"
+        );
+        let recent = super::recent_pins(&state);
+        assert_eq!(
+            recent
+                .iter()
+                .map(|pin| pin.model.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "copilot/gpt-6.1-terra",
+                "copilot/claude-opus-5",
+                "codex/gpt-6.1-terra"
+            ]
+        );
+        let palette = palette_catalog(&state);
+        let models = &palette
+            .groups
+            .iter()
+            .find(|group| group.id == PaletteGroupId::Models)
+            .expect("model group")
+            .items;
+        assert_eq!(models.len(), 3);
+        assert_eq!(models.iter().filter(|item| item.checked).count(), 1);
+        assert!(models.iter().any(|item| item.checked && matches!(&item.command,
+            PaletteCommand::SelectModel { provider, model } if provider == "magpie" && model == "copilot/gpt-6.1-terra"
+        )));
+        assert_eq!(
+            state.selected_model.as_deref(),
+            Some("gpt-6.1-terra"),
+            "projection preserves stored selections"
+        );
+    }
+
+    #[test]
+    fn real_same_name_routes_remain_distinct_and_show_the_source() {
+        let state = gateway_alias_state();
+        let choices = super::provider_model_choices(&state, "magpie");
+        let matched = filter_model_choices(&choices, "gpt 6.1 terra");
+        assert_eq!(matched.len(), 2);
+        assert_eq!(matched[0].id, "codex/gpt-6.1-terra");
+        assert_eq!(matched[1].id, "copilot/gpt-6.1-terra");
+        assert_eq!(matched[0].name, "codex · GPT-6.1 Terra");
+        assert_eq!(matched[1].name, "copilot · GPT-6.1 Terra");
+        assert!(selected_model_label(&state).contains("copilot · GPT-6.1 Terra"));
+    }
+
+    #[test]
+    fn unlisted_configured_models_show_source_fallbacks_everywhere() {
+        use crate::view_model::{PaletteCommand, PaletteGroupId, palette_catalog};
+        for (id, label) in [
+            (
+                "custom-only",
+                format!(
+                    "{} · custom-only",
+                    crate::i18n::t("Source unknown", "来源未提供")
+                ),
+            ),
+            ("source-b/custom-only", "source-b · custom-only".to_owned()),
+        ] {
+            let mut state = gateway_alias_state();
+            let settings = state.settings.as_mut().expect("settings");
+            settings.magpie.model = id.into();
+            settings.providers = vec![
+                mycode_app::magpie_provider_row(
+                    &settings.magpie,
+                    state.catalog.as_ref().expect("catalog"),
+                )
+                .expect("provider"),
+            ];
+            state.selected_model = Some(id.into());
+            state.recent_models = vec![ModelPin::new("magpie", id)];
+            let choices = super::provider_model_choices(&state, "magpie");
+            let matches = filter_model_choices(&choices, "custom-only");
+            assert_eq!(matches.len(), 1);
+            assert_eq!(matches[0].name, label);
+            assert_eq!(selected_model_label(&state), label);
+            let recent = super::recent_pins(&state);
+            assert_eq!(
+                crate::view_model::model_display_name(
+                    &state,
+                    &recent[0].provider,
+                    &recent[0].model
+                ),
+                label
+            );
+            let palette = palette_catalog(&state);
+            let models = palette
+                .groups
+                .iter()
+                .find(|group| group.id == PaletteGroupId::Models)
+                .expect("models");
+            let item = models.items.iter().find(|item| matches!(&item.command, PaletteCommand::SelectModel { model, .. } if model == id)).expect("custom model");
+            assert!(item.checked);
+            assert_eq!(item.label, format!("{label} · Magpie"));
+        }
+    }
+
+    #[test]
+    fn bare_model_names_show_the_published_source_and_are_searchable_by_it() {
+        let provider = mycode_app::catalog::magpie::provider_from_models(
+            br#"{"data":[
+                {"id":"bare-model","display_name":"Single Model","owned_by":"source-a"},
+                {"id":"unknown-model","display_name":"Unknown Model"}
+            ]}"#,
+            "http://127.0.0.1:3425/v1",
+        )
+        .expect("catalog");
+        let state = crate::view_model::WorkspaceState {
+            catalog: Some(std::sync::Arc::new(mycode_app::catalog::CatalogDocument {
+                providers: vec![provider],
+            })),
+            selected_provider: Some("magpie".into()),
+            selected_model: Some("bare-model".into()),
+            ..Default::default()
+        };
+        let choices = super::all_provider_model_choices(&state, "magpie");
+        let matches = filter_model_choices(&choices, "source-a");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, "bare-model");
+        assert_eq!(matches[0].name, "source-a · Single Model");
+        assert_eq!(selected_model_label(&state), "source-a · Single Model");
+        assert_eq!(
+            crate::view_model::model_display_name(&state, "magpie", "unknown-model"),
+            format!(
+                "{} · Unknown Model",
+                crate::i18n::t("Source unknown", "来源未提供")
+            )
+        );
+    }
+
+    #[test]
+    fn hiding_either_spelling_hides_the_model_without_hiding_another_source() {
+        for hidden in ["gpt-6.1-terra", "copilot/gpt-6.1-terra"] {
+            let mut state = gateway_alias_state();
+            state.settings.as_mut().expect("settings").providers[0].hidden_models =
+                vec![hidden.into()];
+            let choices = super::provider_model_choices(&state, "magpie");
+            assert_eq!(super::all_provider_model_choices(&state, "magpie").len(), 3);
+            let matched = filter_model_choices(&choices, "gpt 6.1 terra");
+            assert_eq!(matched.len(), 1, "{hidden}");
+            assert_eq!(matched[0].id, "codex/gpt-6.1-terra");
+            assert!(!super::offers_model(&state, "magpie", "gpt-6.1-terra"));
+            assert!(!super::offers_model(
+                &state,
+                "magpie",
+                "copilot/gpt-6.1-terra"
+            ));
+            assert!(
+                super::recent_pins(&state)
+                    .iter()
+                    .all(|pin| pin.model != "copilot/gpt-6.1-terra")
+            );
+            let palette = crate::view_model::palette_catalog(&state);
+            let models = palette
+                .groups
+                .iter()
+                .find(|group| group.id == crate::view_model::PaletteGroupId::Models)
+                .expect("models");
+            assert_eq!(models.items.len(), 2);
+        }
     }
 
     #[test]

@@ -114,7 +114,7 @@ fn render_provider_step(
     } else {
         rows.push(section_label(
             "model-picker-providers",
-            t("Providers", "服务商"),
+            t("Gateways", "网关"),
             theme,
         ));
         let current = current_provider(workspace.vm(), target);
@@ -274,7 +274,7 @@ fn render_model_step(
                         .xsmall()
                         .text_color(theme.muted_foreground),
                 )
-                .child(div().text_sm().child(t("Providers", "服务商")))
+                .child(div().text_sm().child(t("Gateways", "网关")))
                 .child(
                     div()
                         .min_w_0()
@@ -435,7 +435,7 @@ fn pin_row(
                         .text_xs()
                         .truncate()
                         .text_color(theme.muted_foreground)
-                        .child(provider_name),
+                        .child(format!("{}: {provider_name}", t("Gateway", "网关"))),
                 ),
         )
         .into_any_element()

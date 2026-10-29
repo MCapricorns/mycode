@@ -36,6 +36,43 @@ fn an_unavailable_selection_never_silently_uses_the_first_model() {
 }
 
 #[test]
+fn a_published_alias_remains_runnable_after_catalog_refresh() {
+    let mut state = model_state();
+    let provider = mycode_app::catalog::magpie::provider_from_models(
+        br#"{"data":[
+            {"id":"p/pinned","owned_by":"p"},
+            {"id":"pinned","owned_by":"p"},
+            {"id":"z/default","owned_by":"z"}
+        ]}"#,
+        "http://127.0.0.1:3425/v1",
+    )
+    .expect("catalog");
+    let catalog = mycode_app::catalog::CatalogDocument {
+        providers: vec![provider],
+    };
+    let settings = state.settings.as_mut().expect("settings");
+    settings.magpie = mycode_app::MagpieSettings {
+        enabled: true,
+        base_url: "http://127.0.0.1:3425/v1".into(),
+        api_key: "fixture-key".into(),
+        model: "z/default".into(),
+        hidden_models: Vec::new(),
+    };
+    settings.providers =
+        vec![mycode_app::magpie_provider_row(&settings.magpie, &catalog).expect("provider")];
+    state.catalog = Some(std::sync::Arc::new(catalog));
+    state.selected_model = Some("pinned".into());
+    assert_eq!(
+        selected_route(&state).unwrap(),
+        ("magpie".into(), "pinned".into())
+    );
+    assert_eq!(
+        crate::picker::provider_model_choices(&state, "magpie").len(),
+        2
+    );
+}
+
+#[test]
 fn an_unavailable_session_pin_blocks_chat_and_compaction() {
     let (mut driver, root) = scratch_driver("unavailable-pin");
     let session = SessionId::generate().unwrap().to_string();

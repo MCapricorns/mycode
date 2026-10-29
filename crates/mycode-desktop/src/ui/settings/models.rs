@@ -81,10 +81,20 @@ pub(crate) fn render_models_section(
         magpie.base_url.clone()
     };
 
+    let selected_id = crate::view_model::canonical_model_id(
+        vm,
+        mycode_frontend::MAGPIE_PROVIDER_ID,
+        &magpie.model,
+    );
     let rows: Vec<AnyElement> = models
         .iter()
         .map(|model| {
-            let selected = model.id == magpie.model;
+            let selected = model.id == selected_id;
+            let name = crate::view_model::model_display_name(
+                vm,
+                mycode_frontend::MAGPIE_PROVIDER_ID,
+                &model.id,
+            );
             div()
                 .flex()
                 .flex_row()
@@ -103,7 +113,7 @@ pub(crate) fn render_models_section(
                             div()
                                 .text_sm()
                                 .when(selected, |this| this.text_color(desk.green))
-                                .child(model.name.clone()),
+                                .child(name),
                         )
                         .child(
                             div()

@@ -76,7 +76,7 @@ impl Gateway {
         let provider = mycode_agent::catalog::magpie::provider_from_models(&bytes, &self.base_url)?;
         Ok(FetchedModels {
             provider,
-            fetched_at: mycode_app_time(),
+            fetched_at: crate::unix_now().as_secs(),
         })
     }
 }
@@ -92,13 +92,6 @@ pub(crate) async fn load_settings(
     })
     .await
     .map_err(|error| format!("settings task failed: {error}"))?
-}
-
-fn mycode_app_time() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or(0)
 }
 
 /// The provider row every turn resolves against.
@@ -122,7 +115,11 @@ pub fn provider_row(
             provider
                 .models
                 .iter()
-                .map(|model| model.id.clone())
+                // Runtime routes retain published aliases so existing session
+                // pins keep working. Pickers project these onto canonical ids.
+                .flat_map(|model| {
+                    std::iter::once(model.id.clone()).chain(model.aliases.iter().cloned())
+                })
                 .collect()
         })
         .unwrap_or_default();

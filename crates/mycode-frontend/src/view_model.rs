@@ -32,8 +32,8 @@ pub use self::command_palette::{
     palette_item,
 };
 pub use self::models::{
-    effective_reasoning_level, model_context_window, model_display_name, provider_display_name,
-    selected_reasoning_level,
+    canonical_model_id, effective_reasoning_level, model_context_window, model_display_name,
+    provider_display_name, selected_reasoning_level,
 };
 pub use self::nav::{
     DismissLayer, SettingsBack, highlight, moved, settings_back_target, top_dismiss_layer,
