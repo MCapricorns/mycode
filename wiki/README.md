@@ -8,7 +8,7 @@ The paper and ink palette follows the desktop: `#FAF6EE`, `#F3EDE2`, `#14131B` a
 
 - `wiki/graph.json` defines lanes, nodes, relationships and embedded source paths.
 - `wiki/architecture/runtime.md` describes crate boundaries and the turn pipeline.
-- `wiki/architecture/code-mode-engine.md` documents the implemented Rhai and MCP contract.
+- `wiki/architecture/code-mode-engine.md` documents the embedded JavaScript and MCP contract.
 - `scripts/wiki_shell.html` owns the responsive shell, graph, search, source reader and themes.
 - `scripts/build_wiki.py` renders the two Markdown references and embeds all payloads into `wiki/index.html`; it also generates `wiki/images/logo.svg` and `wiki/images/banner.svg` from the native SVG mark.
 

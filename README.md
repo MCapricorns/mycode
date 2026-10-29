@@ -12,121 +12,178 @@
   <a href="https://x.com/M_Capricorns"><img alt="关注 @M_Capricorns" src="https://img.shields.io/badge/X-%40M__Capricorns-000?style=flat-square&logo=x"></a>
 </p>
 
-**对话、工具调用和会话记录都留在本机。模型请求只发往本机 magpie 网关。**
+**打开项目，用自然语言读代码、修改文件、运行命令。**
 
-[下载](https://github.com/MCapricorns/mycode/releases/latest) · [快速开始](#快速开始) · [功能](#功能) · [数据](#数据与配置) · [架构](#架构) · [知识图谱](https://mcapricorns.github.io/mycode/wiki/index.html) · [更新日志](CHANGELOG.md)
+[下载](https://github.com/MCapricorns/mycode/releases/latest) · [快速开始](#快速开始) · [日常使用](#日常使用) · [扩展与设置](#扩展与设置) · [本地数据](#本地数据与权限) · [参与开发](#参与开发) · [知识图谱](https://mcapricorns.github.io/mycode/wiki/index.html) · [更新日志](CHANGELOG.md)
 
 </div>
 
----
+MYCode 是用 Rust 和 GPUI 构建的原生编码代理桌面应用，支持 Windows x64、Windows ARM64 和 macOS Apple Silicon。你可以在对话中让代理查找代码、实施修改、运行构建与测试，并查看工具进度和代码改动。
 
-## 是什么
-
-MYCode 是一个本地编码代理桌面应用。
-
-支持 Windows x64、Windows ARM64 和 macOS Apple Silicon，暂无 Intel macOS 和 Linux 包。
-
-## 功能
-
-| | |
-| --- | --- |
-| **工作目录** | 最多同时挂 8 个目录，可以拖进来（从旧版合并的列表可能暂时更多，新增时保持现有数量）。会话绑定到一个目录；切换目录不会把当前会话改绑。改动面板跟随文件系统事件读 `git status`，不按固定间隔轮询。 |
-| **模型** | 只通过本机 [magpie](https://usemagpie.ai) 网关请求模型。模型列表实时读取网关的 `GET /v1/models`；在 magpie 的 Agents 页给 MCode 选模型，密钥和地址由 magpie 的 agent 插件写进 `~/.mycode/settings.json`。 |
-| **思考强度** | 只列模型实际公布的档位。每个会话单独记住自己的模型和强度，不影响别的会话。 |
-| **附件** | 拖入文件或粘贴图片即附加到下一条消息：最多 4 张图、8 个文本文件。拖入文件夹则绑定为工作目录。 |
-| **子代理** | `scout` 只读，适合代码搜索和查文档；`artisan` 在独立 git worktree 中改代码，结束时回传 diff，不自动合回或提交。每轮最多并发 8 个，支持逐个停止。含修改、未跟踪或忽略文件的 worktree 会保留，并在结果中给出路径；取消不会丢弃已有改动。可在 `agents/` 中添加自定义角色。 |
-| **代码模式** | 顶层提供当前系统 shell、`run_code` 和 `wait_code`。在 Rhai 脚本中通过 `call("read", #{ path: "src/lib.rs" })` 等调用内置工具、子代理和 MCP；长任务返回 cell id 后可继续收集。每个内层调用有独立进度与终态，子代理有自己的停止按钮。 |
-| **技能** | 从 magpie Library 的 `~/.mycode/skills` 发现 `SKILL.md`，`/` 菜单可插入；设置里每个技能可以单独关闭。 |
-| **MCP** | 支持 stdio 和 Streamable HTTP，最多 64 台服务器，读取 magpie Library 的 `~/.mycode/mcp.json`。在 `run_code` 内先 `call("search_tool", …)` 或 `call("tool_search", …)` 按需取得 schema，再 `call("use_tool", …)` 执行。提示词展示服务器与连接状态；远程 schema 不会全部塞进固定提示词。 |
-| **网页** | 没有内置搜索；联网检索由 magpie Library 下发的 MCP 服务提供（例如 anysearch）。 |
-| **界面** | 顶部项目书架、会话账本与工作页组成原生工作台；在同一页查看工具操作和代码改动。提供中英双语、深色/浅色和四档字号，`Ctrl-K` / `Cmd-K` 打开命令面板。 |
-| **代理** | 跟随系统代理，或手动填写 `http` / `socks5` 地址。设置页的「测试」会请求 `google.com/generate_204` 并显示线路、状态码和耗时。 |
+MYCode 的模型目录与模型请求统一经过本机 [magpie](https://usemagpie.ai) 网关。对话记录、项目关联和界面状态保存在本机；发送给模型的消息、附件及工具结果会经过网关，由 magpie 转发给你配置的上游模型服务。模型内容的去向取决于 magpie 的上游配置。
 
 ## 安装
 
-从 [Releases](https://github.com/MCapricorns/mycode/releases/latest) 下载。每个包旁边都有对应的 `.sha256`。
+从 [Releases](https://github.com/MCapricorns/mycode/releases/latest) 下载适合设备的安装包。每个包都附有对应的 `.sha256` 校验文件。
 
-| 平台 | 安装包 |
+| 平台 | 手动安装包 |
 | --- | --- |
 | Windows x64 | `mycode-desktop-v*-x86_64-pc-windows-msvc.zip` |
 | Windows ARM64 | `mycode-desktop-v*-aarch64-pc-windows-msvc.zip` |
 | macOS Apple Silicon | `mycode-desktop-v*-aarch64-apple-darwin.dmg` |
 
-- **Windows**：解压后双击 `mycode-desktop.exe`。它会把自己复制到 `~/.mycode/bin/mycode-desktop.exe`，启动装好的那一份，删掉刚双击的旧 exe，并在桌面创建 `MYCode` 快捷方式。以后从快捷方式打开。
-- **macOS**：打开 dmg，把 `MYCode.app` 拖进「应用程序」。应用是 ad-hoc 签名，首次打开需要右键「打开」，或执行 `xattr -d com.apple.quarantine /Applications/MYCode.app`。
+当前不提供 Intel macOS、Linux 或 Windows x86 安装包。
 
-应用内置自动更新：标题栏提示新版本，确认后重启安装。Release 里的 macOS zip 是给自动更新用的，手动安装请用 dmg。
+**Windows**：解压后双击 `mycode-desktop.exe`。应用会把自己安装到 `~/.mycode/bin/mycode-desktop.exe`，启动安装后的副本，并在桌面创建 `MYCode` 快捷方式。原先启动的下载副本随后会被清理，以后可从快捷方式打开。
 
-`MYCODE_NO_INSTALL=1` 可以跳过自安装，适合直接从 `target/` 运行。
+**macOS**：打开 dmg，把 `MYCode.app` 拖进「应用程序」。应用使用 ad-hoc 签名；首次打开可能需要右键选择「打开」，或执行：
 
-### 从源码构建
+```sh
+xattr -d com.apple.quarantine /Applications/MYCode.app
+```
 
-需要 Rust stable（Windows 用 MSVC 工具链）：
+应用内置自动更新，标题栏会提示新版本，可确认后重启安装。Release 中的 macOS zip 用于自动更新，手动安装请用 dmg。
+
+## 快速开始
+
+1. 安装并启动 [magpie](https://usemagpie.ai)，在 magpie 中配置要使用的上游模型服务和凭据。
+2. 在终端安装 MYCode 的 magpie 插件：
+
+   ```sh
+   magpie plugin add github:MCapricorns/magpie-mycode
+   ```
+
+   也可以在 magpie 的 Plugins 页添加同一个 `github:` 地址。
+
+3. 在 magpie 的 Agents 页给 **MCode** 选择模型。插件会将网关地址、网关凭据和模型绑定写入 `~/.mycode/settings.json` 的 `magpie` 配置。
+4. 启动 MYCode，打开或拖入项目目录，在输入框描述任务。可先让代理解释一段代码，再提出具体修改与验证要求。
+
+上游服务、账号、API key 和可用模型在 **magpie** 中配置。MYCode 的「设置 → Magpie」用于查看网关连接与模型目录，点击「刷新模型」会重新读取绑定并请求网关的 `GET /v1/models`；运行中在 magpie 改了配置也可这样同步，无需重启。这里的网关凭据用于 MYCode 连接 magpie，上游凭据由 magpie 管理。
+
+如果显示未连接或没有模型，先确认 magpie 正在运行、插件已安装，并已在 Agents 页给 MCode 选模型，再刷新。网关能连接但上游请求失败时，应检查 magpie 中对应服务的账号与连接配置。
+
+## 日常使用
+
+### 项目与对话
+
+左侧的 **Projects / 项目** 和 **Conversations / 对话** 分别纵向排列、独立滚动。选择项目后，对话列表、侧栏标题搜索和命令面板中的对话结果只显示当前目录的对话；要找其他项目的历史，先切换到那个项目。没有项目绑定的历史会话可从项目列表中的 **Unassigned / 未分配** 入口查找和打开。
+
+点击项目会打开它最近的对话，没有历史时创建新对话；「新对话」或 `/new` 可以在当前目录开始另一段对话。切换项目不会改变已有对话绑定的目录。需要移动某段对话的工作目录时，使用该对话的目录选择入口，并先完成或停止当前回合。
+
+项目列表通常最多保留 8 个目录入口，满额后新增会移出最旧入口；旧版合并得到的较长列表保留原有容量。**移除项目只移除快捷入口，项目文件和对话历史仍保留**，重新打开目录即可访问。
+
+### 提供上下文与选择模型
+
+在输入框输入 `@` 搜索当前目录的文件，或拖入文本文件与图片作为下一条消息的附件。拖入文件夹会打开项目。每条消息最多附加 4 张图片和 8 个文本文件；文本单文件超过 256 KiB 会截断并标记，文本合计上限为 512 KiB。图片也受大小限制，4 张并不表示可同时附加 4 张最大尺寸图片。
+
+输入框旁的模型和思考强度菜单用于调整当前对话。模型列表中的每个标签都标注来源，包括最近使用和当前选择，如 `copilot · 模型名`、`codex · 模型名`、`zcode · 模型名`。来源优先使用网关提供的标记；缺失时采用完整模型 ID 的前缀，否则显示「来源未提供」。模型选择器将 **Magpie 标为网关**。
+
+同名模型来自不同来源时分别保留。只有网关明确标记为同一来源的完整 ID 与短别名才会合并展示；合并后仍保留别名解析，已有对话的模型选择继续有效。
+
+思考强度只提供模型实际公布的档位。每段对话分别记住模型和思考强度，切换时不会改写其他对话的选择。
+
+### 常用命令与快捷键
+
+以下组合键在 Windows 使用 `Ctrl`，在 macOS 使用 `Cmd`。完整列表见「设置 → 快捷键」。
+
+| 操作 | 方式 |
+| --- | --- |
+| 新建对话 | `/new` 或「新对话」 |
+| 压缩当前对话上下文 | `/compact` |
+| 打开设置 | `/settings` |
+| 选择命令、技能或 MCP | 输入 `/` 打开菜单 |
+| 搜索对话、模型、命令或设置页 | `Ctrl-K` / `Cmd-K` |
+| 换行 | `Shift-Enter` |
+| 粘贴图片 | `Ctrl-V` / `Cmd-V`；粘贴内容为单个图片路径时附加该文件 |
+
+回合进行中仍可继续输入：按 `Enter` 打开「引导 / 打断并发送」选择，按 `Ctrl-G` / `Cmd-G` 可直接引导，让模型在下一步前读取补充消息；未被读取的引导会回到输入框。按 `Ctrl-Enter` / `Cmd-Enter` 会停止当前回合并立即发送新消息。`Esc` 关闭选择并保留草稿。
+
+停止当前回合会取消它的工具和子代理，并终止它们启动的进程。已经收到的回复与已完成的工具结果仍保留，已有文件修改不会自动回滚。可在改动面板检查 diff；面板随文件系统变化更新 Git 状态。
+
+## 扩展与设置
+
+### magpie Library、技能与 MCP
+
+magpie Library 将全局规则、技能和 MCP 配置写入 MYCode 的数据目录：
+
+- **规则**：`~/.mycode/AGENTS.md`，作为所有项目的默认指令。
+- **技能**：`~/.mycode/skills/` 下的 `SKILL.md`，可从 `/` 菜单插入使用请求，也可在设置中逐个关闭。
+- **MCP**：`~/.mycode/mcp.json`，支持 stdio 和 Streamable HTTP，最多 64 台服务器。MYCode 没有内置网页搜索，联网检索通过配置的 MCP 服务提供，例如 anysearch。
+
+项目规则按顺序读取项目根目录下的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md` 和 `.agents/AGENTS.md`。项目规则覆盖全局默认，同一项目中后读文件覆盖前面文件的冲突项；提示词会标明来源路径，用户当前明确指令优先。
+
+### 子代理
+
+内置 `scout` 用于只读代码搜索和文档研究，不能运行命令或改文件。`artisan` 在独立 Git worktree 中执行有明确范围的修改，结束时回传结果与 diff，供主代理继续处理；子代理本身不会自动合回或提交。
+
+每轮最多并发 8 个子代理，可逐个停止。含修改、未跟踪文件或忽略文件的 worktree 会保留，并在结果中给出路径；取消不会丢弃已有改动。可在 `~/.mycode/agents/` 或项目的 `.mycode/agents/` 中添加自定义角色，在设置中管理角色。
+
+### CodeMode
+
+主回合向模型提供当前平台的 shell、`run_code` 和 `wait_code`。CodeMode 通过 `rquickjs 0.14` 嵌入 QuickJS，执行 JavaScript，以同步的 `call(name, args)` 组合已注册工具，例如 `call("read", { path: "src/lib.rs" })`。长任务返回 cell ID 后，用 `wait_code` 继续收集同一次执行的结果。
+
+脚本不提供 Node.js 或浏览器 API，也不支持 `async/await`、Promise 任务或模块导入；文件、命令和网络操作通过工具完成。内层工具返回的图片会作为原生图片内容块随 `run_code` / `wait_code` 传递给模型，经过脚本调用仍可保留。MCP 工具先通过 `search_tool` 或 `tool_search` 按需查询 schema，再通过 `use_tool` 调用。
+
+CodeMode 沿用工具的权限检查、取消与进度机制，并限制脚本资源和调用次数。具体协议、示例和限制见 [CodeMode 文档](wiki/architecture/code-mode-engine.md)。
+
+### 外观与网络
+
+设置支持简体中文与英文、深色与浅色主题、四档字号。网络代理默认跟随系统，也可手动填写 HTTP 或 SOCKS5 等代理地址。「测试」会请求 `https://www.google.com/generate_204` 并显示线路、状态码与耗时；它验证 MYCode 的网络设置，上游模型服务的连接仍由 magpie 配置。
+
+## 本地数据与权限
+
+默认数据目录为 `~/.mycode`。可在启动前将环境变量 `MYCODE_HOME` 设置为绝对路径，改用另一个数据目录；已有数据需自行迁移，并确认 magpie 写入的配置与 MYCode 读取的位置一致。
+
+| 路径 | 内容 |
+| --- | --- |
+| `settings.json` | 网关绑定与网关凭据、外观、网络代理、子代理和技能开关等设置 |
+| `ui.json` | 最近目录、对话与目录的关联、各对话的模型与思考强度、窗口状态 |
+| `sessions.db`、`sessions/` | 对话索引，以及按项目和会话组织的 JSONL 记录、附件载荷与压缩检查点 |
+| `AGENTS.md`、`skills/`、`mcp.json` | magpie Library 提供的规则、技能和 MCP 配置 |
+| `secrets.json` | MYCode 保存的 MCP 密钥；Library 的 `mcp.json` 也可能含服务凭据 |
+| `agents/`、`agent-worktrees/` | 自定义子代理角色及其工作目录 |
+| `mcp-results/`、`scratch/` | 被截断的 MCP 结果全文、未绑定项目时的工具工作目录 |
+| `bin/`、`update/` | Windows 自安装程序与自动更新暂存文件 |
+
+设置、密钥和界面状态使用严格 JSON。有效的 magpie 首次绑定可直接导入；损坏的配置会生成 `*.broken-*` 备份并尽量恢复有效字段，临时访问失败会报告错误，不会重置健康配置。分享诊断材料前，请先去除配置中的凭据。格式与恢复细节见 [配置说明](crates/mycode-config/README.md) 和 [运行时文档](wiki/architecture/runtime.md)。
+
+工具以当前用户权限运行，可以修改文件、启动程序和访问网络；有效的命令调用会直接执行。环境变量白名单是过滤机制，不构成系统沙箱。CodeMode 的资源限制和 worktree 隔离也不会改变这一权限边界。
+
+## 参与开发
+
+### 构建与运行
+
+需要 Rust stable 和平台的原生编译工具链。Windows 使用 MSVC，并安装带 C++ 工具的 Visual Studio Build Tools；macOS 需要 Xcode Command Line Tools。嵌入的 QuickJS 需要 C 编译器。开发与验证以 Windows x64 / ARM64、macOS Apple Silicon 三个原生平台为准。
 
 ```sh
 git clone https://github.com/MCapricorns/mycode.git
 cd mycode
-cargo build --release -p mycode-desktop
+cargo build --release -p mycode-desktop --locked
 ```
 
-从源码运行发布版时建议设置 `MYCODE_NO_INSTALL=1`，免得它把自己装进 `~/.mycode/bin`。
+开发时可在仓库根目录运行：
 
-## 快速开始
-
-1. 安装 [magpie](https://usemagpie.ai)，在本仓库运行 `magpie plugin add github:MCapricorns/magpie-mycode`（或在 magpie 的 Plugins 页填同样的 `github:` 地址）。
-2. 在 magpie 的 Agents 页给 **MCode** 选一个模型。MYCode 首次启动读取绑定；运行中改选模型后，在设置页刷新模型目录即可同步，无需重启。
-3. 打开一个目录。
-4. 在输入框里描述你要做的事。
-
-| 操作 | 方式 |
-| --- | --- |
-| 斜杠命令 | 输入 `/`：`/new`、`/compact`、`/settings`、已启用的技能和 MCP |
-| 引用文件 | 输入 `@` 搜索当前目录里的文件 |
-| 附加图片 | `Ctrl-V`（macOS `Cmd-V`）粘贴剪贴板图片；粘贴内容是单个图片路径时附加该文件 |
-| 切换模型 / 思考强度 | 输入框旁的两个菜单 |
-| 命令面板 | `Ctrl-K`（Windows）/ `Cmd-K`（macOS），搜索会话、模型、命令和设置页 |
-| 回合进行中继续输入 | `Enter` 打开「引导 / 打断并发送」选择；`Ctrl-G` 直接引导，模型在下一步之前读到这条消息，没读到就回到输入框；`Ctrl-Enter` 停止当前回合并立即发送；`Esc` 关闭选择并保留草稿。停止会连同正在跑的工具和它派生的进程一起结束。macOS 上用 `Cmd` |
-| 快捷键一览 | 「设置 → 快捷键」 |
-
-## 数据与配置
-
-未设置 `MYCODE_HOME` 时，数据在 `~/.mycode`：
-
-```text
-~/.mycode/
-├─ settings.json        magpie 网关绑定（含本地网关凭据）、外观、代理、子代理、技能开关
-├─ AGENTS.md            magpie Library 写入的全局规则（也可手写）
-├─ mcp.json             magpie Library 写入的 MCP 服务器
-├─ skills/              magpie Library 写入的技能
-├─ secrets.json         MCP 密钥
-├─ ui.json              最近目录、会话归属、每个会话的模型与思考档位、窗口状态
-├─ sessions.db          会话索引
-├─ sessions/            会话账本（JSONL、payloads、compaction.json）
-├─ agents/              自定义子代理角色
-├─ agent-worktrees/     子代理的临时 worktree
-├─ mcp-results/         被截断的 MCP 结果全文
-├─ scratch/             没有绑定目录时的工具工作目录
-├─ bin/                 自安装的 mycode-desktop
-└─ update/              自动更新暂存
+```sh
+cargo run -p mycode-desktop --locked
 ```
 
-设置、密钥和界面状态是严格 JSON。magpie 首次创建、尚无版本元数据的有效绑定会规范导入，不产生损坏备份；临时访问错误也不会重置配置。真正损坏的文档会备份到旁边的 `*.broken-*`，能救的字段会保留，救不回来的回到默认值。会话账本用 `sessions.db` 作为提交权威，事件写在 JSONL 里；崩溃留下的半截写入会被截掉，索引和日志对不上则明确报损坏，不猜。
+Debug 构建默认跳过 Windows 自安装。直接运行 release 构建时，可先设置 `MYCODE_NO_INSTALL=1`，保留程序在 `target/` 中运行：PowerShell 使用 `$env:MYCODE_NO_INSTALL = "1"`，macOS shell 使用 `export MYCODE_NO_INSTALL=1`。连接模型仍需要前述 magpie 配置。
 
-全局规则来自 `~/.mycode/AGENTS.md`，随后读取项目里的 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md` 和 `.agents/AGENTS.md`。提示词标明每份规则的来源路径；项目规则覆盖全局默认，同一项目按上述顺序由后面的文件覆盖前面的冲突。用户当前明确指令优先。
+### 检查与文档
 
-工具以当前用户权限运行。环境变量白名单只是过滤，不是沙箱。
+在仓库根目录按改动范围运行相关检查：
 
-## 架构
+```sh
+cargo test --workspace --locked
+cargo test -p mycode-desktop --features test-support --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
 
-工作区八个 crate 排成一条线性链：`mycode-desktop` → `mycode-frontend` → `mycode-app` → `mycode-agent` → `mycode-tools` → `mycode-providers` → `mycode-config` → `mycode-core`。每层只依赖下一层，并用 `pub use` 转发它的公共 API，跨层直连已全部消除。全局分配器（mimalloc）与 VC-LTL 链接在 `mycode-core` 声明一次，沿链覆盖所有二进制与测试目标。界面只通过 `CoreBridge` 发命令、收事件；模型请求、工具执行、账本写入和设置读取都在核心里完成。
+第二条命令启用桌面的 GPUI 布局测试支持。当前 [CI](.github/workflows/ci.yml) 在三个发布平台执行 workspace 测试，并在 Windows x64 执行 Clippy。
 
-一条消息先写进账本，再装配回合；回合中工具结果随到随提交；回复结束发 `ChatDone`。取消只停止当前回合，已经收到的思考、正文和完成的工具调用会保留在账本里。
+从源码入手时，界面在 `mycode-desktop`，界面状态与交互驱动在 `mycode-frontend`，回合编排、代理循环、工具、模型协议与配置分别在其余核心 crate 中。模块边界、消息流程和存储协议见 [运行时架构](wiki/architecture/runtime.md)；[交互式知识图谱](https://mcapricorns.github.io/mycode/wiki/index.html) 可搜索模块并查看源码，仓库内的 [wiki/index.html](wiki/index.html) 也可离线打开。
 
-<img src="wiki/images/architecture.svg" alt="八个 crate 的线性链：每层只依赖下一层" width="100%">
-
-<img src="wiki/images/message-flow.svg" alt="一条消息从输入到 ChatDone 的流程" width="100%">
-
-crate、模块、流程和数据落在哪里，见 [知识图谱](https://mcapricorns.github.io/mycode/wiki/index.html)（仓库内是 [wiki/index.html](wiki/index.html)，本地双击即可打开）：点节点看说明与源码，搜索框可过滤。
+修改 Wiki 的源文档或生成器时，按 [Wiki 构建说明](wiki/README.md) 更新并校验生成页面。提交贡献时请说明具体问题、修改后的行为和验证结果；问题与建议可通过 [GitHub Issues](https://github.com/MCapricorns/mycode/issues) 反馈。
 
 ## 社区
 

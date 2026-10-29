@@ -16,7 +16,7 @@
       "label": "code mode",
       "group": "module",
       "lane": 6,
-      "summary": "run_code 在 OS 线程执行 Rhai，Tokio dispatcher 顺序调用 registry 工具。超过等待时限或 yield_control 后脚本继续运行，由同 session 的 wait_code 收集或终止；取消与 drop 会结束 cell。",
+      "summary": "run_code 在 OS 线程内通过 QuickJS 执行 JavaScript，Tokio dispatcher 顺序调用 registry 工具，图片结果通过原生 image blocks 透传。超过等待时限或 yield_control 后脚本继续运行，由同 session 的 wait_code 收集或终止；取消与 drop 会结束 cell。",
       "links": ["tools", "agent", "tool-discovery", "code-progress"],
       "files": ["crates/mycode-tools/src/code_mode.rs", "crates/mycode-tools/src/code_mode/cell.rs", "crates/mycode-tools/src/code_mode/engine.rs", "crates/mycode-tools/src/code_mode/dispatch.rs"]
     },
@@ -380,7 +380,7 @@
       "label": "mycode-tools",
       "group": "crate",
       "lane": 6,
-      "summary": "工具 registry 与执行：文件读写编辑、find、grep、平台 shell，以及 Rhai run_code / wait_code。主回合的其余工具在脚本内通过同步 call(name, args) 到达同一份实现，文本结果读取 result.content[0].Text。",
+      "summary": "工具 registry 与执行：文件读写编辑、find、grep、平台 shell，以及 JavaScript run_code / wait_code。主回合的其余工具在脚本内通过同步 call(name, args) 到达同一份实现，文本结果读取 result.content[0].Text。",
       "links": [
         "agent",
         "core",
