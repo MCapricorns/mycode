@@ -7,6 +7,9 @@
     all(target_os = "macos", target_arch = "aarch64"),
 ))]
 
+#[cfg(windows)]
+mod windows;
+
 use mycode_providers::message::ContentBlock;
 
 use crate::builtin::shell::{ShellArgs, ShellMode, ShellTool};

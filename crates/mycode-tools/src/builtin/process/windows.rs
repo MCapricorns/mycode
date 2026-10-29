@@ -239,8 +239,8 @@ impl WindowsStdioProcess {
         use std::mem::size_of;
         use windows_sys::Win32::System::Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-            EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-            STARTUPINFOEXW, STARTUPINFOW,
+            EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION, STARTF_USESHOWWINDOW,
+            STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
         };
 
         let resolved = if program_has_directory(program) {
@@ -291,7 +291,10 @@ impl WindowsStdioProcess {
         let startup = STARTUPINFOEXW {
             StartupInfo: STARTUPINFOW {
                 cb: u32::try_from(size_of::<STARTUPINFOEXW>()).expect("STARTUPINFOEXW fits u32"),
-                dwFlags: STARTF_USESTDHANDLES,
+                // Background stdio hosts can allocate a console after startup
+                // (PowerShell does this before invoking native commands).
+                dwFlags: STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW,
+                wShowWindow: 0, // SW_HIDE, including a later AllocConsole.
                 hStdInput: inherited[0],
                 hStdOutput: inherited[1],
                 hStdError: inherited[2],

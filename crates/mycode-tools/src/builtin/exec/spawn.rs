@@ -532,10 +532,12 @@ fn spawn_program(
     lease: ExecutionLease,
     gate: &SpawnGate,
 ) -> Result<SpawnedProgram, SpawnFailure> {
+    #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let hide_window = prepared.hide_window;
     let (pinned, argv0, args, cwd, env) = prepared.into_spawn_parts();
     #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     let (child, process_tree, pinned) =
-        super::windows::spawn_windows(pinned, &argv0, &args, &cwd, &env, gate)?;
+        super::windows::spawn_windows(pinned, &argv0, &args, &cwd, &env, hide_window, gate)?;
     #[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
     let metadata = ExecutionMetadata::default();
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
