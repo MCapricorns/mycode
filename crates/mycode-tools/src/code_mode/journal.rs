@@ -133,7 +133,7 @@ impl ScriptJournal {
 
 /// blake3 of a value's canonical JSON form.
 ///
-/// Object keys are sorted at every level, because Rhai maps and serde maps
+/// Object keys are sorted at every level, because JavaScript objects and serde maps
 /// do not promise one insertion order; hashing them as-is would flag a
 /// deterministic replay as drift.
 #[must_use]

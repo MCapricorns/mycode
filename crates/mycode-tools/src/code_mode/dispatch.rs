@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use mycode_providers::message::ContentBlock;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -198,12 +199,10 @@ async fn handle(
                 ),
                 Err(_) => (true, None),
             };
-            lifecycle.finish(&outcome, is_error, diff);
-            let response = match outcome {
-                Ok(result) => json!({
-                    "content": serde_json::to_value(&result.content).unwrap_or(Value::Null),
-                    "is_error": result.is_error,
-                }),
+            let response = outcome.and_then(|result| project_result(cell, result));
+            lifecycle.finish(&response, is_error || response.is_err(), diff);
+            let response = match response {
+                Ok(response) => response,
                 Err(message) => json!({
                     "content": ToolResult::error(&message).content,
                     "is_error": true,
@@ -214,6 +213,31 @@ async fn handle(
             let _ = reply.send(HostReply::Value(response));
         }
     }
+}
+
+/// Returns image metadata only after the whole batch is admitted.
+/// Failed admission uses the same error result path as other dispatch refusals.
+fn project_result(cell: &ScriptCell, result: ToolResult) -> Result<Value, String> {
+    let mut images = Vec::new();
+    let content: Vec<Value> = result
+        .content
+        .into_iter()
+        .map(|block| {
+            if let ContentBlock::Image(image) = block {
+                let metadata = json!({ "Image": {
+                    "mime_type": image.mime_type,
+                    "data_hash": blake3::hash(image.data.as_bytes()).to_hex().to_string(),
+                    "delivery": "native image in run_code/wait_code result",
+                }});
+                images.push(image);
+                metadata
+            } else {
+                serde_json::to_value(block).unwrap_or(Value::Null)
+            }
+        })
+        .collect();
+    cell.queue_images(images)?;
+    Ok(json!({ "content": content, "is_error": result.is_error }))
 }
 
 /// Owns an inner call's identity and terminal event through cancellation
@@ -259,12 +283,7 @@ impl InnerCallLifecycle {
         self.cell.terminated() || self.cancel.is_cancelled()
     }
 
-    fn finish(
-        &mut self,
-        outcome: &Result<ToolResult, String>,
-        is_error: bool,
-        diff: Option<String>,
-    ) {
+    fn finish(&mut self, outcome: &Result<Value, String>, is_error: bool, diff: Option<String>) {
         // The legacy AgentHost API reports an independently stopped child
         // as `Execution("subagent <role> cancelled")`. Preserve that state
         // even though its parent cell's token was deliberately not cancelled.

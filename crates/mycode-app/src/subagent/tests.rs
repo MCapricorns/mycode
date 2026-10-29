@@ -180,7 +180,10 @@ fn artisan_on_windows_powershell_does_not_receive_bash() {
     assert!(prompt.contains("shell_tool: powershell"), "{prompt}");
     assert!(prompt.contains("Windows PowerShell 5.1"), "{prompt}");
     assert!(prompt.contains("Do not use `&&`"), "{prompt}");
-    assert!(prompt.contains("here-string"), "{prompt}");
+    assert!(
+        prompt.contains("@'...'@"),
+        "PowerShell keeps literal here-string syntax: {prompt}"
+    );
     assert!(prompt.contains("`powershell`"), "{prompt}");
     assert!(!prompt.contains("\n- bash:"), "{prompt}");
     assert!(!prompt.contains("translated"), "{prompt}");

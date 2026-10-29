@@ -1,4 +1,4 @@
-//! Code mode: `run_code` submits a model-written Rhai script that calls
+//! Code mode: `run_code` submits a model-written JavaScript script that calls
 //! registered tools as first-class functions; `wait_code` collects or stops
 //! a long-running cell.
 //!
@@ -37,8 +37,9 @@ use self::dispatch::DispatchContext;
 /// `run_code` arguments.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunCodeArgs {
-    /// Rhai source. Every tool is `call(name, args)`, where `name` is a
-    /// registry tool name; `complete(value)` ends the script.
+    /// JavaScript source only (no Node.js or browser APIs). Every tool is
+    /// `call(name, args)`, where `name` is a registry tool name;
+    /// `complete(value)` ends the script.
     pub script: String,
     /// How long to wait before returning a cell id (default 30000 ms, at
     /// most 300000 ms).
@@ -47,7 +48,7 @@ pub struct RunCodeArgs {
     pub max_output_bytes: Option<usize>,
 }
 
-/// Runs a model-written Rhai script against the turn's tool registry.
+/// Runs a model-written JavaScript script against the turn's tool registry.
 ///
 /// The registry is held weakly on purpose: the registry owns this tool, so a
 /// strong handle would make every turn's registry (and its tools, including
@@ -82,9 +83,11 @@ impl Tool for RunCodeTool {
     }
 
     fn description(&self) -> &str {
-        "Run a Rhai script that calls tools directly. `call(name, args)` invokes a registered \
+        "Run synchronous JavaScript in embedded QuickJS (JavaScript only; no Node.js, fs, \
+         require, fetch, network globals, imports or async/await). `call(name, args)` invokes a registered \
          tool and returns `{ content, is_error }`; read a text block as `result.content[0].Text`. \
-         Dispatch refusals also include the legacy `__error__` message. `log(text)` reports \
+         Images are emitted natively in run_code/wait_code results; the script receives image \
+         metadata without base64. Dispatch refusals also include the legacy `__error__` message. `log(text)` reports \
          progress; `complete(value)` ends the script and returns \
          value. `search_tool`, `use_tool`, `read`, `write`, `grep`, `find` and the rest are \
          ordinary tools reached through `call`. A long script returns a cell id to continue \
@@ -93,7 +96,7 @@ impl Tool for RunCodeTool {
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "run_code: run one Rhai script. Every tool is `call(name, args)` with a registry \
+            "run_code: run synchronous JavaScript only, with no Node.js, filesystem or network globals. Every tool is `call(name, args)` with a registry \
              tool name (MCP tools: search_tool then use_tool); `complete(value)` ends it, \
              `log(text)` reports progress. It is a long call that occupies its own cycle — use \
              yield_time_ms and wait_code for work that may outlast it.",
@@ -147,43 +150,14 @@ impl Tool for RunCodeTool {
         // A cell owns a child token: stopping it cancels detached inner work
         // without cancelling the turn or another cell.
         let dispatch_cancel = ctx.cancel.child_token();
-        let engine = engine::hardened_engine(
-            host_tx.clone(),
-            Arc::clone(&cell),
-            engine::EngineLimits {
-                cancel: dispatch_cancel.clone(),
-            },
-        );
+        let script_cancel = dispatch_cancel.clone();
         let script = args.script;
         let thread_cell = Arc::clone(&cell);
         let spawned = std::thread::Builder::new()
             .name(format!("code-mode-{}", cell.cell_id()))
             .spawn(move || {
-                let mut scope = rhai::Scope::new();
-                let outcome = match engine.eval_with_scope::<rhai::Dynamic>(&mut scope, &script) {
-                    Ok(value) => {
-                        if !value.is_unit() {
-                            thread_cell.push_output(&engine::render_value(&value));
-                        }
-                        ScriptOutcome::Completed
-                    }
-                    Err(error) => match *error {
-                        rhai::EvalAltResult::ErrorTerminated(value, _) => {
-                            if value
-                                .into_string()
-                                .is_ok_and(|text| text == engine::COMPLETE_MARKER)
-                            {
-                                ScriptOutcome::Completed
-                            } else {
-                                ScriptOutcome::Terminated
-                            }
-                        }
-                        other => ScriptOutcome::Failed(other.to_string()),
-                    },
-                };
+                let outcome = engine::evaluate(&script, host_tx, thread_cell, script_cancel);
                 let _ = done_tx.send(outcome);
-                // Drops the last sender: the dispatcher's receiver closes.
-                drop(host_tx);
             });
         if let Err(error) = spawned {
             cell.finish(ScriptOutcome::Failed(format!(
@@ -341,7 +315,8 @@ impl Tool for WaitCodeTool {
     fn description(&self) -> &str {
         "Wait for a run_code cell, or stop it. Pass the cell_id run_code returned; pass \
          terminate: true to stop a script that is still running. Returns the script's output \
-         when it finished."
+         when it finished. Pending inner-tool images are emitted natively once in the next \
+         run_code/wait_code result, including a running result."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
@@ -434,13 +409,21 @@ fn result_for(cell: &ScriptCell) -> ToolResult {
         "inner_calls": snapshot.inner_calls,
     });
     let text = snapshot.render();
-    match snapshot.phase {
+    let mut result = match snapshot.phase {
         CellPhase::Completed => ToolResult::text(text).with_details(details),
         CellPhase::Failed | CellPhase::Terminated => ToolResult::error(text).with_details(details),
         CellPhase::Running | CellPhase::Yielded => ToolResult::text(text).with_details(details),
-    }
+    };
+    result.content.extend(
+        cell.take_images()
+            .into_iter()
+            .map(mycode_providers::message::ContentBlock::Image),
+    );
+    result
 }
 
+#[cfg(test)]
+mod image_tests;
 #[cfg(test)]
 mod progress_tests;
 #[cfg(test)]

@@ -59,7 +59,7 @@ async fn cancelling_a_yielded_cell_stops_an_uncooperative_inner_tool() {
     let tool = RunCodeTool::new(Arc::clone(&registry), Arc::clone(&cells), "s".to_owned());
     let ctx = ToolCtx::new(std::env::temp_dir());
     let result = tool.execute_dyn(
-        json!({"script": "call(\"observed\", #{}); complete(\"should not run\");", "yield_time_ms": 30}),
+        json!({"script": "call(\"observed\", {}); complete(\"should not run\");", "yield_time_ms": 30}),
         &ctx,
         &mut ToolStream::closed(),
     ).await.unwrap();
@@ -87,7 +87,7 @@ async fn terminating_a_cell_cancels_its_inner_context_without_cancelling_the_tur
     let tool = RunCodeTool::new(Arc::clone(&registry), Arc::clone(&cells), "s".to_owned());
     let ctx = ToolCtx::new(std::env::temp_dir());
     tool.execute_dyn(
-        json!({"script": "call(\"observed\", #{});", "yield_time_ms": 30}),
+        json!({"script": "call(\"observed\", {});", "yield_time_ms": 30}),
         &ctx,
         &mut ToolStream::closed(),
     )
@@ -142,7 +142,7 @@ async fn cancelling_or_dropping_wait_code_stops_the_cell_it_is_collecting() {
         let run = RunCodeTool::new(Arc::clone(&registry), Arc::clone(&cells), "s".to_owned());
         let origin = ToolCtx::new(std::env::temp_dir());
         run.execute_dyn(
-            json!({"script": "call(\"observed\", #{});", "yield_time_ms": 30}),
+            json!({"script": "call(\"observed\", {});", "yield_time_ms": 30}),
             &origin,
             &mut ToolStream::closed(),
         )
@@ -192,7 +192,7 @@ async fn dropping_run_code_cancels_inner_work_and_settles_its_cell() {
     let result = tokio::time::timeout(
         Duration::from_millis(30),
         run.execute_dyn(
-            json!({"script": "call(\"observed\", #{});", "yield_time_ms": 5_000}),
+            json!({"script": "call(\"observed\", {});", "yield_time_ms": 5_000}),
             &ctx,
             &mut ToolStream::closed(),
         ),
@@ -218,7 +218,7 @@ async fn host_call_limits_and_complete_inside_a_function_end_evaluation() {
     let ctx = ToolCtx::new(std::env::temp_dir());
     let result = run
         .execute_dyn(
-            json!({"script": "for i in 0..257 { call(\"missing\", #{}); }"}),
+            json!({"script": "try { for (let i = 0; i < 257; i++) { call(\"missing\", {}); } } catch (_) { complete(\"escaped\"); }"}),
             &ctx,
             &mut ToolStream::closed(),
         )
@@ -230,7 +230,7 @@ async fn host_call_limits_and_complete_inside_a_function_end_evaluation() {
     );
     let result = run
         .execute_dyn(
-            json!({"script": "fn stop() { complete(\"done\"); } stop(); throw \"unreachable\";"}),
+            json!({"script": "function stop() { complete(\"done\"); } stop(); throw \"unreachable\";"}),
             &ctx,
             &mut ToolStream::closed(),
         )
@@ -274,7 +274,7 @@ async fn inner_dispatch_preserves_queued_progress_and_the_first_terminal() {
     let (mut out, mut updates) = ToolStream::channel();
     let result = tool
         .execute_dyn(
-            json!({"script": "let r = call(\"streaming\", #{}); complete(r);"}),
+            json!({"script": "let r = call(\"streaming\", {}); complete(r);"}),
             &ToolCtx::new(std::env::temp_dir()),
             &mut out,
         )
@@ -311,7 +311,7 @@ async fn dispatch_refusals_keep_legacy_error_and_the_tool_result_shape() {
     let tool = RunCodeTool::new(Arc::clone(&registry), cells, "s".to_owned());
     let result = tool
         .execute_dyn(
-            json!({"script": "let r = call(\"missing\", #{}); complete(r);"}),
+            json!({"script": "let r = call(\"missing\", {}); complete(r);"}),
             &ToolCtx::new(std::env::temp_dir()),
             &mut ToolStream::closed(),
         )
@@ -362,6 +362,43 @@ async fn yield_is_journalled_after_earlier_queued_logs() {
             (2, super::ScriptEventKind::Complete)
         ]
     );
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_cpu_only_javascript_and_releases_its_thread() {
+    let cell = CodeCells::new().create("cpu", 1024);
+    let cancel = CancellationToken::new();
+    let (host_tx, mut host_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    let thread_cell = Arc::clone(&cell);
+    let thread_cancel = cancel.clone();
+    let worker = std::thread::spawn(move || {
+        let outcome = super::engine::evaluate(
+            "call('started', {}); while (true) {}",
+            host_tx,
+            thread_cell,
+            thread_cancel,
+        );
+        let _ = done_tx.send(outcome);
+    });
+    let request = tokio::time::timeout(Duration::from_secs(1), host_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let super::dispatch::HostRequest::Call { reply, .. } = request else {
+        panic!("expected start barrier")
+    };
+    cancel.cancel();
+    reply
+        .send(super::dispatch::HostReply::Value(json!({})))
+        .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(1), done_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome, super::ScriptOutcome::Terminated);
+    assert!(cell.operations() < super::engine::MAX_OPERATIONS);
+    worker.join().unwrap();
 }
 
 #[test]

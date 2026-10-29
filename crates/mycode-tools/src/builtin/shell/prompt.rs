@@ -166,22 +166,9 @@ or Mach-O image runs directly, and a direct shebang wrapper runs its interpreter
 script path and `args`; batch files and a shebang `-c` are rejected. Output beyond 50 KiB \
 keeps its start and end. A non-zero exit is an error result carrying the exit code, not a \
 tool failure. Default timeout: 120 s (`timeout_secs` overrides). There is no permission \
-prompt, and file changes are not undone."
-    };
-}
-
-/// The escape hatch for rewrites `edit` cannot express, in each shell's idiom.
-macro_rules! powershell_bulk_edit {
-    () => {
-        " For a bulk or generated rewrite that `edit` cannot express, pipe a literal \
-here-string to Python (`@'...'@ | python -`)."
-    };
-}
-
-macro_rules! posix_bulk_edit {
-    () => {
-        " For a bulk or generated rewrite that `edit` cannot express, run Python (`python3` \
-or `python`) with a quoted heredoc."
+prompt, and file changes are not undone. For routine file/data transformations, use \
+`read`, `write`, `edit`, and in-process JavaScript when `run_code` is available. \
+Running the user's Python projects remains supported."
     };
 }
 
@@ -190,8 +177,7 @@ const POWERSHELL7_DESCRIPTION: &str = concat!(
 PowerShell, not bash or cmd: use cmdlets, pipelines, `$env:NAME`, and `2>$null`; `&&` and \
 `||` work. Do not send bash syntax such as `2>/dev/null`, `export`, or `<<` heredocs. Quote \
 paths that contain spaces. Output is captured as UTF-8.",
-    shared_description!(),
-    powershell_bulk_edit!()
+    shared_description!()
 );
 
 const POWERSHELL51_DESCRIPTION: &str = concat!(
@@ -200,32 +186,28 @@ Windows PowerShell, not bash, cmd, or PowerShell 7-only syntax: `&&`, `||`, and 
 operator are syntax errors, so chain with `;` and check `$LASTEXITCODE`. Use cmdlets, \
 `$env:NAME`, and `2>$null` instead of `2>/dev/null`. Quote paths that contain spaces. \
 Output is captured as UTF-8.",
-    shared_description!(),
-    powershell_bulk_edit!()
+    shared_description!()
 );
 
 const BASH_DESCRIPTION: &str = concat!(
     "Run a bash command (`bash -c`) and return its stdout and stderr. Use bash syntax: \
 pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`. The path separator is `/`; quote \
 paths that contain spaces.",
-    shared_description!(),
-    posix_bulk_edit!()
+    shared_description!()
 );
 
 const ZSH_DESCRIPTION: &str = concat!(
     "Run a zsh command (`zsh -c`) and return its stdout and stderr. Use zsh syntax: pipes, \
 `&&` / `||`, redirection, `$VAR`, and `$(...)`. The path separator is `/`; quote paths \
 that contain spaces.",
-    shared_description!(),
-    posix_bulk_edit!()
+    shared_description!()
 );
 
 const SH_DESCRIPTION: &str = concat!(
     "Run a POSIX sh command (`sh -c`) and return its stdout and stderr. Use POSIX syntax: \
 pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`; do not rely on bash arrays or \
 `[[ ]]`. The path separator is `/`; quote paths that contain spaces.",
-    shared_description!(),
-    posix_bulk_edit!()
+    shared_description!()
 );
 
 const CMD_DESCRIPTION: &str = concat!(

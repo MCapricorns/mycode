@@ -678,14 +678,14 @@ mod tests {
         // The current `run_code` arguments carry no `description`, so the
         // row target comes from the script's `call` literals: distinct
         // names in first-call order.
-        let args = json!({"script": "let a = call(\"read\", #{ path: \"x\" });\ncall(\"grep\", #{});\ncall(\"read\", #{});\ncomplete(a)"});
+        let args = json!({"script": "let a = call(\"read\", { path: \"x\" });\ncall(\"grep\", {});\ncall(\"read\", {});\ncomplete(a)"});
         assert_eq!(tool_target("run_code", &args), "read · grep");
         // A script with no literal call still names its first line, and a
         // longer name ending in `call` is not a host call.
         let args = json!({"script": "// setup\nlet total = 1 + 2;"});
         assert_eq!(tool_target("run_code", &args), "let total = 1 + 2;");
-        let args = json!({"script": "recall(\"read\", #{});"});
-        assert_eq!(tool_target("run_code", &args), "recall(\"read\", #{});");
+        let args = json!({"script": "recall(\"read\", {});"});
+        assert_eq!(tool_target("run_code", &args), "recall(\"read\", {});");
     }
 
     #[test]

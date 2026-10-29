@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use mycode_providers::message::BinaryData;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,8 +29,12 @@ pub const DEFAULT_YIELD_MS: u64 = 30_000;
 pub const MAX_YIELD_MS: u64 = 300_000;
 /// Default cap on logged/completed output, in bytes.
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 32 * 1024;
-/// Script-side `call()` budget, which stops `while true { call(…) }`.
+/// Script-side `call()` budget, which stops `while (true) { call(…) }`.
 pub const MAX_HOST_CALLS: u64 = 256;
+/// Native images one cell may retain between run/wait deliveries.
+pub const MAX_PENDING_IMAGES: usize = mycode_providers::MAX_ATTACHED_IMAGES;
+/// Aggregate base64 bytes retained outside the JavaScript heap.
+pub const MAX_PENDING_IMAGE_BYTES: usize = mycode_providers::MAX_MESSAGE_IMAGE_BASE64_BYTES;
 
 /// How many finished cells stay addressable by `wait_code`.
 const MAX_RETAINED_CELLS: usize = 32;
@@ -45,7 +50,7 @@ pub enum CellPhase {
     Yielded,
     /// The script finished normally.
     Completed,
-    /// The script failed (a Rhai error, an exhausted budget, a dead host).
+    /// The script failed (a JavaScript error, an exhausted budget, a dead host).
     Failed,
     /// The cell was terminated (user cancel, `terminate: true`).
     Terminated,
@@ -129,6 +134,9 @@ struct CellInner {
     truncated: bool,
     journal: ScriptJournal,
     inner_calls: Vec<InnerCallSummary>,
+    /// Native images awaiting delivery by the next run/wait result.
+    pending_images: Vec<BinaryData>,
+    pending_image_bytes: usize,
     next_seq: u64,
     calls: u64,
     operations: u64,
@@ -140,6 +148,35 @@ struct CellInner {
 }
 
 impl CellInner {
+    /// Admit a whole tool result atomically, preserving earlier pending images
+    /// if either limit would be exceeded.
+    fn queue_images(
+        &mut self,
+        images: Vec<BinaryData>,
+        max_count: usize,
+        max_bytes: usize,
+    ) -> Result<(), String> {
+        if images.len() > max_count.saturating_sub(self.pending_images.len()) {
+            return Err(format!(
+                "pending native image count limit exceeded (maximum {max_count} images); \
+                 no images from this tool result were queued"
+            ));
+        }
+        let mut bytes = self.pending_image_bytes;
+        for image in &images {
+            if image.data.len() > max_bytes.saturating_sub(bytes) {
+                return Err(format!(
+                    "pending native image byte limit exceeded (maximum {max_bytes} base64 bytes); \
+                     no images from this tool result were queued"
+                ));
+            }
+            bytes += image.data.len();
+        }
+        self.pending_images.extend(images);
+        self.pending_image_bytes = bytes;
+        Ok(())
+    }
+
     fn push_output(&mut self, text: &str, cap: usize) {
         if self.truncated {
             return;
@@ -197,6 +234,8 @@ impl ScriptCell {
                 truncated: false,
                 journal: ScriptJournal::new(),
                 inner_calls: Vec::new(),
+                pending_images: Vec::new(),
+                pending_image_bytes: 0,
                 next_seq: 0,
                 calls: 0,
                 operations: 0,
@@ -267,6 +306,22 @@ impl ScriptCell {
     /// Appends text to the model-visible output, truncating at the cap.
     pub fn push_output(&self, text: &str) {
         self.inner.write().push_output(text, self.max_output_bytes);
+    }
+
+    /// Queues all images from one inner tool result without copying base64
+    /// into script JSON. An over-budget batch is rejected in full.
+    pub(crate) fn queue_images(&self, images: Vec<BinaryData>) -> Result<(), String> {
+        self.inner
+            .write()
+            .queue_images(images, MAX_PENDING_IMAGES, MAX_PENDING_IMAGE_BYTES)
+    }
+
+    /// Moves pending images into one outer result, so subsequent waits do not
+    /// resend them. Images arriving later remain queued for the next wait.
+    pub(crate) fn take_images(&self) -> Vec<BinaryData> {
+        let mut inner = self.inner.write();
+        inner.pending_image_bytes = 0;
+        std::mem::take(&mut inner.pending_images)
     }
 
     /// Appends one journalled step under the sequence the script reserved.
@@ -472,7 +527,7 @@ pub struct CellSnapshot {
     pub output: String,
     /// `call()` count.
     pub calls: u64,
-    /// Rhai operations executed, as last reported by the engine.
+    /// QuickJS interrupt polls observed, as last reported by the engine.
     pub operations: u64,
     /// Journal so far.
     pub journal: ScriptJournal,
@@ -598,7 +653,72 @@ impl CodeCells {
 mod tests {
     use serde_json::json;
 
-    use super::{CellPhase, CodeCells, ScriptOutcome};
+    use super::{BinaryData, CellPhase, CodeCells, ScriptOutcome};
+
+    fn image(data: &str) -> BinaryData {
+        BinaryData {
+            data: data.to_owned(),
+            mime_type: "image/png".to_owned(),
+        }
+    }
+
+    #[test]
+    fn pending_images_enforce_count_limit_without_partial_batch_admission() {
+        let cell = CodeCells::new().create("s", 1024);
+        let accepted = vec![image("AAAA"); super::MAX_PENDING_IMAGES - 1];
+        cell.queue_images(accepted.clone()).unwrap();
+        let error = cell
+            .queue_images(vec![image("BBBB"), image("CCCC")])
+            .unwrap_err();
+        assert!(error.contains("pending native image count limit exceeded"));
+        assert_eq!(cell.inner.read().pending_images, accepted);
+        cell.queue_images(vec![image("DDDD")]).unwrap();
+        cell.queue_images(Vec::new()).unwrap();
+        assert!(cell.queue_images(vec![image("EEEE")]).is_err());
+        let mut expected = accepted;
+        expected.push(image("DDDD"));
+        assert_eq!(cell.take_images(), expected);
+        assert!(cell.take_images().is_empty());
+        cell.queue_images(vec![image("FFFF")]).unwrap();
+        assert_eq!(cell.take_images(), vec![image("FFFF")]);
+    }
+
+    #[test]
+    fn pending_images_enforce_aggregate_base64_bytes_and_reset_after_delivery() {
+        let cell = CodeCells::new().create("s", 1024);
+        // Small budgets exercise the production admission logic without
+        // allocating multi-megabyte base64 strings.
+        {
+            let mut inner = cell.inner.write();
+            inner.queue_images(vec![image("AAAA")], 4, 8).unwrap();
+            let error = inner
+                .queue_images(vec![image("BBBB"), image("CCCC")], 4, 8)
+                .unwrap_err();
+            assert!(error.contains("pending native image byte limit exceeded"));
+            assert!(error.contains("maximum 8 base64 bytes"));
+            assert_eq!(inner.pending_images, vec![image("AAAA")]);
+            assert_eq!(inner.pending_image_bytes, 4);
+            inner.queue_images(vec![image("DDDD")], 4, 8).unwrap();
+            assert!(inner.queue_images(vec![image("EEEE")], 4, 8).is_err());
+        }
+        cell.finish(ScriptOutcome::Failed("after images".to_owned()));
+        assert_eq!(cell.phase(), CellPhase::Failed);
+        assert_eq!(cell.take_images(), vec![image("AAAA"), image("DDDD")]);
+        assert!(cell.take_images().is_empty());
+        {
+            let mut inner = cell.inner.write();
+            assert_eq!(inner.pending_image_bytes, 0);
+            assert!(
+                inner
+                    .queue_images(vec![image("AAAAAAAAAAAA")], 4, 8)
+                    .is_err()
+            );
+            assert!(inner.pending_images.is_empty());
+            assert_eq!(inner.pending_image_bytes, 0);
+            inner.queue_images(vec![image("FFFFFFFF")], 4, 8).unwrap();
+        }
+        assert_eq!(cell.take_images(), vec![image("FFFFFFFF")]);
+    }
 
     #[test]
     fn output_is_capped_and_annotated() {
