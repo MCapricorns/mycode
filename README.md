@@ -14,7 +14,7 @@
 
 **打开项目，用自然语言读代码、修改文件、运行命令。**
 
-[下载](https://github.com/MCapricorns/mycode/releases/latest) · [快速开始](#快速开始) · [日常使用](#日常使用) · [扩展与设置](#扩展与设置) · [本地数据](#本地数据与权限) · [参与开发](#参与开发) · [知识图谱](https://mcapricorns.github.io/mycode/wiki/index.html) · [更新日志](CHANGELOG.md)
+[下载](https://github.com/MCapricorns/mycode/releases/latest) · [快速开始](#快速开始) · [日常使用](#日常使用) · [扩展与设置](#扩展与设置) · [本地数据](#本地数据与权限) · [参与开发](#参与开发) · [Wiki](https://mcapricorns.github.io/mycode/wiki/index.html) · [更新日志](CHANGELOG.md)
 
 </div>
 
@@ -98,7 +98,11 @@ xattr -d com.apple.quarantine /Applications/MYCode.app
 
 回合进行中仍可继续输入：按 `Enter` 打开「引导 / 打断并发送」选择，按 `Ctrl-G` / `Cmd-G` 可直接引导，让模型在下一步前读取补充消息；未被读取的引导会回到输入框。按 `Ctrl-Enter` / `Cmd-Enter` 会停止当前回合并立即发送新消息。`Esc` 关闭选择并保留草稿。
 
-停止当前回合会取消它的工具和子代理，并终止它们启动的进程。已经收到的回复与已完成的工具结果仍保留，已有文件修改不会自动回滚。可在改动面板检查 diff；面板随文件系统变化更新 Git 状态。
+对话末尾只显示「工作中」或「思考中」，具体命令、工具进度和结果在对应工具行查看。输入框旁的「停止」会取消当前回合的工具和子代理，并终止它们启动的进程。已经收到的回复与已完成的工具结果仍保留，已有文件修改不会自动回滚。可在改动面板检查 diff；面板随文件系统变化更新 Git 状态。
+
+对话跟随最新消息时，引导卡出现、输入框变高和继续输出都会保持滚动到底部。主动向上滚动查看历史后才暂停跟随；点击回到底部即可恢复。Windows 下的命令和 MCP 后台服务不会另开终端窗口，主动启动的图形应用仍按正常方式显示。
+
+历史用户消息下方始终显示「撤回并编辑」。点击后，对话回到这条消息发送之前，原文回填到输入框，修改后可以重新发送；第一条消息也可以撤回。运行中的任务需要先停止，按钮会保留并显示不可用原因。`rewind` 只改变对话历史，不恢复或删除工作区文件。
 
 ## 扩展与设置
 
@@ -114,15 +118,28 @@ magpie Library 将全局规则、技能和 MCP 配置写入 MYCode 的数据目�
 
 ### 子代理
 
-内置 `scout` 用于只读代码搜索和文档研究，不能运行命令或改文件。`artisan` 在独立 Git worktree 中执行有明确范围的修改，结束时回传结果与 diff，供主代理继续处理；子代理本身不会自动合回或提交。
+内置四种角色，可在 `~/.mycode/agents/` 或项目的 `.mycode/agents/` 中覆盖提示词或添加自定义角色，并在设置中管理：
 
-每轮最多并发 8 个子代理，可逐个停止。含修改、未跟踪文件或忽略文件的 worktree 会保留，并在结果中给出路径；取消不会丢弃已有改动。可在 `~/.mycode/agents/` 或项目的 `.mycode/agents/` 中添加自定义角色，在设置中管理角色。
+| 角色 | 用途 | 权限 |
+| --- | --- | --- |
+| `scout` | 查找代码、文档与证据 | 只读，不运行命令 |
+| `artisan` | 实施范围明确的修改，并完成相关验证 | 可修改文件，默认使用 Git worktree |
+| `sentinel` | 独立检查实现、调用方与回归风险 | 只读 |
+| `skeptic` | 针对一个明确的假设或结论寻找反例 | 只读 |
+
+`scout`、`sentinel` 和 `skeptic` 的只读边界不会因提示词覆盖而放宽。最多并发 8 个子代理；明确的 phase 和文件 / symbol scope 用于防止重复委派、重叠写入，scope 不构成权限沙箱。
+
+子代理面板保留运行状态、结果、错误和输出文件路径，可查看详情、复制结果或逐个停止。主代理可用 `agent_status` 查询、`agent_stop` 停止，或用 `agent_message` 在运行中补充指令。已完成的独立任务可基于明确的摘要、原结果和新指令启动新运行；这不是恢复原始模型会话。写入任务继续使用保留的原 worktree，已有改动不会从 HEAD 重建。已取消的任务不能直接续跑。运行记录仅在当前应用进程内保留，并有数量上限。
+
+`agent_workflow` 提供固定的 `research`、`code-review` 和 `migration` 流程。每个流程都要求独立的 `sentinel` 明确给出 `PASS` 才算成功；依赖失败时不会继续执行后续节点。`research` 和 `code-review` 等待流程结束再返回结果。review 未通过时，主代理可用 `revise` 将意见交回负责产出的节点，在同一 workflow 开启新一轮；原任务和结果仍保留，受影响的后续检查与独立验收会重新执行。`migration` 在写入任务完成后进入「等待整合」：主代理处理保留的 worktree 改动后，再显式恢复流程，执行整体验证与独立验收。
+
+子代理不会自动合回或提交 worktree。含修改、未跟踪文件或忽略文件的 worktree 会保留，并在结果中给出路径；取消时仍等待子进程退出和改动交接，不会提前释放写入范围或丢弃已有改动。长流程可通过 CodeMode 的 `wait_code` 继续收集同一次运行，不能把启动或等待状态当作已完成。
 
 ### CodeMode
 
 主回合向模型提供当前平台的 shell、`run_code` 和 `wait_code`。CodeMode 通过 `rquickjs 0.14` 嵌入 QuickJS，执行 JavaScript，以同步的 `call(name, args)` 组合已注册工具，例如 `call("read", { path: "src/lib.rs" })`。长任务返回 cell ID 后，用 `wait_code` 继续收集同一次执行的结果。
 
-脚本不提供 Node.js 或浏览器 API，也不支持 `async/await`、Promise 任务或模块导入；文件、命令和网络操作通过工具完成。内层工具返回的图片会作为原生图片内容块随 `run_code` / `wait_code` 传递给模型，经过脚本调用仍可保留。MCP 工具先通过 `search_tool` 或 `tool_search` 按需查询 schema，再通过 `use_tool` 调用。
+脚本不提供 Node.js 或浏览器 API，也不支持 `async/await`、Promise 任务或模块导入；文件、命令和网络操作通过工具完成。内置工具返回的原生图片会作为图片内容块随 `run_code` / `wait_code` 传递给模型，经过脚本调用仍可保留；当前 MCP 返回的图片与音频会转换为文字占位。MCP 工具先通过 `search_tool` 或 `tool_search` 按需查询 schema，再通过 `use_tool` 调用。
 
 CodeMode 沿用工具的权限检查、取消与进度机制，并限制脚本资源和调用次数。具体协议、示例和限制见 [CodeMode 文档](wiki/architecture/code-mode-engine.md)。
 
@@ -181,7 +198,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 第二条命令启用桌面的 GPUI 布局测试支持。当前 [CI](.github/workflows/ci.yml) 在三个发布平台执行 workspace 测试，并在 Windows x64 执行 Clippy。
 
-从源码入手时，界面在 `mycode-desktop`，界面状态与交互驱动在 `mycode-frontend`，回合编排、代理循环、工具、模型协议与配置分别在其余核心 crate 中。模块边界、消息流程和存储协议见 [运行时架构](wiki/architecture/runtime.md)；[交互式知识图谱](https://mcapricorns.github.io/mycode/wiki/index.html) 可搜索模块并查看源码，仓库内的 [wiki/index.html](wiki/index.html) 也可离线打开。
+从源码入手时，界面在 `mycode-desktop`，界面状态与交互驱动在 `mycode-frontend`，回合编排、代理循环、工具、模型协议与配置分别在其余核心 crate 中。模块边界、消息流程和存储协议见 [运行时架构](wiki/architecture/runtime.md)；[在线 Wiki](https://mcapricorns.github.io/mycode/wiki/index.html) 可搜索模块并查看源码，点击后直接进入静态页面。需要离线使用时，下载仓库后在浏览器打开本地 `wiki/index.html`。
 
 修改 Wiki 的源文档或生成器时，按 [Wiki 构建说明](wiki/README.md) 更新并校验生成页面。提交贡献时请说明具体问题、修改后的行为和验证结果；问题与建议可通过 [GitHub Issues](https://github.com/MCapricorns/mycode/issues) 反馈。
 
