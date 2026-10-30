@@ -47,7 +47,7 @@ bytes = "1.12.1"
 tokio-util = "0.7.20"
 # `join_all` over borrowed futures; already in the graph through reqwest.
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 # Global allocator for every binary and test target; declared once in mycode-core.
 mimalloc = "0.1.52"
 # MSVC builds link the OS-builtin CRT; declared once in mycode-core.
