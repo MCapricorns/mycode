@@ -1,12 +1,15 @@
 //! Host-side dispatch loop for one script cell.
 //!
-//! The script thread sends a [`HostRequest`] and parks on a synchronous
-//! reply channel; this loop runs on the caller's async runtime, prepares the
-//! tool context, executes the tool, journals the result, and answers. No
+//! The script thread sends [`HostRequest`]s over a channel. Read-only calls
+//! can run together; writes and other exclusive calls form ordered barriers.
+//! This loop prepares context, executes tools and journals their results. No
 //! `block_on` ever runs here: the core runtime is `new_current_thread`, so
 //! blocking it would stall every other task on the core thread.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
+
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::sync::Arc;
 
 use crate::core::message::ContentBlock;
@@ -26,7 +29,7 @@ use super::progress::{CodeModeProgress, InnerCallPhase};
 
 /// One request from the script thread.
 pub enum HostRequest {
-    /// `call(name, args)`; the script waits for [`HostReply`].
+    /// A blocking `call` or Promise-returning `callAsync`.
     Call {
         /// Journal sequence reserved by the script.
         seq: u64,
@@ -35,7 +38,7 @@ pub enum HostRequest {
         /// JSON arguments.
         args: Value,
         /// Answer channel. Sending or dropping it unblocks the script.
-        reply: std::sync::mpsc::Sender<HostReply>,
+        reply: std::sync::mpsc::Sender<(u64, HostReply)>,
     },
     /// `log(text)`; progress only, nothing to answer.
     Log {
@@ -95,28 +98,49 @@ pub(crate) async fn drive_cell(
     // is a cell-owned child token, never the parent turn's token.
     let _cancel_on_drop = base.cancel.clone().drop_guard();
     let drive = async {
+        let mut active = FuturesUnordered::new();
+        let mut queued = VecDeque::new();
+        let mut exclusive = false;
+        let mut receiving = true;
         loop {
+            while !exclusive {
+                let Some(request) = queued.front() else { break };
+                let parallel = match request {
+                    HostRequest::Call { name, args, .. } => registry
+                        .get(name)
+                        .is_some_and(|tool| tool.parallel_safe_call(args)),
+                    _ => true,
+                };
+                if !parallel && !active.is_empty() {
+                    break;
+                }
+                let request = queued.pop_front().expect("front exists");
+                if matches!(request, HostRequest::Call { .. }) {
+                    exclusive = !parallel;
+                    active.push(handle(&cell, &registry, &base, &progress, request));
+                } else {
+                    handle(&cell, &registry, &base, &progress, request).await;
+                }
+            }
             tokio::select! {
                 biased;
                 outcome = &mut done => {
-                    // Drain the script's queued tail before settling.
-                    drain_queued(&cell, &registry, &base, &progress, &mut host_rx).await;
+                    // An exception or explicit complete may leave async calls
+                    // pending. Cancel them before publishing the terminal cell;
+                    // never start queued side effects after the script ends.
+                    base.cancel.cancel();
+                    drop(active);
+                    queued.extend(std::iter::from_fn(|| host_rx.try_recv().ok()));
+                    drain_queued(&cell, &registry, &base, &progress, queued).await;
                     cell.finish(outcome.unwrap_or_else(|_| {
                         ScriptOutcome::Failed("the script thread ended without a result".to_owned())
                     }));
                     return;
                 }
-                request = host_rx.recv() => match request {
-                    Some(request) => handle(&cell, &registry, &base, &progress, request).await,
-                    None => {
-                        let outcome = (&mut done).await.unwrap_or_else(|_| {
-                            ScriptOutcome::Failed(
-                                "the script thread ended without a result".to_owned(),
-                            )
-                        });
-                        cell.finish(outcome);
-                        return;
-                    }
+                _ = active.next(), if !active.is_empty() => exclusive = false,
+                request = host_rx.recv(), if receiving => match request {
+                    Some(request) => queued.push_back(request),
+                    None => receiving = false,
                 },
             }
         }
@@ -132,19 +156,23 @@ pub(crate) async fn drive_cell(
     }
 }
 
-/// Handles requests the script queued before it ended.
-///
-/// A `Call` cannot be pending here — the script blocks on its reply — but if
-/// one is, it is answered with an abort instead of being dropped.
+/// Preserve tail logs and completion records while refusing unstarted calls.
 async fn drain_queued(
     cell: &Arc<ScriptCell>,
     registry: &Arc<ToolRegistry>,
     base: &DispatchContext,
     progress: &broadcast::Sender<String>,
-    host_rx: &mut mpsc::UnboundedReceiver<HostRequest>,
+    queued: VecDeque<HostRequest>,
 ) {
-    while let Ok(request) = host_rx.try_recv() {
-        handle(cell, registry, base, progress, request).await;
+    for request in queued {
+        if let HostRequest::Call { seq, reply, .. } = request {
+            let _ = reply.send((
+                seq,
+                HostReply::Abort("the script ended before this call started".into()),
+            ));
+        } else {
+            handle(cell, registry, base, progress, request).await;
+        }
     }
 }
 
@@ -226,7 +254,7 @@ async fn handle(
                 }),
             };
             cell.record(seq, ScriptEventKind::Call, &call_args, Some(&response));
-            let _ = reply.send(HostReply::Value(response));
+            let _ = reply.send((seq, HostReply::Value(response)));
         }
     }
 }

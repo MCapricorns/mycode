@@ -72,7 +72,12 @@ fn images(result: &ToolResult) -> Vec<&str> {
 
 #[tokio::test]
 async fn image_admission_errors_are_script_results_and_accepted_images_are_delivered_once() {
-    for fail_script in [false, true] {
+    for (fail_script, call) in [
+        (false, "call"),
+        (true, "call"),
+        (false, "await callAsync"),
+        (true, "await callAsync"),
+    ] {
         let cells = Arc::new(CodeCells::new());
         let registry = Arc::new(ToolRegistry::new());
         registry.register(Arc::new(ImagesTool));
@@ -85,10 +90,10 @@ async fn image_admission_errors_are_script_results_and_accepted_images_are_deliv
         };
         let script = format!(
             r#"
-const accepted = call("images", {{ images: ["AAAA", "BBBB", "CCCC"] }});
-const rejected = call("images", {{ images: ["DDDD", "EEEE"] }});
-const partial = call("images", {{ images: ["FFFF"], is_error: true }});
-const exhausted = call("images", {{ images: ["GGGG"], is_error: true }});
+const accepted = {call}("images", {{ images: ["AAAA", "BBBB", "CCCC"] }});
+const rejected = {call}("images", {{ images: ["DDDD", "EEEE"] }});
+const partial = {call}("images", {{ images: ["FFFF"], is_error: true }});
+const exhausted = {call}("images", {{ images: ["GGGG"], is_error: true }});
 log({{ accepted, rejected, partial, exhausted }});
 {ending}
 "#

@@ -73,7 +73,9 @@ MYCode 的「设置 → Magpie」显示网关连接和模型目录。修改 magp
 
 magpie Library 写入全局规则、技能和 MCP 配置。项目规则依次读取 `AGENTS.md`、`MYCODE.md`、`.mycode/agents.md`、`.agents/AGENTS.md`，项目规则覆盖全局默认，同一目录后读的规则覆盖前面的冲突项。用户明确指令优先。
 
-主代理直接调用平台 shell、`run_code` 和 `wait_code`。其余已注册工具通过 CodeMode 的同步 `call(name, args)` 调用。CodeMode 使用嵌入式 QuickJS，不提供 Node.js、浏览器 API、async/await 或 Promise 任务执行。它每个 cell 允许最多 256 次工具调用；长任务返回 cell ID 后，应继续收集同一次执行。
+主代理直接调用平台 shell、`run_code` 和 `wait_code`。其他工具可以在 CodeMode 的 JavaScript 脚本里调用：`await callAsync(name, args)` 等一个结果，`await Promise.all([...])` 同时等待独立的读取或搜索。旧的同步 `call(name, args)` 继续可用。写文件、shell 等独占操作仍按提交顺序单独运行。
+
+CodeMode 使用内置 QuickJS，支持顶层 `await` 和 Promise，没有 Node.js、浏览器 API 或 `fetch`。每次脚本最多调用 256 次工具。长任务返回 `cell_id` 后，用 `wait_code` 继续等待同一次执行；重新提交脚本会再做一遍。示例和错误处理见 [CodeMode 使用说明](wiki/architecture/code-mode-engine.md)。
 
 MYCode 没有内置网页搜索。配置 MCP 服务后，通过 `search_tool` / `tool_search` 发现 schema，再用 `use_tool` 调用。工具以当前用户权限运行；worktree 和脚本资源限制不构成操作系统沙箱。
 
@@ -86,11 +88,11 @@ MYCode 没有内置网页搜索。配置 MCP 服务后，通过 `search_tool` / 
 | sentinel | 独立审查实现、diff 和验收条件 | 只读，无 shell |
 | skeptic | 对明确的假设或结论寻找反例 | 只读，无 shell |
 
-角色可在全局 `~/.mycode/agents/` 或项目 `.mycode/agents/` 覆盖、扩展，并在设置中启停。内置只读角色不会因覆盖提示词而获得写入能力。普通 `agent` 调用顺序执行；固定 workflow 可以调度独立节点。没有全局 subagent 并发数量上限，但重叠的活跃写入 scope 会被拒绝。
+角色可在全局 `~/.mycode/agents/` 或项目 `.mycode/agents/` 覆盖、扩展，并在设置中启停。内置只读角色不会因覆盖提示词而获得写入能力。普通 `agent` 调用顺序执行；固定 workflow 可以调度独立节点。没有统一的子代理并发数量上限，但同时修改的路径或符号范围不能重叠。
 
-`agent_workflow` 提供 research、code-review 和 migration。流程需要独立 sentinel 验收；migration 的写入节点完成后等待主代理整合 worktree，再显式 resume。失败后可使用 revise 提交反馈并重跑受影响节点。子代理不会自动提交、合并或推送。
+`agent_workflow` 提供 research、code-review 和 migration 三种固定流程，最后由独立的 sentinel 检查结果。migration 的两个写入任务完成后，先等主代理整合 worktree，再用 resume 继续检查。需要返工时，用 revise 提交反馈，重新执行受影响的任务。子代理不会自动提交、合并或推送。
 
-结果、错误、产物路径和保留的 worktree 可跨回合查询。即使关闭全部角色，已有结果仍可通过 agent_status 检查，已有运行仍可通过 agent_stop 取消。agent_message 的完成后续接使用摘要启动新运行，不恢复原始模型会话；取消的任务不能续接。
+任务结束后，可以用 agent_status 查看结果、错误和文件路径；还在执行的任务可以用 agent_stop 停止。这两个工具在全部角色关闭后仍然可用。agent_message 能给任务补充说明；任务已完成时，需要提供摘要来启动后续工作。它不会恢复原来的模型会话，已取消的任务也不能续接。
 
 ## 本地数据
 
@@ -107,7 +109,7 @@ MYCode 没有内置网页搜索。配置 MCP 服务后，通过 `search_tool` / 
 | mcp-results/、scratch/ | 大型 MCP 结果与临时工作目录 |
 | bin/、update/ | Windows 安装和更新暂存 |
 
-配置采用严格 JSON。损坏的配置会生成备份并抢救可用字段；临时 I/O 错误不会重置健康文档。分享配置和诊断文件前请删除其中凭据。
+配置文件使用标准 JSON。文件损坏时会先备份，再尽量保留能读出的设置；临时读取失败不会清空正常配置。分享配置或诊断文件前，请删除密钥等凭据。
 
 ## 参与开发
 
@@ -143,7 +145,7 @@ python -B -m unittest discover -s wiki/tests -v
 
 CI 在 Windows x64、Windows ARM64、macOS Apple Silicon 原生运行测试，Windows x64 运行 Clippy。带 `[release]` 的 main 推送在全部检查与构建成功后发版。版本号由发布脚本统一更新两个 package，发布失败不会提前推进 main。
 
-模块职责、取消与数据约定见 [运行时架构](wiki/architecture/runtime.md)；脚本协议见 [CodeMode](wiki/architecture/code-mode-engine.md)；文档生成方式见 [Wiki 维护说明](wiki/README.md)。
+代码入口、消息处理和停止行为见 [MYCode 如何运行](wiki/architecture/runtime.md)；批量工具调用见 [CodeMode 使用说明](wiki/architecture/code-mode-engine.md)；测量结果见 [性能记录](wiki/memory-report.md)；更新文档的方法见 [Wiki 维护说明](wiki/README.md)。
 
 ## Contributors
 

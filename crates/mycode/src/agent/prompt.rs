@@ -29,12 +29,14 @@ fn tool_calling(tools: &ToolRegistry, code_mode: bool) -> String {
             "- Only names under Available tools are directly callable. Tools under \
 Tools inside run_code are called from JavaScript as `call(\"name\", { argument: value })`; \
 use their argument schemas below. `script` accepts JavaScript only. It runs in embedded \
-QuickJS, with no Node.js, require, fs, fetch, filesystem or network globals. No imports, \
-async/await or Promise job execution are supported.\n\
-- Batch related operations in one script; calls execute synchronously in order. \
+QuickJS with top-level await and Promises; no Node.js, require, fs, fetch, filesystem or network globals, or imports.\n\
+- Batch independent reads/searches with await Promise.all([...callAsync(name, args)]). \
+The host runs parallel-safe calls together; writes, shell commands and other exclusive calls run alone in submission order. \
+Use await callAsync(name, args) for dependent steps. Blocking call(name, args) remains available. \
 A `call` returns `{ content, is_error }`; text blocks use `result.content[0].Text`. Dispatch refusals also include `__error__`. \
 Inspect errors before continuing dependent work; \
-use `complete(value)` to return the result, `log(value)` for output and progress, and `budget()` to inspect remaining cell limits.\n\
+Await required work before `complete(value)`: it ends the script and cancels outstanding calls. \
+Use `log(value)` for output and progress, and `budget()` to inspect remaining cell limits.\n\
 - Use listed native names and schemas directly. When remote tools are available, \
 retrieve their schemas through the registered discovery tools before calling them.\n\
 - Scripts can reach only registered tools; they cannot add a shell or permissions.\n\
@@ -42,7 +44,7 @@ retrieve their schemas through the registered discovery tools before calling the
         );
         let _ = writeln!(
             rules,
-            "- Each cell permits at most {} `call` invocations; use `budget()` to check the remaining allowance.",
+            "- Each cell permits at most {} `call`/`callAsync` invocations combined; use `budget()` to check the remaining allowance.",
             crate::tools::code_mode::MAX_HOST_CALLS
         );
     }
@@ -241,7 +243,7 @@ mod tests {
         assert!(!direct.contains("pipe a literal here-string to `python`"));
         assert!(direct.contains("Inspect errors before continuing dependent work"));
         assert!(direct.contains(&format!(
-            "at most {} `call` invocations",
+            "at most {} `call`/`callAsync` invocations combined",
             crate::tools::code_mode::MAX_HOST_CALLS
         )));
     }
@@ -317,8 +319,9 @@ mod tests {
                 "unavailable capability {unavailable}:\n{prompt}"
             );
         }
-        assert!(prompt.contains("calls execute synchronously in order"));
-        assert!(prompt.contains("No imports, async/await or Promise job execution are supported"));
+        assert!(prompt.contains("await Promise.all"));
+        assert!(prompt.contains("exclusive calls run alone in submission order"));
+        assert!(prompt.contains("top-level await and Promises"));
         assert!(prompt.contains("Scripts can reach only registered tools"));
         assert!(prompt.contains("Use listed native names and schemas directly"));
         assert!(prompt.contains("retrieve their schemas through the registered discovery tools"));

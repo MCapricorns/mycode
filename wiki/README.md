@@ -1,22 +1,22 @@
-# Wiki 维护说明
+# 怎样阅读和更新 Wiki
 
-[在线 Wiki](https://mcapricorns.github.io/mycode/wiki/index.html) 提供模块图、运行时说明、CodeMode 协议和源码阅读。页面把图谱、两篇架构文档及相关源码内嵌到一个 HTML 文件，下载仓库后也能直接打开 wiki/index.html 离线阅读。
+[在线 Wiki](https://mcapricorns.github.io/mycode/wiki/index.html) 可以查看模块关系、开发说明和源码。下载仓库后，直接打开 wiki/index.html 也能阅读：页面已经包含两篇说明和图中列出的源码，不需要启动服务器。
 
-## 文档分工
+## 去哪里找信息
 
-| 文件 | 内容 |
+| 想了解什么 | 看这里 |
 | --- | --- |
-| [README](../README.md) | 安装、使用、配置、贡献者和开发入口 |
-| [运行时架构](architecture/runtime.md) | 两个 package、内部模块、回合、会话、子代理与取消 |
-| [CodeMode](architecture/code-mode-engine.md) | 同步脚本、工具返回、MCP、资源预算与收集协议 |
-| [性能与资源记录](memory-report.md) | 体积测量方法、性能证据和局部资源上限 |
-| graph.json | 图谱节点、关系、源码路径和稳定深链接 ID |
+| 安装、模型连接、日常操作、编译测试 | [项目 README](../README.md) |
+| 发消息后代码如何运行，数据存在哪里 | [MYCode 如何运行](architecture/runtime.md) |
+| 批量调用工具、async/await、并发、错误和停止 | [CodeMode 使用说明](architecture/code-mode-engine.md) |
+| 已测得的耗时、程序体积和资源限制 | [性能记录](memory-report.md) |
+| 每个模块的说明、源码入口和关联 | 在线页面的模块图；数据来自 graph.json |
 
-运行时 package 是 mycode，GPUI package 是 mycode-desktop。图谱中的 frontend、app、agent、tools、providers、config、core 是 mycode 内部模块。不要把模块重新写成独立 Cargo 依赖。
+项目只有 mycode 和 mycode-desktop 两个 Cargo package。frontend、app、agent、tools、providers、config、core 都在 mycode 内部。
 
-## 生成与检查
+## 改完内容后怎样生成页面
 
-仅需 Python 标准库，在仓库根目录执行：
+在仓库根目录执行，Python 标准库即可：
 
 ```sh
 python scripts/build_wiki.py
@@ -24,22 +24,26 @@ python scripts/build_wiki.py --check
 python -B -m unittest discover -s wiki/tests -v
 ```
 
-先更新文档和 graph.json，再运行生成器。源码有修改时也要重新生成，因为离线页面嵌入的是源码快照。不要手改 wiki/index.html 或生成的品牌素材。
+先修改 Markdown、graph.json 或源码，再生成页面。源码改动也要重新生成，因为页面内嵌的是生成时的文件内容。提交时一起提交 wiki/index.html；不要直接编辑它。
 
-生成器验证节点 ID、关系、分栏和源码路径；测试还检查离线章节链接、HTML 转义、脚本数据封装和品牌来源。页面能通过 --check 表示快照与当前输入一致，不等于 Rust 代码或 UI 已通过测试。
+--check 会检查页面是否与当前输入一致。测试会检查链接、HTML 转义、内嵌源码和图片来源。Rust 和桌面测试仍按 README 中的命令单独运行。
 
-## 页面来源
+## 哪个文件控制页面
 
-scripts/build_wiki.py 渲染受限 Markdown 并注入 scripts/wiki_shell.html。支持标题、段落、行内代码、代码块、链接、加粗、单层列表和表格。旧标题的独立空锚点用于深链接兼容，其他原始 HTML 会转义。
+- scripts/build_wiki.py：读取文档和源码，生成离线页面。
+- scripts/wiki_shell.html：页面布局、导航、搜索和源码窗口。
+- wiki/graph.json：模块名称、说明、关联和源码路径。
+- wiki/architecture/：在线页面中的两篇说明。
+- crates/mycode-desktop/assets/icon.svg：品牌图标原稿，生成器据此更新 Wiki 的 logo.svg 和 banner.svg。
 
-品牌标识来自 crates/mycode-desktop/assets/icon.svg。生成器同步 wiki/images/logo.svg 和 banner.svg；桌面 ICO、PNG、ICNS 由单独的图标脚本维护。
+Markdown 支持标题、段落、行内代码、代码块、链接、加粗、单层列表和表格。已有的独立空锚点用于保留旧链接，其余原始 HTML 会显示为文字。
 
-仓库根 index.html 跳转到 Wiki，.nojekyll 让 Pages 直接发布静态文件。现有发布来源为 main 分支根目录。
+根目录 index.html 会跳转到 Wiki。GitHub Pages 从 main 分支根目录发布这些静态文件。
 
-## 导航与兼容
+## 保留旧链接
 
-节点链接使用 #n=<id>，源码链接可附加 &f=<path>；文档使用 #v=architecture 或 #v=code-mode，章节附加 &s=<heading-id>。模块改名后保持节点 ID，并更新源码路径。旧 package 源码路径不再存在，新的链接应指向 crates/mycode/src/。
+模块链接采用 #n=<id>，源码可以再加 &f=<path>。两篇说明分别是 #v=architecture 和 #v=code-mode，章节再加 &s=<heading-id>。
 
-页面支持搜索、键盘聚焦、Enter/Space 打开节点、Escape 关闭源码窗口及深浅主题。小屏幕使用节点列表与详情视图。
+修改模块名称时保留节点 id；移动源码时更新 files 中的路径。改写章节标题时保留原有空锚点，这样别人保存的链接仍然能打开。
 
-文档以实现和测试为依据。报告验证时列出实际执行的命令与平台，不把测试文件的存在、旧截图或历史基准当作本次验证。
+文案先说明这个功能做什么，再说明怎么使用或去哪里改代码。命令、限制和行为以当前实现为准；历史性能结果标明版本和测量条件。

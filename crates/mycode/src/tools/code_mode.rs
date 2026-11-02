@@ -37,9 +37,9 @@ use self::dispatch::DispatchContext;
 /// `run_code` arguments.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RunCodeArgs {
-    /// JavaScript source only (no Node.js or browser APIs). Every tool is
-    /// `call(name, args)`, where `name` is a registry tool name;
-    /// `complete(value)` ends the script.
+    /// JavaScript source with top-level await and Promises (no Node.js or
+    /// browser APIs). Use `callAsync(name, args)` for concurrent tools or
+    /// blocking `call(name, args)`. `complete(value)` ends the script.
     pub script: String,
     /// How long to wait before returning a cell id (default 30000 ms, at
     /// most 300000 ms).
@@ -83,21 +83,24 @@ impl Tool for RunCodeTool {
     }
 
     fn description(&self) -> &str {
-        "Run synchronous JavaScript in embedded QuickJS (JavaScript only; no Node.js, fs, \
-         require, fetch, network globals, imports or async/await). `call(name, args)` invokes a registered \
-         tool and returns `{ content, is_error }`; read a text block as `result.content[0].Text`. \
+        "Run JavaScript in embedded QuickJS with top-level await and Promises (no Node.js, fs, \
+         require, fetch, network globals or imports). Use `await callAsync(name, args)` for a tool result \
+         or `await Promise.all([...])` for independent calls. Read-only calls can run together; exclusive \
+         tools run alone in submission order. Blocking `call(name, args)` remains supported. \
+         Both return `{ content, is_error }`; text is `result.content[0].Text`. \
          Images are emitted natively in run_code/wait_code results; the script receives image \
          metadata without base64. Dispatch refusals also include the legacy `__error__` message. `log(text)` reports \
          progress; `complete(value)` ends the script and returns \
-         value. Only tools present in this run's registry are reachable through `call`; \
+         value, cancelling outstanding calls; await required work first. Only registered tools are reachable; \
          the script cannot add capabilities. A long script returns a cell id to continue \
          with wait_code."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "run_code: run synchronous JavaScript only, with no Node.js, filesystem or network globals. Every tool is `call(name, args)` with a registry \
-             tool name from this run's catalog; `complete(value)` ends it, \
+            "run_code: JavaScript with await and Promises, no Node.js, filesystem or network globals. \
+             Use callAsync(name, args) and Promise.all for independent reads/searches; call(name, args) blocks. \
+             Only this run's registered tools are available. Await work before complete(value), which ends the script; \
              `log(text)` reports progress. It is a long call that occupies its own cycle — use \
              yield_time_ms and wait_code for work that may outlast it.",
         )
@@ -105,8 +108,8 @@ impl Tool for RunCodeTool {
 
     /// Code mode never runs beside another call: a script can perform any
     /// sequence of writes, and the dispatcher gives a non-parallel tool its
-    /// own batch in the model's order (`wiki/architecture/code-mode-engine.md`
-    /// §3.1).
+    /// own batch in the model's order. See the ordered-dispatch section in
+    /// `wiki/architecture/code-mode-engine.md`.
     fn parallel_safe(&self) -> bool {
         false
     }

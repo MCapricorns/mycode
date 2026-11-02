@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="MYCode 中文开发文档：运行时架构、代码模式、子代理工作流与可离线阅读的源码图谱。">
+<meta name="description" content="MYCode 开发文档：代码结构、工具脚本与并发、子代理流程，以及可离线阅读的源码。">
 <title>MYCode 文档 · 架构图谱</title>
 <link rel="icon" href="images/logo.svg" type="image/svg+xml">
 <style>
@@ -248,12 +248,12 @@ h1 { font-size: 26px; font-weight: 650; letter-spacing: -.025em; line-height: 1.
   <div class="workspace">
     <header class="topbar">
       <button class="control" id="menuToggle" aria-controls="sidebar" aria-expanded="false">目录</button>
-      <div class="breadcrumb">MYCode <span aria-hidden="true"> / </span><b id="breadcrumb">知识库</b></div>
+      <div class="breadcrumb">MYCode <span aria-hidden="true"> / </span><b id="breadcrumb">项目文档</b></div>
       <div class="top-actions"><button class="control" id="themeToggle" aria-label="切换为深色主题">深色</button><a class="control" id="repoLink" href="https://github.com/MCapricorns/mycode">项目仓库 ↗</a></div>
     </header>
     <main class="sheet-main" id="main" tabindex="-1">
       <div id="graphView">
-        <div class="page-header"><div><h1>架构图谱</h1><p>从一个模块，读懂 MYCode 的运行路径。</p></div><div class="view-switch" role="group" aria-label="图谱显示方式"><button id="graphMode" aria-pressed="true">图谱</button><button id="listMode" aria-pressed="false">列表</button></div></div>
+        <div class="page-header"><div><h1>架构图谱</h1><p>选择一个模块，查看它负责什么、对应哪些源码。</p></div><div class="view-switch" role="group" aria-label="图谱显示方式"><button id="graphMode" aria-pressed="true">图谱</button><button id="listMode" aria-pressed="false">列表</button></div></div>
         <div class="explorer-toolbar"><div class="search-box"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="m12 12 5 5"/></svg><input id="search" type="search" aria-label="搜索节点、描述或源码路径" placeholder="搜索模块、工具或源码路径" autocomplete="off" spellcheck="false"><span class="shortcut" aria-hidden="true">/</span></div><span id="searchStatus" role="status" aria-live="polite"></span></div>
         <div class="explorer-grid">
           <section class="graph-panel" aria-label="架构浏览器">
@@ -536,7 +536,7 @@ function setView(view) {
   $("graphView").hidden = currentView !== "graph"; $("docView").hidden = currentView === "graph";
   document.querySelectorAll("[data-view]").forEach((link) => { if (link.dataset.view === currentView) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); });
   const title = currentView === "graph" ? "架构图谱" : DOCS[currentView].title;
-  $("breadcrumb").textContent = currentView === "graph" ? "知识库" : currentView === "architecture" ? "运行时架构" : "代码模式";
+  $("breadcrumb").textContent = currentView === "graph" ? "项目文档" : currentView === "architecture" ? "MYCode 如何运行" : "CodeMode 使用说明";
   document.title = "MYCode 文档 · " + title;
   if (DOCS[currentView]) {
     const doc = DOCS[currentView]; $("document").innerHTML = doc.html;

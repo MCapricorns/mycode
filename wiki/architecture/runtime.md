@@ -1,150 +1,139 @@
 <a id="runtime-architecture"></a>
 
-# 运行时架构
+# MYCode 如何运行
 
-MYCode 将模型任务、工具执行、会话存储与桌面渲染分开。工作区只有两个 Cargo package：
-
-```text
-mycode-desktop
-└── mycode
-    ├── frontend   presentation state and interaction logic
-    ├── app        application services and orchestration
-    ├── agent      model loop and session ledger
-    ├── tools      tools, processes and CodeMode
-    ├── providers  model catalog, transport and wire protocols
-    ├── config     settings, instructions and roles
-    └── core       shared messages, events and contracts
-```
-
-内部模块按职责组织，调用者直接导入所属模块。旧的八包链式转导出已经移除；存储格式、工具名称、会话 ID、更新入口和平台支持保持兼容。
+MYCode 的工作分成两部分：mycode 负责模型、工具和数据，mycode-desktop 负责窗口和用户交互。开发时，改模型请求、文件工具或会话存储看前者；改布局、键盘、剪贴板看后者。
 
 <a id="crate-boundaries"></a>
 
-## 包与模块边界
+## 代码放在哪里
 
-| 位置 | 职责 | 主要入口 |
+| 目录 | 负责什么 | 常用入口 |
 | --- | --- | --- |
-| mycode-desktop | GPUI 窗口、布局、输入、剪贴板和平台集成 | main.rs、workspace.rs、ui.rs |
-| mycode::frontend | 视图模型、动作归约、命令驱动、翻译、Git 状态 | frontend/driver.rs、frontend/view_model.rs |
-| mycode::app | 核心线程、回合装配、子代理、MCP、更新 | app.rs 的 CoreBridge |
-| mycode::agent | 模型与工具循环、提示装配、会话账本 | agent.rs、agent/turn.rs、agent/session.rs |
-| mycode::tools | 工具协议、注册表、文件与命令工具、CodeMode | tools/registry.rs、tools/builtin.rs |
-| mycode::providers | 模型目录、传输、三种流协议适配 | providers.rs、providers/transport.rs |
-| mycode::config | 数据目录、受管配置事务、规则、技能、角色发现 | config/home.rs、config/resources.rs |
-| mycode::core | 共享消息、事件、附件、provider 接口 | core/message.rs、core/provider.rs |
+| crates/mycode-desktop | 打开窗口，显示对话和设置，处理键盘与剪贴板 | src/main.rs、workspace.rs、ui.rs |
+| crates/mycode/src/frontend | 保存界面当前状态，把用户操作交给后台，把后台结果更新到界面 | driver.rs、view_model.rs |
+| crates/mycode/src/app | 连接各项功能：发消息、压缩上下文、调用 MCP、管理子代理和更新 | app.rs 中的 CoreBridge |
+| crates/mycode/src/agent | 反复请求模型、执行工具、保存会话记录 | agent.rs、agent/turn.rs、agent/session.rs |
+| crates/mycode/src/tools | 读取、搜索、编辑文件，运行命令和 CodeMode 脚本 | registry.rs、builtin.rs、code_mode.rs |
+| crates/mycode/src/providers | 转换不同模型 API 的请求和流式回复 | providers.rs、transport.rs |
+| crates/mycode/src/config | 读取和保存设置，发现规则、技能和角色 | home.rs、settings.rs、resources.rs |
+| crates/mycode/src/core | 各模块共用的消息、事件、附件和接口 | message.rs、provider.rs、attachments.rs |
 
-运行时不依赖 GPUI。全局 mimalloc 分配器与 Windows CRT 链接声明位于 mycode 的 lib.rs；桌面复用同一声明。合并 package 消除了中间依赖边和重复 manifest 声明，不能单凭 package 数推断 binary 或 RSS 的变化，测量方式见[性能与资源记录](../memory-report.md)。
+frontend、app 等是 mycode 内部模块，不是独立的 Cargo package。mycode 不依赖 GPUI，因此多数业务逻辑可以直接测试。mimalloc 分配器和 Windows CRT 链接声明只在 mycode/src/lib.rs 中设置一次。
 
 <a id="a-chat-turn"></a>
 
-## 一次对话回合
+## 从按下发送到收到回复
 
-1. 桌面把输入转换为 frontend action，driver 向 CoreBridge 发送命令。
-2. app 的核心线程使用 current-thread Tokio runtime 处理会话与后台任务。保存用户消息后，回合读取当前 durable head。
-3. app 装配模型路由、指令资源、角色目录、工具注册表和取消令牌。请求通过 magpie 网关发往选定的模型来源。
-4. agent 消费 provider stream，累积文本、思考与工具调用，完成参数后按工具的并行声明分批执行。
-5. tools 对参数与执行上下文做检查，发布进度并返回结果。agent 将结果加入下一次模型请求，直至最终答复或取消。
-6. app 将提交事件投影为前端数据，frontend 更新视图模型，desktop 渲染变化。
+1. 桌面读取草稿和附件，将“发送消息”交给 frontend driver。
+2. driver 通过 CoreBridge 把命令发送给后台线程。后台先保存用户消息，再准备模型、项目规则和可用工具。
+3. 请求经本机 magpie 网关发往选定的模型服务。provider 模块将不同 API 的回复转成同一套消息格式。
+4. 如果模型要求调用工具，agent 执行工具，把结果加入对话，再请求模型。这个循环持续到模型答完或用户停止。
+5. 后台不断把文本、工具进度和已保存的消息发给 frontend。desktop 根据更新后的状态刷新窗口。
 
-CoreBridge 的命令与事件 channel 不阻塞发送端，避免 UI 停顿卡死核心线程。附件、单条事件、驻留会话和 CodeMode 各自有局部上限；这些限制不是整个进程的总内存预算。
+后台使用 current-thread Tokio runtime。网络和异步等待不会阻塞界面线程；CodeMode 的 JavaScript 另有执行线程。文件操作中的阻塞工作交给专门的工作线程。
 
 <a id="progress-to-the-interface"></a>
 
-## 流式显示与进度
+## 为什么回复能逐步显示
 
-文本与思考 delta 先进入短帧队列，默认每 64 ms 应用一批。普通帧按字符数和 delta 数限流，较大积压直接追赶；失败和取消会刷新已经收到的部分内容并尽快结束状态。字符预算检查遇到阈值即停止，不重复扫描整段大型回复。工具启动与结果保持顺序，避免一帧中完全看不到正在执行的阶段。
+模型发来的小段文本先短暂排队，默认每 64 ms 合并一批交给界面，避免每个字符都触发刷新。积压很多时会加快处理；失败或取消时，会先显示已经收到的内容再结束状态。工具开始和结束事件保持顺序。
 
-CodeMode 用 code_mode|JSON 封装内部调用身份，子代理用 agent_state|JSON 发布结构化快照。实时消息与结果 details 都能补齐状态，账本里的 ConversationEntry 保留同一结构用于历史重放。流程 revision 防止旧快照覆盖返工后的新状态。
-
-Markdown 缓存共享解析后的 block 数组；文本改变才重新解析。拖入图片与粘贴图片路径使用同一个大小、格式检查入口，避免两处规则漂移。
+Markdown 解析结果会缓存，文本不变时直接复用。CodeMode 每个内部调用都有自己的编号，界面可以分别显示读文件、搜索和子代理的进度。重新打开历史对话时，保存的工具结果也能恢复这些显示。
 
 <a id="sessions-and-worktrees"></a>
 
-## 会话、分支与文件
+## 对话记录与项目文件是两回事
 
-sessions.db 保存会话索引，sessions/ 保存按项目、会话和分支组织的事件记录、附件及压缩检查点。分支命令携带 expected head，提交与重放保留明确的事件顺序；账本恢复由 agent::session 处理，不使用配置文件的重置策略。
+sessions.db 保存会话索引和已提交记录的位置，sessions/ 保存消息正文、附件和上下文摘要。启动或打开会话时，MYCode 会核对数据库和日志；未完成的尾部写入不会直接当成有效消息使用，损坏会报告出来。
 
-「撤回并编辑」回到目标消息之前，改变的是对话分支。它不修改 Git、不删除工作区文件，也不撤销工具已经产生的副作用。停止后的下一轮应先检查现有文件与可用结果，再完成剩余任务。
+「撤回并编辑」会从目标消息之前另开一条对话分支。它只改变后续送给模型的对话，不执行 Git 回退，也不会撤销模型已经修改的文件。停止后继续任务时，应先查看当前文件和已完成的工具结果。
 
-写入子代理通常在独立 Git worktree 中工作。含修改、未跟踪文件或忽略文件的 checkout 会保留，结果给出路径。主代理负责检查和整合，不会发生自动 merge、commit 或 push。
+会话提交带有 expected head，即调用者认为的“最后一条已保存记录”。如果会话已经变化，旧请求不能悄悄覆盖新记录。
+
+写代码的子代理通常使用独立 Git worktree。任务结束后，含修改、未跟踪文件或忽略文件的目录会保留，并在结果中给出路径。主代理负责检查和整合；子代理不会自行 merge、commit 或 push。
 
 <a id="subagent-orchestration"></a>
 
-## 子代理编排
+## 子代理怎么分工
 
-角色来自内置 Markdown、全局 agents/ 和项目 .mycode/agents/，设置控制启停与模型覆盖。scout、sentinel、skeptic 的只读边界由工具过滤实现，不能通过角色文本放宽。无 shell 的审查角色只能检查给定 diff、源码和执行证据；需要运行的检查必须由父代理提供。
+| 角色 | 做什么 | 可以修改文件吗 |
+| --- | --- | --- |
+| scout | 查找代码、文档和事实，附上位置或链接 | 不可以，也没有 shell |
+| artisan | 完成明确范围的修改并运行验证 | 可以，默认在独立 worktree 中工作 |
+| sentinel | 检查改动是否满足要求，报告具体缺陷 | 不可以，也没有 shell |
+| skeptic | 检查一个说法的依据，寻找反例 | 不可以，也没有 shell |
 
-| 角色 | 独立任务 |
+角色提示来自内置 Markdown、全局 agents/ 和项目 .mycode/agents/。设置可以启停角色和指定模型。修改提示词不能给只读角色增加写入权限。需要执行命令的审查，必须由有执行权限的代理提供结果。
+
+普通 agent 调用按顺序执行；固定 workflow 可以同时运行互不依赖的节点。CodeMode 的 callAsync 也遵守工具的并发声明，不会把普通 agent 调用强行并发。活跃写入任务的路径或符号范围不能重叠；这用于避免任务互相覆盖，不是操作系统沙箱。
+
+agent_status 用于查看进度和结果，agent_stop 用于停止任务。关闭全部角色后，这两个工具仍可管理已有任务。agent_message 可以给运行中的任务补充说明；任务结束后，必须用摘要明确发起续接。续接会创建新的模型运行，写入任务复用原 worktree；已取消的任务不能续接。
+
+### 固定工作流程
+
+| 流程 | 执行顺序 |
 | --- | --- |
-| scout | 检索一个有边界的问题，提供路径、行号或 URL |
-| artisan | 在明确范围中实施并验证改动 |
-| sentinel | 检查具体产物与要求，报告可复现缺陷或明确验收 |
-| skeptic | 反驳或限定一个明确的假设 |
+| research | 同时收集三个方向的证据，合成结果，再由 sentinel 验收 |
+| code-review | sentinel 审查指定改动，再由另一位 sentinel 验收审查报告 |
+| migration | 两个 artisan 各做一部分，等待主代理整合，再运行检查和 sentinel 验收 |
 
-普通 agent 调用由 dispatcher 顺序执行，CodeMode 的 call 也同步等待。固定 workflow 可以并行调度独立节点。没有全局并发数量上限；phase_id 防止重复阶段，scope.paths / scope.symbols 防止活跃写入任务争用。scope 用于协调，不是权限沙箱。
+最终验收报告的最后一行必须精确为 WORKFLOW_ACCEPTANCE: PASS。对于 code-review，“审查任务完成”可以是已找到并说明缺陷，并不表示被审代码没有问题。
 
-agent_status 查询保留结果，agent_stop 请求取消，即使所有角色已禁用，这两个控制入口仍可使用。禁用角色阻止新委派与续接。agent_message 对运行中的任务追加引导，对已完成的独立任务用明确摘要创建新运行；写入任务复用原 worktree，不从 HEAD 重建，不支持恢复完整模型会话。
+migration 返回 waiting_integration 时，工作还没完成。主代理需要先检查并整合 worktree，再显式调用 resume 或 accept；后续检查针对的是整合后的父目录。依赖任务失败或取消时，不会继续启动下游任务。
 
-### 固定流程
+### 需要返工时
 
-| 流程 | 节点与完成条件 |
-| --- | --- |
-| research | 三个独立证据方向 → 合成 → sentinel 验收 |
-| code-review | sentinel 审查具体目标 → 独立 sentinel 验收报告 |
-| migration | 两个独立 artisan 切片 → 等待人工整合 → artisan gate → sentinel 验收 |
+revise 接收 workflow id、node_id、feedback 和 expected_revision。它会重新执行指定节点以及受影响的后续节点，保留旧报告和修改目录。revision 是返工轮次编号，用于避免迟到的旧进度覆盖新结果。
 
-所有流程要求独立验收的最后一行精确为 WORKFLOW_ACCEPTANCE: PASS。code-review 找到缺陷可以意味着 review 任务成功，不意味着被审代码已正确。缺少必要的 diff 或执行证据必须说明，不能将“没有发现问题”当成验收。
-
-migration 的 waiting_integration 是中间状态。主代理整合保留的 worktree 后，显式 resume 或 accept，后续 gate 与验收才检查实际父目录。依赖失败或取消不会启动新的下游工作。
-
-### 显式返工
-
-revise 接收 workflow id、node_id、feedback、expected_revision，在原流程中建立新 revision。修改节点及受影响的依赖重新执行，旧结果和产物保留。写入节点复用原 checkout，必要时再次等待人工整合；取消的流程不能复活，未收尾的工作不能提前返工。
-
-每个会话在进程内最多保留 128 条运行记录与 32 个 workflow。完整报告另写入 agent-results/。启动回执、running 状态和 CodeMode yield 都不是完成；父代理必须收集终态与实际产物。
+每个会话在内存中最多保留 128 条子代理运行记录和 32 个 workflow，完整报告另存到 agent-results/。收到启动编号、running 状态或 CodeMode 的 yielded 状态，都需要继续收集到任务结束。
 
 <a id="progressive-mcp"></a>
 
-## MCP 与工具暴露
+## MCP 什么时候可用
 
-MCP 连接池在后台握手。首个模型请求不等待全部服务器；发现结果会标明连接中或失败，不能把连接中误判为空目录。内置工具 schema 放入提示，远端 schema 按需通过 search_tool / tool_search 加载，然后用 use_tool 的 name 与 arguments 调用。
+MCP 服务在后台连接，支持标准输入输出和 Streamable HTTP。第一轮模型请求不用等所有服务连接完成；工具查询会说明某个服务仍在连接或已经失败。
 
-主回合直接暴露平台 shell、run_code、wait_code，其余能力通过同步 call 到达同一注册表。只读子代理只收到 readOnlyHint 为真的 MCP 工具。注册表存在什么能力，提示才应描述什么能力；脚本不能自行补出 shell 或写入权限。
+模型先用 search_tool 或 tool_search 查看工具名称与参数，再用 use_tool 调用。内置工具说明直接放入提示，MCP 工具的完整 schema 按需查询，避免每轮请求都附上整个远端工具目录。
 
-详细协议、图片交付与资源预算见 [CodeMode](code-mode-engine.md#model-contract)。
+主回合直接看到平台 shell、run_code、wait_code，其他工具通过脚本里的 call 或 callAsync 调用。read、find、grep 和声明只读的 MCP 调用可以通过 Promise.all 并发。只读子代理也只能获得声明为只读的 MCP 工具。
+
+脚本示例和完整调用规则见 [CodeMode](code-mode-engine.md#model-contract)。
 
 <a id="settings-and-prompt-resources"></a>
 
-## 设置与提示资源
+## 设置、规则和技能从哪里来
 
-HomeLayout 解析 MYCODE_HOME 或默认 ~/.mycode。settings.json 和 secrets.json 使用受管文件事务及 revision compare-and-swap；ui.json 使用最后写入者覆盖。合法 magpie 首次绑定可导入，损坏文档先备份再抢救有效字段。临时 I/O 错误不移动或清空健康文件。
+默认数据目录是 ~/.mycode，可以在启动前用绝对路径 MYCODE_HOME 改写。settings.json 保存主要设置，ui.json 保存窗口、项目和界面选择，secrets.json 保存应用管理的 MCP 密钥。
 
-规则先读取全局 AGENTS.md，再读取项目 AGENTS.md、MYCODE.md、.mycode/agents.md、.agents/AGENTS.md。每段标注来源；项目覆盖全局，同目录后读规则覆盖先读规则，用户明确指令优先。提示要求修改文件前读取适用的嵌套规则。
+保存主要设置和密钥时，会检查文件版本，防止旧编辑覆盖外部修改。配置文件损坏时先备份，再尝试保留可用字段；临时读取错误不会把健康文件清空。ui.json 的界面状态采用最后一次写入的内容。
 
-技能目录来自 magpie Library 的 skills/。每次提示构造重新读取规则，关闭的技能在目录上限计算前剔除。主代理与子代理使用相同的资源、技能和 MCP 调用约定，角色权限仍由注册表控制。
+规则读取顺序是：全局 AGENTS.md，然后是项目 AGENTS.md、MYCODE.md、.mycode/agents.md、.agents/AGENTS.md。项目规则覆盖全局规则，同目录后读的规则覆盖前面的冲突项，用户明确要求优先。修改子目录文件前，还应读取适用的嵌套规则。
+
+magpie Library 提供 skills/ 和 MCP 配置。关闭的技能不出现在可用目录中。主代理和子代理采用同一套规则读取方式，各角色的工具权限仍然分别控制。
 
 <a id="windows-background-execution"></a>
 
-## 平台进程与取消
+## 停止操作会做什么
 
-Windows 命令、MCP stdio 和更新 helper 使用各自的后台进程启动路径，普通控制台工作不弹新窗口；图形程序的默认显示行为保留。进程树取消等待终止与回收，worktree 写入范围直到收尾结束才释放。
+停止会向模型请求、工具、CodeMode 和子代理传播取消请求。命令工具负责终止并回收子进程；子代理的写入范围直到收尾结束才释放。文件已经写入的部分不会自动回滚。
 
-CodeMode 等待返回、工具超时和用户停止是不同事件。wait_code 继续收集同一个 cell；停止会传播取消令牌，但不会回滚已经写入的文件。相关回归使用真实子进程、管道与 Job teardown 验证。
+CodeMode 的等待超时只表示“这次先返回”，脚本仍可继续；terminate 或用户停止才请求取消。应用重启后可以读取已保存的会话和报告，不能恢复之前的 JavaScript 执行。
+
+Windows 的命令、MCP 后台进程和更新助手通常不弹出控制台窗口；图形程序仍按正常方式显示。相关测试会启动真实子进程，检查管道、取消和进程回收。
 
 <a id="source-map"></a>
 
-## 阅读入口
+## 按问题查源码
 
-- [运行时模块与分配器](../../crates/mycode/src/lib.rs)
-- [应用桥接与协议](../../crates/mycode/src/app.rs)
-- [回合装配与工具暴露](../../crates/mycode/src/app/turn.rs)
-- [主代理提示](../../crates/mycode/src/app/turn/prompt.rs)
-- [工具提示与调用上限](../../crates/mycode/src/agent/prompt.rs)
-- [子代理宿主与控制注册](../../crates/mycode/src/app/subagent.rs)
-- [固定流程与独立验收](../../crates/mycode/src/tools/builtin/agent/workflow.rs)
-- [保留 worktree 与恢复](../../crates/mycode/src/app/subagent/worktree.rs)
-- [流式帧队列](../../crates/mycode/src/frontend/stream.rs)
-- [视图模型与事件归约](../../crates/mycode/src/frontend/view_model.rs)
-- [桌面入口](../../crates/mycode-desktop/src/main.rs)
+- [窗口和桌面启动](../../crates/mycode-desktop/src/main.rs)
+- [界面事件如何改变状态](../../crates/mycode/src/frontend/view_model.rs)
+- [后台命令与事件入口](../../crates/mycode/src/app.rs)
+- [模型与工具的一轮执行](../../crates/mycode/src/app/turn.rs)
+- [工具说明与模型调用规则](../../crates/mycode/src/agent/prompt.rs)
+- [子代理启动与控制](../../crates/mycode/src/app/subagent.rs)
+- [固定流程与验收](../../crates/mycode/src/tools/builtin/agent/workflow.rs)
+- [worktree 创建、保留和清理](../../crates/mycode/src/app/subagent/worktree.rs)
+- [流式文字的批量刷新](../../crates/mycode/src/frontend/stream.rs)
 
-Windows x64 的本地验证与其他平台的 CI 结果应分别报告。源码和测试定义行为；一次检查只证明它实际覆盖的目标和路径。
+构建和测试命令见 [README](../../README.md#参与开发)，耗时与体积测量见 [性能记录](../memory-report.md)。

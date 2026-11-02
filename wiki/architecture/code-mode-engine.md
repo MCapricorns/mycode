@@ -1,154 +1,183 @@
 <a id="code-mode-engine"></a>
 
-# CodeMode 协议
+# CodeMode：用 JavaScript 批量调用工具
 
-MYCode 的 CodeMode 使用 rquickjs 嵌入 QuickJS-NG。模型提交同步 JavaScript，通过 call(name, args) 调用当前运行已注册的工具；长任务由 wait_code 收集同一个 cell。它与 magpie 提供的远端 CodeMode 服务是不同的执行环境。
+CodeMode 让模型用一段 JavaScript 完成多步操作。例如，同时读取几个文件，整理结果，再修改其中一个文件。脚本在 MYCode 内置的 QuickJS 中运行，通过已注册的工具访问文件、执行命令或调用 MCP 服务。
+
+支持顶层 `await`、async 函数和 Promise。没有 Node.js、浏览器、fetch、require 或模块导入。
 
 <a id="model-contract"></a>
 
-## 模型调用约定
+## 先跑通一个调用
 
-主回合直接暴露平台 shell、run_code 和 wait_code。其他内置工具的参数定义进入系统提示的 Tools inside run_code；MCP schema 按需加载。子代理经过角色过滤，实际可用能力以当前注册表为准。脚本不能添加 shell 或写权限。
+将下面的代码作为 run_code 的 script 参数：
 
-call 是同步调用。工具返回后才执行下一条 JavaScript，多次 call 不会并行。正常返回包含 content 与 is_error，文本读取 result.content[0].Text，注意大写 Text。先检查错误，再进行依赖操作：
 
 ```javascript
-const result = call("read", { path: "Cargo.toml" });
+const result = await callAsync("read", { path: "Cargo.toml" });
 if (result.is_error) throw new Error(result.content[0].Text);
 complete(result.content[0].Text);
 ```
 
-工具失败通常是结果数据，不自动抛出 JavaScript 异常。未知工具、调用前拒绝和 ToolError 还附带兼容字段 __error__。忽略内部 is_error 后正常结束，外层 cell 仍可能显示 completed；complete(result) 不会自动继承内部错误状态。
+callAsync 返回 Promise，await 等待工具结果。结果里的 is_error 表示工具是否失败；文本通常在 content[0].Text，注意 Text 的大写 T。complete 将内容返回给模型并结束脚本。
 
-<a id="submit-and-collect"></a>
+旧脚本可以继续使用同步 call(name, args)。它会等工具返回后才执行下一行。想同时启动多个调用，应使用 callAsync。
 
-## 提交、等待与停止
+## 同时读取多个文件
 
-| 工具 | 参数 | 约定 |
-| --- | --- | --- |
-| run_code | script | 同步 JavaScript 源码 |
-| run_code | yield_time_ms | 默认 30,000 ms，最多 300,000 ms；0 立即交回控制权 |
-| run_code | max_output_bytes | 默认 32 KiB，限制到 1 KiB–4 MiB |
-| wait_code | cell_id | 继续收集实际返回的同一执行身份 |
-| wait_code | yield_time_ms | 默认 30,000 ms，最多 300,000 ms |
-| wait_code | terminate | true 请求取消并返回快照 |
 
-等待到期只决定这次工具调用何时返回，脚本仍可继续。yield_control() 也不会暂停脚本来等待下一次 wait_code。重复等待观察后续 yield 或终态，不会因为旧的 yielded 状态而持续立即返回。
+```javascript
+const paths = ["Cargo.toml", "README.md"];
+const results = await Promise.all(
+  paths.map(path => callAsync("read", { path }))
+);
+const text = results.map((result, index) => {
+  if (result.is_error) throw new Error(result.content[0].Text);
+  return paths[index] + "\n" + result.content[0].Text;
+});
+complete(text.join("\n\n"));
+```
 
-| cell 状态 | 意义 | 外层 is_error |
-| --- | --- | --- |
-| running、yielded | 仍在执行，返回身份与继续收集提示 | false |
-| completed | 返回累计输出；无输出时为 (no output) | false |
-| failed | 返回保留输出与可容纳的错误 | true |
-| terminated | 返回保留输出与终止标记 | true |
-
-running 和 yielded 不是完成。不要重新提交原脚本代替 wait_code，前面的写文件或启动任务可能已经发生。终态文本是累计快照，重复等待可能返回相同文本；图片每张只交付一次。
-
-<a id="host-functions"></a>
-
-## 脚本函数与输出
-
-| 函数 | 作用 |
-| --- | --- |
-| call(name, args) | 顺序调用工具；省略 args 或传 null 时使用空对象 |
-| log(value) | 追加累计文本并发布进度 |
-| complete(value) | 追加最终值并结束求值 |
-| yield_control() | 按宿主请求顺序交回控制权，脚本继续 |
-| budget() | 返回调用数、操作计数、文本和内存预算 |
-
-complete 会直接结束求值，包围它的 catch/finally 也不会继续。没有 complete 时，脚本最后的非 undefined 值会进入输出；中间工具结果不会自动输出。需要正文时，应明确选择 content 中的文本。
-
-字符串原样输出，对象与数组按 JSON 输出。undefined 在桥接处转成 null；循环引用、BigInt、Promise 不能作为 JSON 结果传出。累计文本在 UTF-8 边界截断后加提示，提示本身可能超过预算；单条 log 实时进度另限制到 2,048 字节。实时进度不等于完整结果。
-
-<a id="execution-and-limits"></a>
-
-## 执行与资源预算
-
-| 资源 | 上限 |
-| --- | --- |
-| call 次数 | 每个 cell 256 次，失败调用也计入 |
-| QuickJS 中断轮询 | 100 次；不是 100 条 JavaScript 指令 |
-| JavaScript 堆 | 32 MiB |
-| 原生栈 | 256 KiB |
-| 脚本源码 | 4 MiB，解析前检查 |
-| 待交付原生图片 | 4 张，base64 合计 6 MiB |
-| 进程内 cell 表 | 32 个，包括活跃与终态记录 |
-
-系统提示的调用次数直接来自 MAX_HOST_CALLS，避免文案与执行预算漂移。budget() 提供 calls_used、max_calls、operations、max_operations、max_output_bytes、max_memory_bytes。operations 统计中断轮询，不能换算成固定指令数或运行时长。
-
-脚本不支持 async/await、Promise 任务执行、模块导入。没有 Node.js 或浏览器的 require、process、fs、fetch、计时器。文件、命令和网络操作通过已注册工具完成。eval、Function、动态构造入口、Date、performance、Math.random 等非确定性或动态执行入口也被移除。
-
-run_code / wait_code 不能从脚本递归调用。完成信号、调用预算耗尽和 VM 中断不能被脚本捕获后继续执行。
+Promise.all 的结果顺序与输入顺序一致，不受哪个工具先返回影响。独立的读取和搜索可以同时运行，减少逐个等待的时间。若后一步依赖前一步，先 await 前一步并检查 is_error，再发起后一步。
 
 <a id="ordered-dispatch"></a>
 
-### 线程与调度
+### 哪些调用能并发
 
-QuickJS 在独立 OS 线程内创建和使用。宿主请求由 Tokio dispatcher 接收，经共享 prepare_tool_ctx 检查，再调用工具；JavaScript 线程等待结果。RunCodeTool 仅弱引用 registry，运行中的 dispatcher 才保留强引用，避免 registry 与工具相互持有造成泄漏。
+MYCode 根据工具的 parallel_safe_call 声明调度。内置 read、find、grep 可以并发；MCP 工具需要声明 readOnlyHint。write、edit、shell、提问和子代理执行等独占操作会单独运行。
 
-run_code 和 wait_code 在外层工具调度中各占一个顺序批次。已经 yield 的 cell 仍能执行，所以这不是应用全局写锁。子代理 scope 与工具自身的路径、取消检查仍然有效。
+例如依次提交“读 A、读 B、写 C、读 D”：A 和 B 可以同时读；写 C 等二者结束；读 D 等写 C 结束。将调用放进 Promise.all 不会跳过这些顺序要求。
 
-## 图片与远端结果
+JavaScript 在自己的线程上执行。工具在应用的 Tokio runtime 中运行，等待一个工具不会阻塞其他可并发的工具。
 
-内置工具返回的 ContentBlock::Image 放入 cell 的待交付队列，在下一次 run_code / wait_code 结果中作为原生图片块传递，包括失败或终止时已经收到的图片。每张图片只取出一次，后续到达的图片由下一次收集交付。
+<a id="submit-and-collect"></a>
 
-JavaScript 只收到 Image 元数据：mime_type、data_hash、delivery，不收到 base64。单个工具结果超过图片数或总字节上限时，整批图片拒绝并返回错误；之前已经接受的图片保留。
+## 任务没结束时，用 wait_code 继续等
 
-当前 MCP 结果采取文本投影：text 拼正文，resource 读取文本或 URI，image/audio 转成文字占位；没有可用正文时才采用 structuredContent。因此 MCP 图片不走上述内置原生图片通道。服务端 isError 映射到 is_error。
+run_code 默认最多等 30 秒。到时间后，如果脚本仍在运行，它会返回 cell_id。cell 是这一次脚本执行的编号。把同一个编号传给 wait_code，继续收集结果。
+
+| 参数 | 用在哪个工具 | 含义 |
+| --- | --- | --- |
+| script | run_code | 要执行的 JavaScript |
+| yield_time_ms | 两者 | 本次最多等多久；默认 30,000 ms，最多 300,000 ms；0 立即返回 |
+| max_output_bytes | run_code | 文本输出预算；默认 32 KiB，可设为 1 KiB–4 MiB |
+| cell_id | wait_code | run_code 返回的执行编号 |
+| terminate | wait_code | 设为 true，请求停止这次脚本 |
+
+**不要通过重新提交原脚本来继续等待。** 前一次执行可能已经写了文件或启动了任务，重新提交会再做一遍。
+
+| 返回状态 | 接下来怎么做 |
+| --- | --- |
+| running、yielded | 脚本还在执行，用 wait_code 继续收集 |
+| completed | 执行结束，读取结果 |
+| failed | 执行失败，检查错误和已经产生的结果 |
+| terminated | 已请求停止，检查已写入的文件和工具收尾情况 |
+
+yield_control() 会让本次等待尽快返回，脚本继续执行。重复 wait_code 会等新的进展或结束，不会仅因为上一次 yielded 就反复立即返回。
+
+<a id="host-functions"></a>
+
+## 脚本里可以调用什么
+
+| 函数 | 用途 |
+| --- | --- |
+| callAsync(name, args) | 提交工具调用，返回 Promise；用 await 取结果 |
+| call(name, args) | 同步调用工具，直接取结果 |
+| log(value) | 输出文本，同时向界面报告进度 |
+| complete(value) | 输出最终结果，结束脚本并取消未完成的调用 |
+| yield_control() | 让本次等待返回，脚本继续 |
+| budget() | 查看已用调用次数、执行计数和资源上限 |
+
+省略 args 或传 null 相当于传空对象。两个调用函数共享同一工具目录和次数上限。脚本不能调用 run_code 或 wait_code，也不能访问当前角色没有的工具。
+
+**先 await 必须完成的操作，再调用 complete。** complete 会立即结束脚本，catch/finally 也不会继续；未完成的工具会收到取消请求，排队中的操作不会再启动。已经产生的文件修改不会撤销。
+
+没有 complete 时，脚本会处理待完成的工具调用和 Promise 任务，然后返回最后一个表达式的值。最后一个值是 Promise 时会等待它。字符串原样输出，对象和数组转成 JSON；undefined 不产生最终输出。只有 log、complete 和最后一个表达式会显示，中间变量不会自动显示。
+
+循环引用和 BigInt 不能转成 JSON。传给 log、complete 或工具参数的 Promise 必须先 await。没有任何工具或待执行任务能够解决的悬空 Promise 会报错，例如 await new Promise(() => {})。
+
+## 出错后怎么处理
+
+工具失败一般返回 is_error: true，不会直接让 Promise 拒绝。因此 Promise.all 结束后仍需检查每个工具结果。未知工具、参数被拒绝等情况还带有 __error__，供旧脚本读取。
+
+JavaScript 异常、未处理的 Promise 拒绝、内存或执行预算耗尽会让整个脚本失败，并取消尚未完成的调用。能处理的 JavaScript 错误可以用 try/catch 或 Promise.allSettled；执行预算和 complete 的结束信号不能被捕获后继续执行。
+
+已经输出的内容会保留。文本超出 max_output_bytes 时会截断并标注；单条实时 log 进度最多 2,048 字节。完整输出与界面上的单条进度长度可能不同。
 
 <a id="mcp-discovery-and-use"></a>
 
-## MCP 发现与调用
+## 调用 MCP 工具
 
-| 工具 | 输入与输出 |
-| --- | --- |
-| search_tool | name 精确加载 schema，names 批量加载前 10 项，name=list 列目录；关键词多匹配最多返回 25 项摘要 |
-| tool_search | query 做 BM25 检索，limit 为 1–8，返回完整 schema |
-| use_tool | 使用返回的确切 name 与匹配 schema 的 arguments |
+先查工具说明，再按返回的确切名称和参数调用：
 
-search_tool 的 schema 是带 name、server、description、inputSchema 标签的文本；tool_search 返回 JSON 数组文本，包含 name、description、params_schema。两者都从 content[0].Text 读取。连接中的服务器仍在握手，不表示空目录。
 
 ```javascript
-const result = call("tool_search", { query: "github issue", limit: 3 });
-if (result.is_error) throw new Error(result.content[0].Text);
-complete(result.content[0].Text);
+const found = await callAsync("tool_search", { query: "github issue", limit: 3 });
+if (found.is_error) throw new Error(found.content[0].Text);
+complete(found.content[0].Text);
 ```
 
-完整 schema 可以复用；工具缺失或 schema 改变时再刷新。use_tool 不保存“是否发现过”的状态，先发现是模型调用约定。能够编译的 schema 先在本地验证，不能编译时交由远端校验。
+看完返回的 schema 后，在后续脚本里使用 callAsync("use_tool", { name, arguments })。已有完整 schema 时可以复用；工具消失或参数变化时再查询。
 
-目录优先使用原名，冲突时使用 server__tool，再冲突则附加编号。限定服务器的名称解析只在该服务器内查找，不会静默改投其他服务器。
+| 工具 | 适合的情况 |
+| --- | --- |
+| search_tool | 已知名称时精确查询；name=list 查看目录；也接受 names 批量查询 |
+| tool_search | 不知道名称时按关键词搜索，最多返回 8 个带完整 schema 的结果 |
+| use_tool | 按查到的 name 和 arguments 调用 MCP 工具 |
+
+服务器还在连接时，目录可能暂不完整。限定了服务器的名称不会改投另一个服务器。MYCode 没有内置网页搜索，需要接入提供搜索能力的 MCP 服务。
+
+## 图片如何返回
+
+内置 read 读取图片后，模型会收到原生图片块。脚本只看到 mime_type、data_hash 和 delivery 等说明，不会拿到 base64 图片正文。每张图片只交付一次，后续 wait_code 不会重复发送。
+
+单个工具结果如果超过图片数量或总大小预算，会整批拒绝；之前已接收的图片保留。即使脚本随后失败或停止，已接收的图片仍可交付。
+
+MCP 图片和音频目前只显示文字占位，不走内置 read 的原生图片通道。
+
+<a id="execution-and-limits"></a>
+
+## 当前限制
+
+| 项目 | 上限 |
+| --- | --- |
+| 工具调用 | 每次脚本合计 256 次 call / callAsync，失败调用也计数 |
+| JavaScript 堆 | 32 MiB |
+| JavaScript 原生栈 | 256 KiB |
+| 脚本源码 | 4 MiB |
+| Promise 任务 | 每次脚本最多执行 10,000 个任务，防止无限微任务链 |
+| QuickJS 中断检查 | 100 次；用于限制执行量，不等于 100 条 JavaScript 指令 |
+| 待交付图片 | 4 张，base64 合计 6 MiB |
+| 保留的执行记录 | 进程内最多 32 个 cell |
+
+没有 setTimeout、Date、performance 或 Math.random。eval、Function 及动态构造入口也不可用。文件、进程和网络访问都通过注册工具完成；这些资源限制不等于操作系统沙箱。
 
 <a id="progress-and-child-identity"></a>
 
-## 进度与内部调用身份
+## 界面如何显示进度
 
-内部生命周期通过 code_mode|JSON 发送：started 包含 call_id、name、seq、target，progress 包含原始 message，completed 包含 phase 与 is_error。外层工具仍保留父 call_id，内部调用通常使用 outer_call_id.seq。
+每个内部调用都有自己的 call_id，界面因此能分别显示哪个文件在读、哪个工具结束。实时进度通过 code_mode|JSON 传递；返回结果的 details 同时保存 journal、inner_calls 和 agent_states，补上等待间隙错过的状态。
 
-实时广播容量为 256。每次等待单独订阅，cell 同时保留 inner_calls 快照，补齐收集间隙的状态。结果 details 包含 cell_id、phase、calls、journal、inner_calls 和 agent_states，仅用于宿主和界面，不作为脚本正文。
-
-agent_states 通过工具结果和会话投影保存，支持历史重放。流程用 revision 区分返工轮次，见[子代理编排](runtime.md#subagent-orchestration)。
+journal 和 inner_calls 按提交顺序排列，即使工具完成顺序不同也不会打乱。journal 只记录调用类型和参数、结果的哈希，不保存可恢复执行的检查点。
 
 <a id="cell-lifetime-and-cancellation"></a>
 
-## 生命周期与取消
+## 停止和重启
 
-cell 按会话范围查询；不能跨会话猜 ID 收集。进程重启不恢复执行，journal 也不是持久化执行检查点。
+cell 只能在所属会话中查询。停止一个 cell 会取消它的工具，不会取消父回合或另一个 cell；停止父回合则会取消它下面的全部工作。
 
-插入第 33 个 cell 时，优先淘汰最早创建的终态记录；若所有记录都活跃，则终止并淘汰最早创建者。结果可在淘汰前重复收集，不保证永久保留。
+取消请求发出后，进程退出、文件工作线程和子代理 worktree 可能还在收尾。涉及子代理写入时，通过 agent_status 确认收尾结束。停止不会回滚文件。
 
-每个 cell 使用父回合的子取消令牌。终止 cell 不取消父回合或兄弟 cell，父回合取消仍会向下传播。丢弃等待中的 run_code/wait_code future 也会终止对应 cell。dispatcher panic 转成失败，内部调用守卫发布终态。
-
-terminate=true 先标记 terminated 并请求取消；返回快照不承诺 OS 线程、进程或 worktree 交接已经结束。写入任务应通过 agent_status 确认收尾，范围在收尾前继续保留。取消不会回滚文件写入。
+应用重启后不能恢复正在运行的脚本。最多保留 32 个 cell；新增记录时先淘汰最早的已结束记录，全部仍在运行时会停止并淘汰最早的一次。需要的结果应及时收集。
 
 <a id="source-map"></a>
 
-## 实现入口
+## 对应源码
 
-- [工具参数、提交与等待](../../crates/mycode/src/tools/code_mode.rs)
-- [cell、输出、图片和保留表](../../crates/mycode/src/tools/code_mode/cell.rs)
-- [QuickJS 与宿主函数](../../crates/mycode/src/tools/code_mode/engine.rs)
-- [统一分发与进度收尾](../../crates/mycode/src/tools/code_mode/dispatch.rs)
-- [执行协议回归](../../crates/mycode/src/tools/code_mode/tests.rs)
-- [取消和错误回归](../../crates/mycode/src/tools/code_mode/regressions.rs)
-- [MCP 目录与工具包装](../../crates/mycode/src/app/mcp_tools.rs)
-- [工具提示生成](../../crates/mycode/src/agent/prompt.rs)
+- [run_code / wait_code 参数和入口](../../crates/mycode/src/tools/code_mode.rs)
+- [JavaScript 执行与宿主函数](../../crates/mycode/src/tools/code_mode/engine.rs)
+- [Promise 任务与工具回复](../../crates/mycode/src/tools/code_mode/engine/promises.rs)
+- [并发调度与调用顺序](../../crates/mycode/src/tools/code_mode/dispatch.rs)
+- [执行状态、图片和记录保留](../../crates/mycode/src/tools/code_mode/cell.rs)
+- [并发、错误和取消测试](../../crates/mycode/src/tools/code_mode/tests/async_calls.rs)
+- [可重复运行的耗时对比](../../crates/mycode/examples/code_mode_latency.rs)

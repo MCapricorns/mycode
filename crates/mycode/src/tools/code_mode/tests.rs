@@ -1,6 +1,8 @@
 //! Code-mode tool tests: recursion refusal, a real `read` call through
 //! `call`, and the yield/wait/terminate lifecycle.
 
+mod async_calls;
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -232,11 +234,6 @@ async fn javascript_errors_limits_and_serialization_are_reported() {
             "circular",
         ),
         ("complete(1n);", "BigInt"),
-        ("(async () => 1)();", "Async JavaScript is not supported"),
-        (
-            "(async () => { await 1; call('missing', {}); })(); void 0;",
-            "Async JavaScript is not supported",
-        ),
     ] {
         let result = run_script(
             &cells,
@@ -637,7 +634,6 @@ async fn side_channel_and_time_functions_are_refused() {
         ("process.cwd();", "process"),
         ("fetch('https://example.com');", "fetch"),
         ("new Date();", "Date"),
-        ("Promise.resolve(1);", "Promise"),
         ("setTimeout(() => {}, 1);", "setTimeout"),
         ("Function('return 1')();", "Function"),
         ("(() => {}).constructor('return 1')();", "function"),

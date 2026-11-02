@@ -386,12 +386,12 @@ async fn cancellation_interrupts_cpu_only_javascript_and_releases_its_thread() {
         .await
         .unwrap()
         .unwrap();
-    let super::dispatch::HostRequest::Call { reply, .. } = request else {
+    let super::dispatch::HostRequest::Call { seq, reply, .. } = request else {
         panic!("expected start barrier")
     };
     cancel.cancel();
     reply
-        .send(super::dispatch::HostReply::Value(json!({})))
+        .send((seq, super::dispatch::HostReply::Value(json!({}))))
         .unwrap();
     let outcome = tokio::time::timeout(Duration::from_secs(1), done_rx)
         .await

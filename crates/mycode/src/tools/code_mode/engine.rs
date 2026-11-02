@@ -1,15 +1,21 @@
 //! Embedded QuickJS and the code-mode host-function whitelist.
 //!
 //! The runtime lives entirely on the script thread. Tools, permissions and
-//! async work remain in the shared dispatcher; JavaScript calls it synchronously.
+//! async work remain in the shared dispatcher. Both blocking calls and Promise
+//! callbacks use the same registry and call budget.
 
-use std::cell::Cell;
+mod promises;
+
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use rquickjs::context::intrinsic;
 use rquickjs::function::Opt;
-use rquickjs::{Context, Ctx, Exception, Function, Runtime, Value as JsValue};
+use rquickjs::{Context, Ctx, Exception, Function, Persistent, Promise, Runtime, Value as JsValue};
+
+use self::promises::PendingCalls;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -60,9 +66,22 @@ pub(crate) fn evaluate(
             }
             false
         })));
-        // RegExpCompiler and Promise initialize the regex and async-function
-        // prototypes used by the parser. Promise is hidden below; no job queue
-        // is driven. No module loader, OS or network APIs are installed.
+        let rejections = Rc::new(RefCell::new(HashMap::new()));
+        let tracked = Rc::clone(&rejections);
+        runtime.set_host_promise_rejection_tracker(Some(Box::new(
+            move |ctx, promise, reason, handled| {
+                let promise = Persistent::save(&ctx, promise);
+                if handled {
+                    tracked.borrow_mut().remove(&promise);
+                } else {
+                    tracked
+                        .borrow_mut()
+                        .insert(promise, exception_message(reason));
+                }
+            },
+        )));
+        // Promise jobs run on this thread; no module loader, OS or network APIs
+        // are installed in the JavaScript context.
         let context = Context::custom::<(
             intrinsic::Eval,
             intrinsic::Json,
@@ -73,7 +92,8 @@ pub(crate) fn evaluate(
             intrinsic::TypedArrays,
         )>(&runtime)
         .map_err(|error| error.to_string())?;
-        context.with(|ctx| {
+        let result = context.with(|ctx| {
+            let pending = Rc::new(PendingCalls::new());
             let execute = || -> rquickjs::Result<()> {
                 // Host evaluation needs the Eval intrinsic. Remove script entry
                 // points, including constructors reachable through prototypes.
@@ -86,37 +106,52 @@ for (const fn of [function(){}, function*(){}, async function(){}, async functio
 }
 delete globalThis.eval;
 delete globalThis.Function;
-delete globalThis.Promise;
 delete Math.random;
 "#,
                 )?;
-                register_host_functions(&ctx, host_tx, Arc::clone(&cell), Rc::clone(&completed))?;
-                let value: JsValue = ctx.eval(script)?;
+                register_host_functions(
+                    &ctx,
+                    host_tx,
+                    Arc::clone(&cell),
+                    Rc::clone(&completed),
+                    Rc::clone(&pending),
+                )?;
+                let script = ctx.eval_promise(script)?;
+                let stopped = || {
+                    completed.get() || exhausted.get() || cell.terminated() || cancel.is_cancelled()
+                };
+                // QuickJS async global evaluation resolves to { value: result }.
+                let unhandled = || rejections.borrow().values().next().cloned();
+                let evaluated = pending.settle(&ctx, script, stopped, unhandled)?;
+                let mut value: JsValue = evaluated
+                    .into_object()
+                    .expect("async evaluation result")
+                    .get("value")?;
+                while let Some(promise) = value.clone().into_promise() {
+                    value = pending.settle(&ctx, promise, stopped, unhandled)?;
+                }
                 if !value.is_undefined() {
                     cell.push_output(&render_value(&ctx, &value)?);
                 }
                 Ok(())
             };
-            execute().map_err(|error| {
+            let result = execute().map_err(|error| {
                 if error.is_exception() {
-                    let exception = ctx.catch();
-                    if let Some(exception) = exception
-                        .clone()
-                        .into_object()
-                        .and_then(Exception::from_object)
-                    {
-                        return exception.to_string();
-                    }
-                    return render_value(&ctx, &exception)
-                        .unwrap_or_else(|_| "JavaScript exception".to_owned());
+                    exception_message(ctx.catch())
+                } else {
+                    error.to_string()
                 }
-                error.to_string()
-            })
-        })?;
-        if runtime.is_job_pending() {
-            return Err(
-                "Async JavaScript is not supported; use synchronous call(name, args)".to_owned(),
-            );
+            });
+            pending.clear();
+            result
+        });
+        let unhandled = rejections.borrow().values().next().cloned();
+        // Persistent rejection identities must not outlive the runtime.
+        runtime.set_host_promise_rejection_tracker(None);
+        rejections.borrow_mut().clear();
+        result?;
+        if let Some(reason) = unhandled {
+            return Err(format!("Unhandled Promise rejection: {reason}"));
         }
         Ok(())
     };
@@ -140,36 +175,45 @@ fn register_host_functions<'js>(
     host_tx: UnboundedSender<HostRequest>,
     cell: Arc<ScriptCell>,
     completed: Rc<Cell<bool>>,
+    pending: Rc<PendingCalls<'js>>,
 ) -> rquickjs::Result<()> {
     let call_tx = host_tx.clone();
     let call_cell = Arc::clone(&cell);
-    ctx.globals().set("call", Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String, args: Opt<JsValue<'js>>| {
-        if name == "run_code" || name == "wait_code" {
-            return Err(Exception::throw_message(&ctx, &format!(
-                "call(\"{name}\") is not allowed: code mode cannot invoke itself"
-            )));
-        }
-        if !call_cell.begin_call() {
-            return Err(stop_evaluation(&ctx, &format!(
-                "host call budget exhausted ({} calls); split the work into several scripts",
-                super::cell::MAX_HOST_CALLS
-            )));
-        }
-        let arguments = match args.0 {
-            Some(value) => to_json(&ctx, &value)?,
-            None => Value::Null,
-        };
-        let arguments = if arguments.is_null() { json!({}) } else { arguments };
-        let seq = call_cell.next_seq();
-        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-        call_tx.send(HostRequest::Call { seq, name, args: arguments, reply: reply_tx })
-            .map_err(|_| Exception::throw_message(&ctx, "the host dispatcher stopped"))?;
-        match reply_rx.recv() {
-            Ok(HostReply::Value(value)) => ctx.json_parse(value.to_string()),
-            Ok(HostReply::Abort(reason)) => Err(Exception::throw_message(&ctx, &reason)),
-            Err(_) => Err(Exception::throw_message(&ctx, "the host dispatcher dropped the call")),
-        }
-    })?)?;
+    ctx.globals().set(
+        "call",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, name: String, args: Opt<JsValue<'js>>| {
+                let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                send_call(&ctx, &call_tx, &call_cell, name, args, reply_tx)?;
+                match reply_rx.recv() {
+                    Ok((_, HostReply::Value(value))) => ctx.json_parse(value.to_string()),
+                    Ok((_, HostReply::Abort(reason))) => {
+                        Err(Exception::throw_message(&ctx, &reason))
+                    }
+                    Err(_) => Err(Exception::throw_message(
+                        &ctx,
+                        "the host dispatcher dropped the call",
+                    )),
+                }
+            },
+        )?,
+    )?;
+
+    let call_tx = host_tx.clone();
+    let call_cell = Arc::clone(&cell);
+    ctx.globals().set(
+        "callAsync",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, name: String, args: Opt<JsValue<'js>>| {
+                let (promise, resolve, reject) = Promise::new(&ctx)?;
+                let seq = send_call(&ctx, &call_tx, &call_cell, name, args, pending.sender())?;
+                pending.insert(seq, resolve, reject);
+                Ok::<_, rquickjs::Error>(promise)
+            },
+        )?,
+    )?;
 
     let log_tx = host_tx.clone();
     let log_cell = Arc::clone(&cell);
@@ -240,6 +284,57 @@ fn register_host_functions<'js>(
     Ok(())
 }
 
+fn send_call<'js>(
+    ctx: &Ctx<'js>,
+    host_tx: &UnboundedSender<HostRequest>,
+    cell: &ScriptCell,
+    name: String,
+    args: Opt<JsValue<'js>>,
+    reply: std::sync::mpsc::Sender<(u64, HostReply)>,
+) -> rquickjs::Result<u64> {
+    if name == "run_code" || name == "wait_code" {
+        return Err(Exception::throw_message(
+            ctx,
+            &format!("call(\"{name}\") is not allowed: code mode cannot invoke itself"),
+        ));
+    }
+    if !cell.begin_call() {
+        return Err(stop_evaluation(
+            ctx,
+            &format!(
+                "host call budget exhausted ({} calls); split the work into several scripts",
+                super::cell::MAX_HOST_CALLS
+            ),
+        ));
+    }
+    let args = match args.0 {
+        Some(value) => to_json(ctx, &value)?,
+        None => Value::Null,
+    };
+    let args = if args.is_null() { json!({}) } else { args };
+    let seq = cell.next_seq();
+    host_tx
+        .send(HostRequest::Call {
+            seq,
+            name,
+            args,
+            reply,
+        })
+        .map_err(|_| Exception::throw_message(ctx, "the host dispatcher stopped"))?;
+    Ok(seq)
+}
+
+fn exception_message(value: JsValue<'_>) -> String {
+    if let Some(exception) = value.clone().into_object().and_then(Exception::from_object) {
+        exception.to_string()
+    } else if let Some(text) = value.as_string() {
+        text.to_string()
+            .unwrap_or_else(|_| "JavaScript exception".to_owned())
+    } else {
+        format!("{value:?}")
+    }
+}
+
 /// Completion and exhausted host budgets must bypass JavaScript catch/finally,
 /// just like QuickJS's own interrupt errors. The exception belongs to this ctx.
 fn stop_evaluation(ctx: &Ctx<'_>, message: &str) -> rquickjs::Error {
@@ -265,7 +360,7 @@ fn to_json<'js>(ctx: &Ctx<'js>, value: &JsValue<'js>) -> rquickjs::Result<Value>
     if value.is_promise() {
         return Err(Exception::throw_type(
             ctx,
-            "Async JavaScript is not supported; use synchronous call(name, args)",
+            "await the Promise before passing its value to a host function",
         ));
     }
     let Some(text) = ctx.json_stringify(value.clone())? else {

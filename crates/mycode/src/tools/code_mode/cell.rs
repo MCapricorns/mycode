@@ -357,7 +357,10 @@ impl ScriptCell {
             }
             *existing = summary.clone();
         } else {
-            inner.inner_calls.push(summary.clone());
+            let index = inner
+                .inner_calls
+                .partition_point(|call| call.seq < summary.seq);
+            inner.inner_calls.insert(index, summary.clone());
         }
         if let Some(event) = summary.progress_event() {
             let _ = self.progress.send(event.encode());

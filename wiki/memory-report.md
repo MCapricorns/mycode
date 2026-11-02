@@ -1,78 +1,89 @@
-# 性能与资源记录
+# 性能记录
 
-本页区分结构变化、实测结果和源码中的局部上限。合并 package 不自动等于降低内存占用；只有在相同构建配置或输入下测量的结果才能用于比较。
+这里记录可重复的测量结果。不同版本、构建方式或任务的数字不能直接相减；历史结果保留原来的条件，本次没有重新测量的项目会明确标出。
 
-## 2026-11-02 重构记录
+## CodeMode 并发耗时
 
-基线为 fe60708。重构将八个内部 package 合并为 mycode 与 mycode-desktop，使用模块保留职责，去掉逐层通配转导出。外部依赖的名称、版本、来源和 checksum 与基线完全一致，共 896 个 registry/git package 记录。
+2026-11-02，在 Windows x64、rustc 1.99.1、debug 构建下，对比同一版本中的同步 call 和异步 callAsync。任务是 8 个互不依赖的工具调用，每个工具等待 50 ms 后返回。每种方式预热一次，再运行五次，计时包含脚本启动、调度、工具等待和结果返回。
 
-| 结构指标 | 基线 | 重构后 |
+| 调用方式 | 中位数 | 五次范围 |
+| --- | --- | --- |
+| 逐个同步 call | 498.08 ms | 492.70–501.88 ms |
+| callAsync + Promise.all | 61.72 ms | 60.63–63.56 ms |
+
+这组模拟 I/O 任务的耗时约为原来的 1/8.07。Windows 定时器和调度会让实际等待略长于配置的 50 ms。这个结果说明独立调用已能同时等待；真实收益取决于文件、服务和工具延迟，不代表模型生成、单个工具或整个应用都快了 8 倍。
+
+复现命令：
+
+```sh
+cargo run -p mycode --example code_mode_latency --locked
+```
+
+[测量程序](../crates/mycode/examples/code_mode_latency.rs) 使用生产 RunCodeTool 和调度器，唯一的模拟部分是工具里的 50 ms 等待。写入、shell 和其他独占工具仍按顺序运行，不应期待同样的并发收益。
+
+## 历史记录：程序体积
+
+以下是之前两包重构时记录的数据，本次未重跑 release 体积测试。
+
+基线 fe60708 的八个内部 package 合并成 mycode 与 mycode-desktop。外部依赖版本、来源和 checksum 保持一致，共 896 个 registry/git package 记录。
+
+| 结构 | 重构前 | 重构后 |
 | --- | --- | --- |
 | workspace package | 8 | 2 |
-| 内部 package 依赖边 | 7 | 1 |
-| package manifest 依赖声明，含 target/dev/build | 98 | 51 |
+| 内部 package 之间的依赖 | 7 | 1 |
+| manifest 中的依赖声明，含 target/dev/build | 98 | 51 |
 
-依赖声明减少反映维护成本，不能解释为 Cargo 原来把同一个依赖复制链接了 47 次。Cargo 会统一可兼容的包版本与 features；仍然存在的不同版本来自实际外部依赖图。
+在同一台 Windows x64 机器上，使用 rustc 1.99.1、同一 lockfile 和 release profile：opt-level=3、fat LTO、codegen-units=1。两边都执行 cargo build --release -p mycode-desktop --locked，没有额外压缩或裁剪功能。
 
-## Windows x64 release 体积
-
-同一台 Windows x64 机器，rustc 1.99.1，使用 lockfile 和工作区 release profile：opt-level=3、fat LTO、codegen-units=1。未使用 UPX、额外 strip 或功能裁剪。基线来自独立 worktree，两侧都执行 cargo build --release -p mycode-desktop --locked。
-
-| 产物 | 字节 |
+| mycode-desktop.exe | 字节 |
 | --- | --- |
-| fe60708 的 mycode-desktop.exe | 43,622,400 |
-| 两包结构的 mycode-desktop.exe | 42,347,008 |
+| fe60708 | 43,622,400 |
+| 两包重构后 | 42,347,008 |
 | 减少 | 1,275,392，约 2.92% |
 
-这个结果只代表该工具链与 Windows x64 release binary，不能外推到 macOS、Windows ARM64、安装包压缩率、启动时间或 RSS。若修改编译选项或外部依赖，应重新建立可比基线。
+依赖声明减少让项目更容易维护，不代表同一依赖原来被重复链接了很多次。上面的文件体积也不能换算成内存、启动速度或其他平台的改善。
 
-## 流式帧选择
+## 历史记录：大段回复的显示处理
 
-旧实现每帧为追赶阈值统计全部 delta 的 Unicode 字符，再在选择帧时重复计数。新实现只扫描到阈值，短片段仍遵循原来的 80 字符 / 16 delta 预算；较大积压仍追赶，失败和取消仍立即刷新。
+之前的实现每帧会反复统计整段文字的字符数。改动后只扫描到所需阈值，仍保留普通帧的 80 字符 / 16 个片段预算，并在积压、失败或取消时及时刷新。
 
-基准位于 crates/mycode/examples/stream_frames.rs。它直接调用生产 split_stream_frame，反复重用同一队列，测量包括帧选择与重组，不包括网络、模型延迟或 GPUI 绘制。两侧使用同一 fixture、同一 release profile，预热后运行五轮。
+下面是同一输入、release 构建、预热后五轮测量的中位数，本次未重跑。
 
-| 输入 | 基线中位数 | 重构后中位数 |
+| 输入 | 改动前 | 改动后 |
 | --- | --- | --- |
-| 32 个小 delta | 531 ns / 次 | 550 ns / 次 |
-| 单个 64 KiB ASCII delta | 4,405 ns / 次 | 112 ns / 次 |
-| 单个约 1 MiB UTF-8 delta | 74,174 ns / 次 | 202 ns / 次 |
+| 32 个小片段 | 531 ns / 次 | 550 ns / 次 |
+| 单个 64 KiB ASCII 片段 | 4,405 ns / 次 | 112 ns / 次 |
+| 单个约 1 MiB UTF-8 片段 | 74,174 ns / 次 | 202 ns / 次 |
 
-小片段本次中位数增加 19 ns，未测得改善。优化针对大段文本的重复扫描；所有轮次选择的事件数一致。
+小片段没有测出改善。大段文字省去了重复扫描，但这只是帧选择与队列重组的耗时，不包含网络、模型生成或 GPUI 绘制。
 
 ```sh
 cargo run -p mycode --release --example stream_frames --locked
 ```
 
-微基准只用于检验这段字符扫描的成本；短文本结果容易受调度与分配器噪声影响，不据此宣称整个桌面界面快了同样倍数。Unicode 阈值、工具起止顺序、取消刷新和积压追赶由回归测试验证。
+## 内存限制各管哪一部分
 
-## 分配与缓存
-
-mycode/src/lib.rs 唯一声明 mimalloc 全局分配器，桌面与测试目标复用。Markdown cache 命中时共享 Rc block 数组，更新文本使解析缓存失效。附件路径读取与剪贴板路径读取复用同一个格式和大小检查。
-
-这些变更减少了重复实现或特定路径的工作量。本次没有进程级 RSS、长会话峰值内存、启动时间或 UI 帧率对比，因此不作相关改善结论。
-
-## 局部资源上限
-
-| 资源 | 当前限制 | 实现 |
+| 内容 | 当前上限 | 源码，位于 crates/mycode/src |
 | --- | --- | --- |
-| 用户文本附件 | 8 个；单文件 256 KiB；合计 512 KiB | core/attachments.rs |
-| 用户图片附件 | 4 张；单图原始 3,750,000 字节；base64 合计 6 MiB | core/attachments.rs |
-| 请求 JSON 编码 | 8 MiB | core/provider.rs |
-| 单条 provider stream event | 1 MiB；channel 容量 16 | core/provider/stream.rs |
-| CodeMode | 堆 32 MiB；栈 256 KiB；源码 4 MiB；256 次 call | tools/code_mode/engine.rs、cell.rs |
-| CodeMode 保留表 | 进程内 32 个 cell | tools/code_mode/cell.rs |
-| 子代理记录 | 每会话 128 个 run、32 个 workflow | tools/builtin/agent/runtime.rs |
-| 子代理摘要答复 | 24,000 字符 | tools/builtin/agent.rs |
-| MCP 消息与目录 | 单条 1 MiB；每服务器最多 128 项工具 | app/mcp_client.rs |
-| MCP 内联结果 | 20 KiB 截取预算，完整正文尝试存产物文件 | app/mcp_tools/results.rs |
-| HTTP 错误响应体 | 最多 64 KiB | providers/transport.rs |
-| 提示规则资源 | 每文件 64 KiB；总贡献 96 Ki 字符 | config/resources.rs |
+| 一条消息的文本附件 | 8 个；单文件 256 KiB；总计 512 KiB | core/attachments.rs |
+| 一条消息的图片附件 | 4 张；单张原始数据 3,750,000 字节；base64 总计 6 MiB | core/attachments.rs |
+| 编码后的模型请求 JSON | 8 MiB | core/provider.rs |
+| 一条模型流事件 | 1 MiB；传递队列容量 16 | core/provider/stream.rs |
+| 一个 CodeMode 脚本 | 堆 32 MiB；栈 256 KiB；源码 4 MiB；256 次工具调用；10,000 个 Promise 任务 | tools/code_mode/engine.rs、engine/promises.rs、cell.rs |
+| CodeMode 执行记录 | 进程内 32 个 | tools/code_mode/cell.rs |
+| 子代理运行记录 | 每会话 128 个 run、32 个 workflow | tools/builtin/agent/runtime.rs |
+| 子代理摘要 | 24,000 字符 | tools/builtin/agent.rs |
+| MCP 消息和工具目录 | 单条消息 1 MiB；每服务器最多 128 个工具 | app/mcp_client.rs |
+| MCP 直接返回的文本 | 20 KiB 截取预算，完整内容尝试另存文件 | app/mcp_tools/results.rs |
+| HTTP 错误正文 | 64 KiB | providers/transport.rs |
+| 提示中的规则文件 | 单文件 64 KiB；总计 96 Ki 个字符 | config/resources.rs |
 
-表内源码路径均相对 crates/mycode/src。上限约束不同层次；应用同时可能持有工具结果、provider 缓冲、会话投影、Markdown、图片、GPUI 与系统资源，不能把这些限额相加当作完整内存模型。
+这些限制只约束各自的数据。应用还持有会话、图片、Markdown 缓存、窗口和系统资源；不能把表里的数字当成整个进程的内存上限。
 
-## 后续测量方法
+当前使用 mimalloc。Markdown 缓存复用未变化的解析结果，文件附件与剪贴板图片共用格式检查。本次没有测量进程内存峰值、启动时间或帧率，因此没有这些指标的改善结论。
 
-测试长期增长时，固定模型回复、项目、主题和窗口大小，分别记录空载、长文本、工具输出、图片、会话切换及取消后的进程私有字节和工作集。对比相同任务序列，等待后台任务收尾，再重复多轮。
+## 怎样继续测内存
 
-若发现增长，先区分活跃任务、可回收缓存、保留会话和泄漏。Windows handle/Job 与受管文件代码存在看似重复但安全策略不同的分支，不能为了降低重复率而合并。
+固定项目、模型回复、主题和窗口大小，分别记录空闲、长回复、大量工具输出、图片、切换会话及取消后的进程内存。每组使用相同操作，等待后台任务收尾，再重复多轮。
+
+发现增长时，先检查是否仍有任务运行、结果需要保留或缓存尚未释放，再判断是否泄漏。修改进程回收和文件访问代码时，也要运行对应的取消、权限和兼容性测试。

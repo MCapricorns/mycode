@@ -37,7 +37,7 @@ pub struct JournalEntry {
     pub result_hash: Option<String>,
 }
 
-/// Append-only journal of one script run.
+/// Journal of one script run, ordered by submission sequence.
 #[derive(Debug, Default, Clone)]
 pub struct ScriptJournal {
     entries: Vec<JournalEntry>,
@@ -68,7 +68,8 @@ impl ScriptJournal {
             args_hash: hash_json(args),
             result_hash: result.map(hash_json),
         };
-        self.entries.push(entry.clone());
+        let index = self.entries.partition_point(|recorded| recorded.seq < seq);
+        self.entries.insert(index, entry.clone());
         entry
     }
 
