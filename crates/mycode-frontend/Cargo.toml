@@ -11,7 +11,7 @@ serde_json.workspace = true
 # Sync primitives and executor-agnostic reply futures only.
 tokio = { workspace = true, features = ["sync", "time"] }
 # Filesystem events that keep the open folder's git status fresh.
-notify = "8.2.0"
+notify = "8.2.1"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Globalization"] }
 

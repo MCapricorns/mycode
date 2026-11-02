@@ -11,7 +11,7 @@ parking_lot.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 # gpui-kit stays in this binary only; it links the smol runtime beside
 # tokio. Fenced code is colored by mycode-frontend's lexer, not tree-sitter.
-gpui-kit = "0.8.0"
+gpui-kit = "0.8.1"
 chrono.workspace = true
 base64.workspace = true
 # Clipboard bitmaps are re-encoded to PNG for providers.

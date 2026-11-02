@@ -32,7 +32,7 @@ base64 = "0.23.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "time"] }
 schemars = "1.2.3"
-uuid = { version = "1.28.0", features = ["v4", "serde"] }
+uuid = { version = "1.29.0", features = ["v4", "serde"] }
 zeroize = "1.9.1"
 # OS TLS (schannel on Windows, Security.framework on macOS) instead of a second
 # crypto library (aws-lc-sys) on top of the OS stack.
@@ -47,13 +47,13 @@ bytes = "1.12.1"
 tokio-util = "0.7.20"
 # `join_all` over borrowed futures; already in the graph through reqwest.
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 # Global allocator for every binary and test target; declared once in mycode-core.
 mimalloc = "0.1.52"
 # MSVC builds link the OS-builtin CRT; declared once in mycode-core.
 vc-ltl = "5.3.1"
-globset = "0.4.20"
-ignore = "0.4.33"
+globset = "0.4.21"
+ignore = "0.4.34"
 # ripgrep's search core, linked in-process.
 grep-searcher = "0.1.17"
 grep-regex = "0.1.14"
@@ -61,14 +61,14 @@ grep-matcher = "0.1.9"
 regex = "1.13.1"
 aho-corasick = "1.1.5"
 memchr = "2.8.3"
-jsonschema = { version = "0.59.0", default-features = false }
+jsonschema = { version = "0.60.2", default-features = false }
 blake3 = "1.8.7"
 libc = "0.2.191"
-rustix = "1.1.5"
+rustix = "1.1.6"
 windows-sys = "0.61.2"
 sha2 = "0.11.1"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
-zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+zip = { version = "9.2.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 semver = { version = "1.0.28", features = ["serde"] }
 # Clipboard bitmaps/TIFFs are re-encoded to PNG for providers.
 image = { version = "0.25.10", default-features = false, features = [
