@@ -72,6 +72,31 @@ fn minimax_xml_ask_user_arrives_as_a_typed_tool_call() {
 }
 
 #[test]
+fn a_streamed_xml_code_example_does_not_become_tool_use() {
+    let text = concat!(
+        "Example:\n```xml\n",
+        r#"<tool_call>{"name":"run_code","arguments":{"script":"complete('demo')"}}</tool_call>"#,
+        "\n```\n",
+    );
+    let mut reducer = CompletionsReducer::new();
+    for ch in text.chars() {
+        let events = reducer.feed(
+            &serde_json::json!({"choices": [{"delta": {"content": ch.to_string()}}]}).to_string(),
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, crate::core::StreamEvent::TextDelta(_)))
+        );
+    }
+    reducer.feed(r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#);
+    let message = take_done(reducer.feed("[DONE]"));
+    assert_eq!(message.stop_reason, StopReason::Stop);
+    assert_eq!(text_of(&message), text);
+    assert!(calls_of(&message).is_empty());
+}
+
+#[test]
 fn glm_error_finish_keeps_thinking() {
     let mut reducer = CompletionsReducer::new();
     let deltas = reducer.feed(

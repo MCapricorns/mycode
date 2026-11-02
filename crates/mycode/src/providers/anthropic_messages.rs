@@ -481,7 +481,9 @@ impl MessagesReducer {
                 arguments: String::new(),
             },
             _ => BlockAccumulator::Text {
-                text: block["text"].as_str().unwrap_or_default().to_owned(),
+                // Initial text uses the same literal-aware path as deltas:
+                // a fence may begin here and continue in the first delta.
+                text: String::new(),
             },
         };
         let weight = match &accumulator {
@@ -523,6 +525,9 @@ impl MessagesReducer {
         };
         self.blocks[position] = accumulator;
         self.current = position;
+        if matches!(self.blocks[position], BlockAccumulator::Text { .. }) {
+            return self.apply_text_delta(position, block["text"].as_str().unwrap_or_default());
+        }
         started
     }
 

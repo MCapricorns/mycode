@@ -19,6 +19,11 @@
 //! (such as `ask_user` `choices`) in the shape the tool schema expects.
 //! Plain text stays a string; free-text parameters (file content, edit
 //! text, a command) keep their exact text, see [`TEXT_PARAMS`].
+//!
+//! Markdown code, quoted lines, and escaped tags are literal examples, not
+//! tool invocations. Unquoted XML remains the fallback wire protocol.
+
+mod literal;
 
 /// Cap on one buffered tool-call body; oversized bodies fall back to text.
 /// A `write` of a real source file outgrew the old 32K-character cap, and
@@ -92,6 +97,8 @@ pub(crate) struct XmlToolCallParser {
     /// Bytes of an open call's body already searched for its closing tag,
     /// so each delta scans only what is new.
     searched: usize,
+    /// Markdown context survives streamed chunks and already-emitted text.
+    literal: literal::LiteralContext,
 }
 
 impl XmlToolCallParser {
@@ -114,7 +121,9 @@ impl XmlToolCallParser {
                         let raw = std::mem::take(&mut self.buffer);
                         self.open = None;
                         self.searched = 0;
-                        pieces.push(XmlPiece::Text(format!("{}{raw}", open.open())));
+                        let raw = format!("{}{raw}", open.open());
+                        self.literal.record_text(&raw);
+                        pieces.push(XmlPiece::Text(raw));
                     }
                     break;
                 };
@@ -123,6 +132,7 @@ impl XmlToolCallParser {
                 let body = self.buffer[..end].to_owned();
                 self.buffer.replace_range(..end + close.len(), "");
                 self.open = None;
+                self.literal.end_xml();
                 match parse_call_body(&body) {
                     Some(calls) => {
                         for (name, arguments) in calls {
@@ -131,25 +141,28 @@ impl XmlToolCallParser {
                     }
                     // Unparseable bodies surface as text; swallowing model
                     // output silently would hide real content.
-                    None => pieces.push(XmlPiece::Text(format!(
-                        "{}{body}{}",
-                        open.open(),
-                        open.close()
-                    ))),
+                    None => {
+                        let raw = format!("{}{body}{}", open.open(), open.close());
+                        self.literal.record_text(&raw);
+                        pieces.push(XmlPiece::Text(raw));
+                    }
                 }
             } else {
-                let Some((start, tag)) = find_open(&self.buffer) else {
-                    let text = flush_safe_text(&mut self.buffer);
+                let scanned = self.literal.scan(&self.buffer);
+                let Some(tag) = scanned.call else {
+                    let text: String = self.buffer.drain(..scanned.safe).collect();
                     if !text.is_empty() {
                         pieces.push(XmlPiece::Text(text));
                     }
                     break;
                 };
+                let start = scanned.safe;
                 if start > 0 {
                     pieces.push(XmlPiece::Text(self.buffer[..start].to_owned()));
                     self.buffer.replace_range(..start, "");
                 }
                 self.buffer.replace_range(..tag.open().len(), "");
+                self.literal.end_xml();
                 self.open = Some(tag);
                 self.searched = 0;
             }
@@ -171,38 +184,6 @@ impl XmlToolCallParser {
         } else {
             vec![XmlPiece::Text(rest)]
         }
-    }
-}
-
-/// The earliest `<tool_call>` or `<minimax:tool_call>` in `buffer`.
-fn find_open(buffer: &str) -> Option<(usize, CallTag)> {
-    let tool = buffer.find(OPEN_TOOL);
-    let minimax = buffer.find(OPEN_MINIMAX);
-    match (tool, minimax) {
-        (Some(tool_at), Some(minimax_at)) if minimax_at < tool_at => {
-            Some((minimax_at, CallTag::Minimax))
-        }
-        (Some(tool_at), _) => Some((tool_at, CallTag::Tool)),
-        (None, Some(minimax_at)) => Some((minimax_at, CallTag::Minimax)),
-        (None, None) => None,
-    }
-}
-
-/// Emits text that cannot be part of a future opening tag, keeping a
-/// possible partial-tag suffix buffered for the next delta. Only a suffix
-/// ending at the buffer's end can still grow into an opening tag, and every
-/// prefix of those tags starts with `<`, so the decision hangs on the last `<`.
-fn flush_safe_text(buffer: &mut String) -> String {
-    let Some(position) = buffer.rfind('<') else {
-        return std::mem::take(buffer);
-    };
-    let tail = &buffer[position..];
-    if holds_partial_open(tail) {
-        let drained = buffer[..position].to_owned();
-        buffer.replace_range(..position, "");
-        drained
-    } else {
-        std::mem::take(buffer)
     }
 }
 
@@ -584,6 +565,166 @@ mod tests {
             panic!("expected a tool call, got {piece:?}");
         };
         serde_json::from_str(arguments).unwrap_or_else(|error| panic!("{error}: {arguments}"))
+    }
+
+    fn streamed(text: &str, width: usize) -> Vec<XmlPiece> {
+        let mut parser = XmlToolCallParser::default();
+        let chars: Vec<char> = text.chars().collect();
+        let mut pieces = Vec::new();
+        for chunk in chars.chunks(width) {
+            pieces.extend(parser.feed(&chunk.iter().collect::<String>()));
+        }
+        pieces.extend(parser.finish());
+        pieces
+    }
+
+    fn visible(pieces: &[XmlPiece]) -> String {
+        pieces
+            .iter()
+            .filter_map(|piece| match piece {
+                XmlPiece::Text(text) => Some(text.as_str()),
+                XmlPiece::ToolCall { .. } => None,
+            })
+            .collect()
+    }
+
+    const EXAMPLE_CALL: &str =
+        r#"<tool_call>{"name":"run_code","arguments":{"script":"complete('demo')"}}</tool_call>"#;
+
+    #[test]
+    fn markdown_examples_are_literal_across_stream_boundaries() {
+        let minimax = concat!(
+            "<minimax:tool_call><invoke name=\"run_code\">",
+            "<parameter name=\"script\">complete('demo')</parameter>",
+            "</invoke></minimax:tool_call>",
+        );
+        for call in [EXAMPLE_CALL, minimax] {
+            for text in [
+                format!("示例：\n```xml\n{call}\n```\n"),
+                format!("~~~xml\r\n{call}\r\n~~~\r\n"),
+                format!("   ````xml\n{call}\n   ````\n"),
+                format!("- ~~~xml\n  {call}\n  ~~~\n"),
+                format!("1. ~~~xml\n   {call}\n   ~~~\n"),
+                format!("10. ~~~xml\n    {call}\n    ~~~\n"),
+                format!("- - ```xml\n    note ``` {call}\n    ```\n"),
+                format!("2) ```xml\n   note ``` {call}\n   ```\n"),
+                format!("- ```xml\n  note ``` {call}\n  ```\n"),
+                format!("Use `{call}` as an example."),
+                format!("Use ``a ` quoted {call}`` as an example."),
+                format!("Use `multiline\n{call}\nexample` here."),
+                format!("\\{call}"),
+                format!("> {call}\n   > {call}\n"),
+                format!("    {call}\n\t{call}\n"),
+                format!("```xml\n{call}"),
+                format!("`{call}"),
+            ] {
+                for width in [1, 2, 3, 7, text.chars().count()] {
+                    let pieces = streamed(&text, width);
+                    assert!(
+                        pieces
+                            .iter()
+                            .all(|piece| matches!(piece, XmlPiece::Text(_))),
+                        "literal example became a call at width {width}: {text:?}"
+                    );
+                    assert_eq!(visible(&pieces), text);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_real_call_after_a_literal_example_still_runs() {
+        for prefix in [
+            format!("```xml\n{EXAMPLE_CALL}\n```\n"),
+            format!("~~~xml\n{EXAMPLE_CALL}\n~~~~  \n"),
+            format!("- ~~~xml\n  {EXAMPLE_CALL}\n  ~~~\n"),
+            format!("1. ```xml\n   {EXAMPLE_CALL}\n   ```\n"),
+            format!("10. ~~~xml\n    {EXAMPLE_CALL}\n    ~~~\n"),
+            format!("`{EXAMPLE_CALL}`\n"),
+            format!("> {EXAMPLE_CALL}\n"),
+            format!("    {EXAMPLE_CALL}\n"),
+            format!("\\{EXAMPLE_CALL}\n"),
+            "I will call the tool now.\n".to_owned(),
+        ] {
+            let text = format!("{prefix}{EXAMPLE_CALL}done");
+            for width in [1, 2, 3, 7, text.len()] {
+                let pieces = streamed(&text, width);
+                let calls: Vec<_> = pieces
+                    .iter()
+                    .filter(|piece| matches!(piece, XmlPiece::ToolCall { .. }))
+                    .collect();
+                assert_eq!(calls.len(), 1, "{text:?}, width {width}");
+                assert_eq!(arguments(calls[0])["script"], "complete('demo')");
+                assert_eq!(visible(&pieces), format!("{prefix}done"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_fence_closes_only_with_its_marker_length_and_a_blank_tail() {
+        for false_close in ["```", "~~~~", "````not a close"] {
+            let prefix = format!("````xml\n{false_close}\n{EXAMPLE_CALL}\n````\n");
+            let text = format!("{prefix}{EXAMPLE_CALL}");
+            for width in [1, 2, 5, text.len()] {
+                let pieces = streamed(&text, width);
+                assert_eq!(visible(&pieces), prefix);
+                assert_eq!(
+                    pieces
+                        .iter()
+                        .filter(|piece| matches!(piece, XmlPiece::ToolCall { .. }))
+                        .count(),
+                    1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn long_delimiter_runs_do_not_accumulate_in_the_text_buffer() {
+        let mut parser = XmlToolCallParser::default();
+        for _ in 0..4096 {
+            assert_eq!(parser.feed("`"), [XmlPiece::Text("`".to_owned())]);
+            assert!(parser.buffer.is_empty());
+        }
+        let pieces = parser.feed(&format!("xml\n{EXAMPLE_CALL}\n"));
+        assert!(
+            pieces
+                .iter()
+                .all(|piece| matches!(piece, XmlPiece::Text(_)))
+        );
+    }
+
+    #[test]
+    fn rejected_xml_still_contributes_to_literal_markdown_context() {
+        let text = format!("<tool_call>not a call\n\n```xml\n</tool_call>\n{EXAMPLE_CALL}\n```\n");
+        for width in [1, 2, 7, text.len()] {
+            let pieces = streamed(&text, width);
+            assert!(
+                pieces
+                    .iter()
+                    .all(|piece| matches!(piece, XmlPiece::Text(_)))
+            );
+            assert_eq!(visible(&pieces), text);
+        }
+    }
+
+    #[test]
+    fn oversized_xml_fallback_still_tracks_a_fence_in_its_text() {
+        let mut parser = XmlToolCallParser::default();
+        let prefix = format!(
+            "<tool_call>{}\n\n```xml\n",
+            "x".repeat(super::MAX_CALL_BODY_BYTES)
+        );
+        let mut pieces = parser.feed(&prefix);
+        pieces.extend(parser.feed(EXAMPLE_CALL));
+        pieces.extend(parser.feed("\n```\n"));
+        pieces.extend(parser.finish());
+        assert!(
+            pieces
+                .iter()
+                .all(|piece| matches!(piece, XmlPiece::Text(_)))
+        );
+        assert_eq!(visible(&pieces), format!("{prefix}{EXAMPLE_CALL}\n```\n"));
     }
 
     #[test]

@@ -40,6 +40,44 @@ fn done(events: Vec<crate::core::StreamEvent>) -> AssistantMessage {
 }
 
 #[test]
+fn a_streamed_xml_code_example_does_not_become_tool_use() {
+    let tail = concat!(
+        "``xml\n",
+        r#"<tool_call>{"name":"run_code","arguments":{"script":"complete('demo')"}}</tool_call>"#,
+        "\n```\n",
+    );
+    let mut reducer = MessagesReducer::new();
+    // Split the opening fence between the initial block and text deltas.
+    reducer.feed(
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"`"}}"#,
+    );
+    for ch in tail.chars() {
+        let events = reducer.feed(
+            &serde_json::json!({
+                "type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": ch.to_string()},
+            })
+            .to_string(),
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, crate::core::StreamEvent::TextDelta(_)))
+        );
+    }
+    reducer.feed(r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#);
+    let message = done(reducer.feed(r#"{"type":"message_stop"}"#));
+    assert_eq!(message.stop_reason, StopReason::Stop);
+    assert_eq!(message.text(), format!("`{tail}"));
+    assert!(
+        message
+            .blocks
+            .iter()
+            .all(|block| !matches!(block, ContentBlock::ToolCall(_)))
+    );
+}
+
+#[test]
 fn redacted_thinking_replays_its_encrypted_data() {
     let mut reducer = MessagesReducer::new();
     reducer.feed(
