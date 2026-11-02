@@ -5,13 +5,6 @@ use crate::app::{BranchId, BridgeCommand, SessionId};
 use super::{Effect, FrontendDriver, HeldInterrupt, ReplyScope, ToastKind};
 use crate::frontend::view_model::{EntryKind, FrontendAction};
 
-fn failed_start(message: String) -> FrontendAction {
-    FrontendAction::ChatFailed {
-        message,
-        head: String::new(),
-    }
-}
-
 /// Resolve exactly the model shown in the picker. A stale session pin must
 /// never silently spend a request on another provider or model.
 pub(super) fn selected_route(
@@ -101,25 +94,12 @@ impl FrontendDriver {
         });
     }
 
-    pub(crate) fn begin_chat_turn(&mut self, out: &mut Vec<Effect>) {
-        if self.vm.active.is_none() {
-            self.act(failed_start("no open session".to_owned()), out);
-            return;
-        }
-        let Some((session, branch, _)) = self.open_turn_target() else {
-            self.act(
-                failed_start("the open session could not be read".to_owned()),
-                out,
-            );
-            return;
-        };
-        let (provider_id, model) = match selected_route(&self.vm) {
-            Ok(route) => route,
-            Err(message) => {
-                self.act(failed_start(message.to_owned()), out);
-                return;
-            }
-        };
+    /// Capture the route while the message still belongs to the view on screen.
+    pub(super) fn prepare_chat_turn(&self) -> Result<BridgeCommand, String> {
+        let (session, branch, _) = self
+            .open_turn_target()
+            .ok_or_else(|| "the open session could not be read".to_owned())?;
+        let (provider_id, model) = selected_route(&self.vm).map_err(str::to_owned)?;
         let reasoning = self
             .vm
             .active
@@ -148,47 +128,14 @@ impl FrontendDriver {
             reasoning.as_deref(),
         );
         let reasoning = (effective != "default").then_some(effective);
-        // The session's very first send also gets a generated sidebar title:
-        // an out-of-band request summarizes that message while the real turn
-        // proceeds. `older_before` absent means every event is resident, so
-        // one user message truly is the first send.
-        if let Some((first_session, seed)) = self.first_user_message_seed() {
-            self.dispatch(BridgeCommand::SummarizeTitle {
-                session: first_session,
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                seed,
-            });
-        }
-        // The bridge rebuilds the turn history from the ledger's typed
-        // events, so tool_use/tool_result pairing survives replay.
-        self.dispatch(BridgeCommand::ChatTurn {
+        // The bridge rebuilds history from the committed ledger, not the UI.
+        Ok(BridgeCommand::ChatTurn {
             session,
             branch,
             provider_id,
             model,
             reasoning,
-        });
-    }
-
-    /// Session id plus the first user message's text when the open
-    /// conversation holds exactly one committed user message and no older
-    /// history. `None` for every later send.
-    fn first_user_message_seed(&self) -> Option<(SessionId, String)> {
-        let active = self.vm.active.as_ref()?;
-        if active.older_before.is_some() {
-            return None;
-        }
-        let mut users = active
-            .entries
-            .iter()
-            .filter(|entry| entry.kind == EntryKind::UserMessage);
-        let first = users.next()?;
-        if users.next().is_some() {
-            return None;
-        }
-        let session = SessionId::parse(&active.session_id)?;
-        Some((session, first.text.to_string()))
+        })
     }
 
     /// The composer's submit path: welcome-desk start, a steer into the
@@ -566,6 +513,14 @@ impl FrontendDriver {
         if !self.vm.sending && !self.vm.compacting {
             return;
         }
+        if let Some(submitted) = self.submitted_turns.get_mut(&conversation.session_id)
+            && submitted.command.is_some()
+        {
+            // The user message is still committing. There is no core turn
+            // to cancel yet; finish that commit, then settle without a model.
+            submitted.cancelled = true;
+            return;
+        }
         self.dispatch(BridgeCommand::CancelChat {
             session_id: conversation.session_id.clone(),
         });
@@ -627,6 +582,26 @@ impl FrontendDriver {
         let Some((session, branch, expected_head)) = self.open_turn_target() else {
             return false;
         };
+        if self.submitted_turns.contains_key(session.as_str()) {
+            return false;
+        }
+        let first_message = self.vm.active.as_ref().is_some_and(|active| {
+            active.older_before.is_none()
+                && !active
+                    .entries
+                    .iter()
+                    .any(|entry| entry.kind == EntryKind::UserMessage)
+        });
+        let command = self.prepare_chat_turn();
+        self.submitted_turns.insert(
+            session.to_string(),
+            super::sends::SubmittedTurn {
+                branch: branch.to_string(),
+                command: Some(command),
+                first_message,
+                cancelled: false,
+            },
+        );
         if !attachments.is_empty() {
             // The reply may come back as an error; keep the payload beside
             // the session so the composer gets it back instead of a gap.

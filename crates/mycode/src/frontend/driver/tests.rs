@@ -6,6 +6,7 @@ mod catalog;
 mod recall;
 mod runtime_guards;
 mod scroll;
+mod sends;
 
 fn conversation(session: &str, branch: &str) -> ActiveConversation {
     ActiveConversation {

@@ -1,7 +1,7 @@
 //! Folding core replies into actions. Each reply already passed its
 //! [`ReplyScope`] check in `poll`; the two scope-embedded kinds (a recall
 //! result and a row delete) resolve here before the generic match.
-use crate::app::{BridgeCommand, BridgeReply};
+use crate::app::{BridgeCommand, BridgeEvent, BridgeReply};
 
 use super::{Effect, FrontendDriver, ReplyScope, ToastKind};
 use crate::frontend::view_model::{CHAT_CANCELLED, FrontendAction, SettingsState, UpdateState};
@@ -28,6 +28,10 @@ impl FrontendDriver {
         };
         let catalog_refresh = matches!(scope, ReplyScope::CatalogRefresh);
         match scope {
+            ReplyScope::SentTurn { session, branch } => {
+                self.finish_sent_turn_start(&session, &branch, reply, out);
+                return;
+            }
             ReplyScope::Settings { generation } if generation != self.settings_load_generation => {
                 return;
             }
@@ -124,14 +128,19 @@ impl FrontendDriver {
                 // The snapshot was read before this reply landed. Events in
                 // between were dropped (another chat was open) or applied to
                 // the entries this snapshot now replaces.
-                self.resync_on_turn_end =
-                    (conversation.running || conversation.compacting).then(|| session_id.clone());
+                self.resync_on_turn_end = (conversation.running
+                    || conversation.compacting
+                    || self.submitted_turns.contains_key(&session_id))
+                .then(|| session_id.clone());
                 let switching = self
                     .vm
                     .active
                     .as_ref()
                     .is_some_and(|active| active.session_id != conversation.session_id);
                 self.act(FrontendAction::ConversationOpened(conversation), out);
+                if self.submitted_turns.contains_key(&session_id) {
+                    self.act(FrontendAction::TurnArmed, out);
+                }
                 if switching {
                     self.pending_composer_prefill = Some(String::new());
                     out.push(Effect::ComposerSet {
@@ -143,6 +152,7 @@ impl FrontendDriver {
                     // screen come back now that its composer is here.
                     self.unpark_steers(&session_id, out);
                 }
+                self.restore_failed_send(&session_id, out);
                 self.follow_session_project(&session_id, out);
                 self.dispatch(BridgeCommand::ListResources {
                     session_id: session_id.clone(),
@@ -190,22 +200,7 @@ impl FrontendDriver {
                 session,
                 outcome: Ok((head, entry)),
                 ..
-            } => {
-                // A send that raced a session switch must not touch the
-                // conversation now open; the committed entry lives in its
-                // own session's ledger and shows on reopen.
-                self.pending_send_attachments.remove(&session);
-                let applicable = self
-                    .vm
-                    .active
-                    .as_ref()
-                    .is_some_and(|active| active.session_id == session);
-                if !applicable {
-                    return;
-                }
-                self.act(FrontendAction::MessageSent { head, entry }, out);
-                self.begin_chat_turn(out);
-            }
+            } => self.finish_send(&session, head, entry, out),
             BridgeReply::Settings(Ok(loaded)) => {
                 self.note_config_repairs(&loaded.repairs);
                 let revision = loaded.revision.get();
@@ -293,23 +288,20 @@ impl FrontendDriver {
             // shows one running: settle it like a quiet cancel so Stop is not
             // left stuck behind a turn that is gone.
             BridgeReply::ChatCancelled(Err(_)) => {
-                if self.vm.sending {
-                    self.act(
-                        FrontendAction::ChatFailed {
+                if self.vm.sending
+                    && let Some(session_id) = self.open_session_id()
+                {
+                    // Settle the send lifecycle as well as its visible state.
+                    // Clearing only the view leaves submitted_turns blocking
+                    // the next send, including an interrupt's held message.
+                    self.on_event(
+                        BridgeEvent::ChatFailed {
+                            session_id,
                             message: CHAT_CANCELLED.to_owned(),
                             head: String::new(),
                         },
                         out,
                     );
-                    // No turn is left to wait for. A reload still owed to a
-                    // mid-turn open runs now instead of after the next turn.
-                    if let Some(session_id) = self.open_session_id() {
-                        self.resync_after_turn(&session_id);
-                    }
-                    // The stop has landed: a message held for it goes out.
-                    if let Some(held) = self.held_interrupt.take() {
-                        self.send_held_interrupt(held, out);
-                    }
                 }
             }
             BridgeReply::Steered(_) => {}
@@ -556,25 +548,7 @@ impl FrontendDriver {
                 session,
                 text,
                 outcome: Err(message),
-            } => {
-                let attachments = self.pending_send_attachments.remove(&session);
-                if self
-                    .vm
-                    .active
-                    .as_ref()
-                    .is_some_and(|active| active.session_id == session)
-                {
-                    self.act(failed_start(message), out);
-                    // The composer was cleared when the send went out; the
-                    // text comes back instead of vanishing with the error.
-                    self.restore_above_draft(text, out);
-                    if let Some(attachments) = attachments
-                        && !attachments.is_empty()
-                    {
-                        out.push(Effect::AttachmentsRestored(attachments));
-                    }
-                }
-            }
+            } => self.fail_send(&session, text, message, out),
             BridgeReply::ChatStarted(Err(message)) => {
                 self.act(failed_start(message), out);
             }
@@ -616,6 +590,9 @@ impl FrontendDriver {
     fn finish_delete(&mut self, session_id: &str, reply: BridgeReply, out: &mut Vec<Effect>) {
         match reply {
             BridgeReply::SessionDeleted(Ok(())) => {
+                self.submitted_turns.remove(session_id);
+                self.pending_send_attachments.remove(session_id);
+                self.failed_send_drafts.remove(session_id);
                 if self
                     .vm
                     .active

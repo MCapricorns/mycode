@@ -31,6 +31,7 @@ mod events;
 mod git;
 mod projects;
 mod replies;
+mod sends;
 mod sessions;
 mod settings;
 mod turn;
@@ -118,6 +119,13 @@ pub(crate) enum ReplyScope {
     /// A manual refresh owns its toast; a concurrent lazy read does not.
     CatalogRefresh,
     Open(String),
+    /// A send owns its lifecycle even after its conversation leaves the screen.
+    Send,
+    /// Start acknowledgement for the original send, not the current view.
+    SentTurn {
+        session: String,
+        branch: String,
+    },
     Session {
         session: String,
         branch: Option<String>,
@@ -166,10 +174,8 @@ impl ReplyScope {
     pub(crate) fn for_command(command: &BridgeCommand) -> Self {
         match command {
             BridgeCommand::OpenSession(session) => Self::Open(session.to_string()),
+            BridgeCommand::SendMessage { .. } => Self::Send,
             BridgeCommand::ChatTurn {
-                session, branch, ..
-            }
-            | BridgeCommand::SendMessage {
                 session, branch, ..
             }
             | BridgeCommand::RecallMessage {
@@ -214,7 +220,11 @@ impl ReplyScope {
 
     fn applies(&self, vm: &WorkspaceState, pending_open: Option<&str>) -> bool {
         match self {
-            Self::Global | Self::Settings { .. } | Self::CatalogRefresh => true,
+            Self::Global
+            | Self::Settings { .. }
+            | Self::CatalogRefresh
+            | Self::Send
+            | Self::SentTurn { .. } => true,
             Self::Open(session) => pending_open == Some(session.as_str()),
             Self::Session { session, branch } => vm.active.as_ref().is_some_and(|active| {
                 &active.session_id == session
@@ -409,6 +419,10 @@ pub struct FrontendDriver {
     /// Attachments of sends still waiting for their `Sent` reply, keyed by
     /// session. A failed send hands them back instead of dropping them.
     pending_send_attachments: BTreeMap<String, crate::core::Attachments>,
+    /// Saving or running sends retain their original route across navigation.
+    submitted_turns: BTreeMap<String, sends::SubmittedTurn>,
+    /// Off-screen failed commits return only to their own conversation.
+    failed_send_drafts: BTreeMap<String, sends::FailedSendDraft>,
     /// The turn being stopped, and the draft that goes out once it is gone;
     /// see [`FrontendDriver::interrupt_send`].
     held_interrupt: Option<HeldInterrupt>,
@@ -487,6 +501,8 @@ impl FrontendDriver {
             resync_on_turn_end: None,
             held_send: None,
             pending_send_attachments: BTreeMap::new(),
+            submitted_turns: BTreeMap::new(),
+            failed_send_drafts: BTreeMap::new(),
             held_interrupt: None,
             git: git::GitWatch::default(),
             ask_texts: Vec::new(),

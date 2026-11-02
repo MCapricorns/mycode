@@ -20,6 +20,11 @@ impl FrontendDriver {
     /// Folds one core event into the view-model state, emitting the effects
     /// the frontend must perform (toasts, update dialog, scroll hints).
     pub fn on_event(&mut self, event: BridgeEvent, out: &mut Vec<Effect>) {
+        if let BridgeEvent::ChatDone { session_id, .. }
+        | BridgeEvent::ChatFailed { session_id, .. } = &event
+        {
+            self.submitted_turns.remove(session_id);
+        }
         // A held interrupt belongs to one turn and ends with it, on screen
         // or not.
         let held = self.take_held_interrupt(&event);

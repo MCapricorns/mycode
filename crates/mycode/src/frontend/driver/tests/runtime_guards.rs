@@ -4,8 +4,8 @@ use crate::config::AppSettings;
 use crate::tools::CodeModeProgress;
 
 use super::{conversation, scratch_driver};
+use crate::frontend::driver::ReplyScope;
 use crate::frontend::driver::turn::selected_route;
-use crate::frontend::driver::{Effect, ReplyScope, ToastKind};
 use crate::frontend::view_model::{FrontendAction, SettingsState, WorkspaceState};
 
 fn model_state() -> WorkspaceState {
@@ -91,12 +91,9 @@ fn an_unavailable_session_pin_blocks_chat_and_compaction() {
         None,
     );
     let mut out = Vec::new();
-    driver.begin_chat_turn(&mut out);
-    assert!(!driver.vm.sending);
-    assert!(out.iter().any(|effect| matches!(effect,
-        Effect::Toast { kind: ToastKind::Error, text }
-            if text.contains("unavailable") || text.contains("不可用")
-    )));
+    let error = driver.prepare_chat_turn().expect_err("unavailable route");
+    assert!(error.contains("unavailable") || error.contains("不可用"));
+    driver.vm.sending = false;
     assert_eq!(driver.vm.selected_model.as_deref(), Some("p/pinned"));
     driver.compact(&mut out);
     assert!(
