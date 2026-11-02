@@ -286,8 +286,8 @@ async fn run_chat_turn_on(
             events: events.clone(),
         });
         registry.register(Arc::new(mycode_agent::builtin::AskTool::new(channel)));
-        // `agent` delegates scoped work to a catalog role; slots, isolation,
-        // and per-role model routes live in the host.
+        // `agent` delegates scoped work to a catalog role; isolation and
+        // per-role model routes live in the host.
         {
             let runtime = state
                 .agent_runtimes
@@ -310,7 +310,6 @@ async fn run_chat_turn_on(
                     state.mcp_pool.clone(),
                     Arc::clone(&state.code_cells),
                 )
-                .with_slots(runtime.slots(mycode_agent::SUBAGENT_CONCURRENCY as usize))
                 .with_context(
                     Arc::clone(&state.catalog),
                     provider.clone(),

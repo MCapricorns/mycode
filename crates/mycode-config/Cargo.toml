@@ -4,7 +4,6 @@ description = "Strict owned configuration authorities for MYCode"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-readme = "README.md"
 
 [dependencies]
 serde.workspace = true

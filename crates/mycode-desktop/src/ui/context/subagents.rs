@@ -244,17 +244,13 @@ fn rows(state: &WorkspaceState) -> Vec<AgentRow> {
                     job.label.clone()
                 },
                 role: job.role.clone(),
-                status: if job.capped || job.step == "queued" {
+                status: if job.step == "queued" {
                     t("Queued", "排队中")
                 } else {
                     t("Running", "运行中")
                 }
                 .to_owned(),
-                tone: if job.capped {
-                    StatusTone::Warning
-                } else {
-                    StatusTone::Active
-                },
+                tone: StatusTone::Active,
                 elapsed: elapsed_label(job.elapsed_ms()),
                 activity: job.step_label(),
                 cancel_id: (!job.call_id.is_empty()).then(|| job.call_id.clone()),

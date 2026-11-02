@@ -584,7 +584,7 @@ pub(super) fn diff_preview(lines: &[&str], theme: &Theme) -> impl IntoElement {
         .min_w_0()
         .overflow_x_scroll()
         .restrict_scroll_to_axis()
-        .on_scroll_wheel(|event, window, cx| {
+        .on_scroll(|event, window, cx| {
             // The frame owns horizontal deltas; left to bubble the transcript
             // remaps them into a vertical page scroll.
             if event.delta.pixel_delta(window.line_height()).x != px(0.) {

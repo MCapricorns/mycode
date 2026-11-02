@@ -181,7 +181,7 @@
       "label": "设置页面",
       "group": "module",
       "lane": 1,
-      "summary": "桌面设置覆盖常规、外观、模型、MCP、技能、子代理、快捷键、数据与关于。权威设置使用 revision 修订号比较交换，界面通过编辑器与应用层发布。",
+      "summary": "桌面设置覆盖通用（外观、语言与网络）、快捷键、Magpie、子代理、技能、MCP 与关于。权威设置使用 revision 修订号比较交换，界面通过编辑器与应用层发布。",
       "links": [
         "desktop",
         "config",

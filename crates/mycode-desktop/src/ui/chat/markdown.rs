@@ -755,7 +755,7 @@ fn render_table(
                 .overflow_x_scroll()
                 .restrict_scroll_to_axis()
                 .track_scroll(&scroll.x)
-                .on_scroll_wheel(move |event, window, cx| {
+                .on_scroll(move |event, window, cx| {
                     let delta = event.delta.pixel_delta(window.line_height());
                     if delta.x != px(0.) {
                         // The frame owns horizontal deltas; left to bubble the

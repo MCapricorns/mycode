@@ -298,7 +298,6 @@ fn upsert_live_job(state: &mut WorkspaceState, call_id: &str, role: &str, step: 
         path: String::new(),
         log: vec![step.clone()],
         step,
-        capped: false,
         started_ms: crate::unix_now().as_millis() as u64,
     });
     backfill_job_from_transcript(state, call_id);
@@ -332,23 +331,10 @@ fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str
                     job.prompt = detail.chars().take(8_000).collect();
                 }
             }
-            "capped" => {
-                let warning = role == "artisan";
-                let step = if warning {
-                    cap_step(detail)
-                } else {
-                    "queued".to_owned()
-                };
-                upsert_live_job(state, call_id, role, &step);
-                if let Some(job) = live_job_mut(state, call_id) {
-                    job.capped = warning;
-                }
-            }
             "path" => {
                 upsert_live_job(state, call_id, role, "starting");
                 if let Some(job) = live_job_mut(state, call_id) {
                     job.path = detail.to_owned();
-                    job.capped = false;
                 }
             }
             // `goal`/`task` are the run-live re-arms of `queued`/`prompt`:
@@ -376,45 +362,17 @@ fn apply_live_job_progress(state: &mut WorkspaceState, call_id: &str, name: &str
                     role,
                     &format!("{} {detail}", t("running", "正在运行")),
                 );
-                if let Some(job) = live_job_mut(state, call_id) {
-                    job.capped = false;
-                }
             }
             "step" => {
                 upsert_live_job(state, call_id, role, detail);
-                if let Some(job) = live_job_mut(state, call_id) {
-                    job.capped = false;
-                }
             }
             other => {
                 upsert_live_job(state, call_id, role, other);
-                if let Some(job) = live_job_mut(state, call_id) {
-                    job.capped = false;
-                }
             }
         }
         return;
     }
     upsert_live_job(state, call_id, "", message);
-}
-
-fn cap_step(detail: &str) -> String {
-    let cap = detail.trim();
-    if cap.is_empty() {
-        t(
-            "queued past the concurrency cap",
-            "已超过并发上限，正在排队",
-        )
-        .to_owned()
-    } else {
-        format!(
-            "{} ({cap})",
-            t(
-                "queued past the concurrency cap",
-                "已超过并发上限，正在排队",
-            )
-        )
-    }
 }
 
 /// Records the provider id the core's cancel map uses on the job keyed by
@@ -641,11 +599,8 @@ mod tests {
     }
 
     #[test]
-    fn an_artisan_past_the_cap_warns_until_it_starts() {
-        use crate::view_model::{
-            ActiveConversation, FrontendAction, WorkspaceState, capped_artisan_count,
-            capped_artisan_status,
-        };
+    fn live_job_tracks_progress_and_dismissal_records_elapsed() {
+        use crate::view_model::{ActiveConversation, FrontendAction, WorkspaceState};
 
         let mut state = WorkspaceState {
             sending: true,
@@ -678,16 +633,7 @@ mod tests {
                 call_id: "c2".to_owned(),
                 provider_call_id: String::new(),
                 name: String::new(),
-                message: "agent|artisan|capped|4".to_owned(),
-            },
-        );
-        super::super::reduce(
-            &mut state,
-            FrontendAction::ToolProgress {
-                call_id: "c3".to_owned(),
-                provider_call_id: String::new(),
-                name: String::new(),
-                message: "agent|scout|capped|4".to_owned(),
+                message: "agent|artisan|path|/tmp/wt".to_owned(),
             },
         );
         let scout = state
@@ -696,49 +642,15 @@ mod tests {
             .find(|job| job.call_id == "c1")
             .expect("scout");
         assert_eq!(scout.role, "scout");
-        assert!(!scout.capped);
         assert_eq!(scout.label, "map tokio");
         assert_eq!(scout.title(), "scout · map tokio");
         let artisan = state
             .live_jobs
             .iter()
             .find(|job| job.call_id == "c2")
-            .expect("artisan");
-        assert!(artisan.capped);
-        assert_eq!(artisan.role, "artisan");
-        assert!(artisan.step.contains("(4)"), "{}", artisan.step);
-        let ignored = state
-            .live_jobs
-            .iter()
-            .find(|job| job.call_id == "c3")
-            .expect("scout cap line");
-        assert!(!ignored.capped);
-        assert_eq!(capped_artisan_count(&state.live_jobs), 1);
-        let status = state
-            .active
-            .as_ref()
-            .and_then(|conversation| conversation.streaming.as_ref())
-            .map(|streaming| streaming.status.clone())
-            .unwrap_or_default();
-        assert_eq!(status, capped_artisan_status(1));
-
-        super::super::reduce(
-            &mut state,
-            FrontendAction::ToolProgress {
-                call_id: "c2".to_owned(),
-                provider_call_id: String::new(),
-                name: String::new(),
-                message: "agent|artisan|path|/tmp/wt".to_owned(),
-            },
-        );
-        let artisan = state
-            .live_jobs
-            .iter()
-            .find(|job| job.call_id == "c2")
             .expect("artisan still running");
-        assert!(!artisan.capped);
+        assert_eq!(artisan.role, "artisan");
         assert_eq!(artisan.path, "/tmp/wt");
-        assert_eq!(capped_artisan_count(&state.live_jobs), 0);
 
         super::super::reduce(
             &mut state,

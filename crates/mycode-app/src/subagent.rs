@@ -16,7 +16,6 @@ use mycode_agent::{
     SubagentSettings, discover_roles,
 };
 use mycode_agent::{ReqwestTransport, ResolvedProvider, WireProvider};
-use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 mod worktree;
@@ -60,7 +59,6 @@ pub(crate) struct BridgeAgentHost {
     home: HomeLayout,
     cwd: PathBuf,
     settings: AppSettings,
-    slots: Arc<Semaphore>,
     session_id: String,
     /// Child cancel tokens keyed by `session_id:call_id`.
     cancels: Arc<parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
@@ -94,13 +92,11 @@ impl BridgeAgentHost {
         mcp_pool: Arc<tokio::sync::Mutex<Option<crate::mcp_tools::McpPool>>>,
         code_cells: Arc<mycode_agent::CodeCells>,
     ) -> Self {
-        let slots = mycode_agent::SUBAGENT_CONCURRENCY as usize;
         Self {
             resolved,
             home,
             cwd,
             settings: settings.clone(),
-            slots: Arc::new(Semaphore::new(slots)),
             session_id,
             cancels,
             mcp_pool,
@@ -108,11 +104,6 @@ impl BridgeAgentHost {
             context: None,
             steers: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
-    }
-
-    pub(crate) fn with_slots(mut self, slots: Arc<Semaphore>) -> Self {
-        self.slots = slots;
-        self
     }
 
     /// Lets each child size its context window from the catalog.
@@ -256,7 +247,6 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         .map(|role| role.catalog_line())
         .collect::<Vec<_>>()
         .join("\n");
-    let cap = mycode_agent::SUBAGENT_CONCURRENCY;
     // Built-in role guidance is named only while that role is enabled, so a
     // role switched off in settings is never advertised to the model.
     let has = |name: &str| enabled.iter().any(|role| role.name == name);
@@ -298,18 +288,10 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
         }
         dispatch.push("After rejection, action=revise requires id, node_id, feedback and expected_revision. Correct the producer and affected dependents within existing authorization and declared scope, then collect the new independent acceptance result. Preserve prior evidence and the original writer worktree. Revision starts summarized runs; it does not restore a full conversation session. No hidden retries, revival of cancelled workflows or revision before settling completes. Report scope or approval blockers.");
     }
-    let cap_warning = if has("artisan") {
-        ", and an artisan past that cap warns the user"
-    } else {
-        ""
-    };
-    let limit = format!(
-        "Every brief stands alone: the child cannot see this conversation; provide all necessary context. \
+    let limit = "Every brief stands alone: the child cannot see this conversation; provide all necessary context. \
          Name the goal, the paths or URLs you already know, the user's constraints that apply, and the shape of the answer you want. \
-         At most {cap} subagents run at once; the rest wait for a slot{cap_warning}. \
          A child runs until it answers, or until the user stops it, cancels this turn, or deletes the conversation. \
-         Its answer is a report, not proof: check a claim before you build on it when it matters."
-    );
+         Its answer is a report, not proof: check a claim before you build on it when it matters.";
     let dispatch_block = dispatch
         .iter()
         .map(|line| format!("- {line}"))
@@ -475,37 +457,15 @@ impl BridgeAgentHost {
         let isolation = resolve_isolation(&role, request.isolation.as_deref());
         // A parent interrupt stops the child. Leaving it running held the
         // turn open, so Stop, send, and the window close never came back.
-        // The token is published before the run queues for a slot, so
-        // the card's stop button also reaches a run that is still waiting.
         let child_cancel = cancel.child_token();
         let _child_lifetime = child_cancel.clone().drop_guard();
         let _registration =
             ChildCancelRegistration::new(&self.cancels, &self.session_id, call_id, &child_cancel);
         let _ = progress.progress(agent_progress(&role.name, "queued", &request.description));
         let _ = progress.progress(agent_progress(&role.name, "prompt", &request.prompt));
-        // `try_acquire` is the cap check: a waiter is past the limit.
-        // Only an artisan raises the user-facing warning; scouts still wait.
-        let permit = match self.slots.try_acquire() {
-            Ok(permit) => permit,
-            Err(tokio::sync::TryAcquireError::Closed) => {
-                return Err(fail("agent slots closed".to_owned()));
-            }
-            Err(tokio::sync::TryAcquireError::NoPermits) => {
-                if let Some(detail) =
-                    artisan_cap_detail(&role.name, 0, mycode_agent::SUBAGENT_CONCURRENCY)
-                {
-                    let _ = progress.progress(agent_progress(&role.name, "capped", &detail));
-                }
-                tokio::select! {
-                    permit = self.slots.acquire() => {
-                        permit.map_err(|_| fail("agent slots closed".to_owned()))?
-                    }
-                    () = child_cancel.cancelled() => {
-                        return Err(cancelled_subagent(&role.name));
-                    }
-                }
-            }
-        };
+        if child_cancel.is_cancelled() {
+            return Err(cancelled_subagent(&role.name));
+        }
         if retained.is_some() && (!role.is_write_capable() || isolation != RoleIsolation::Worktree)
         {
             return Err(fail(
@@ -553,16 +513,14 @@ impl BridgeAgentHost {
         // supervisors before inspecting or releasing the worktree.
         child_cancel.cancel();
         mycode_agent::builtin::settle_agent_activity().await;
-        let result = if let Some(lease) = worktree {
+        if let Some(lease) = worktree {
             match tokio::task::spawn_blocking(move || handoff_worktree(lease, result)).await {
                 Ok(outcome) => outcome,
                 Err(error) => Err(fail(format!("worktree handoff failed: {error}"))),
             }
         } else {
             result
-        };
-        drop(permit);
-        result
+        }
     }
 }
 
@@ -976,18 +934,6 @@ fn child_code_scope(session_id: &str, role: &str) -> String {
     static NEXT_RUN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let run = NEXT_RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     format!("{session_id}:{role}:{run}")
-}
-
-/// Progress detail when an artisan cannot take a concurrency slot.
-///
-/// Scouts share the semaphore and still wait, without this warning.
-/// `permits_available` is `0` after `try_acquire` reports no permits.
-fn artisan_cap_detail(role: &str, permits_available: usize, cap: u32) -> Option<String> {
-    if role == "artisan" && permits_available == 0 {
-        Some(cap.to_string())
-    } else {
-        None
-    }
 }
 
 fn cancelled_subagent(role: &str) -> mycode_agent::ToolError {

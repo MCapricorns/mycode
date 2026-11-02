@@ -27,7 +27,7 @@ impl Render for FollowProbe {
                     .h(px(self.viewport.get()))
                     .overflow_y_scroll()
                     .track_scroll(&self.handle)
-                    .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                    .on_scroll(cx.listener(|this, _, _, cx| {
                         this.following.set(
                             crate::workspace::Workspace::conversation_offset_is_at_tail(
                                 this.handle.offset().y,

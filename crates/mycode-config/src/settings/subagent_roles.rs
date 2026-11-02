@@ -7,8 +7,6 @@ use crate::ConfigError;
 
 /// Maximum configured subagent roles.
 const MAX_SUBAGENT_ROLES: usize = 32;
-/// Subagents that may run at once in one turn. Fixed, not a setting.
-pub const SUBAGENT_CONCURRENCY: u32 = 8;
 
 /// One role's model route and reasoning override.
 ///

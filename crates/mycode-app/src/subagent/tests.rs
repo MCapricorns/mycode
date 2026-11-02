@@ -13,13 +13,9 @@ fn parent_dispatch_names_enabled_builtin_roles_and_runtime_capabilities() {
     assert!(text.contains("one at a time"));
     assert!(text.contains("cannot run commands, build, test, or edit"));
     assert!(text.contains("API references"));
-    assert!(text.contains("warns the user"));
     assert!(text.contains("deletes the conversation"));
     assert!(!text.contains("wall-clock"));
-    assert!(text.contains(&format!(
-        "At most {} subagents",
-        mycode_agent::SUBAGENT_CONCURRENCY
-    )));
+    assert!(!text.contains("At most"));
     assert!(!text.contains("steward"));
     assert!(text.contains("`sentinel`"));
     assert!(text.contains("`skeptic`"));
@@ -633,20 +629,6 @@ fn artisan_gets_the_same_tool_guidance_as_the_parent() {
     assert!(
         !directive.contains("Do not do that research inline"),
         "{directive}"
-    );
-}
-
-#[test]
-fn only_an_artisan_with_no_permit_is_past_the_cap() {
-    assert_eq!(
-        super::artisan_cap_detail("artisan", 0, 4).as_deref(),
-        Some("4")
-    );
-    assert!(super::artisan_cap_detail("scout", 0, 4).is_none());
-    assert!(super::artisan_cap_detail("artisan", 1, 4).is_none());
-    assert_eq!(
-        super::agent_progress("artisan", "capped", "4"),
-        "agent|artisan|capped|4"
     );
 }
 

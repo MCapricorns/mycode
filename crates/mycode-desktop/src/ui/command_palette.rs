@@ -36,18 +36,18 @@ pub(crate) fn is_secondary_chord(keystroke: &Keystroke, key: &str) -> bool {
         return false;
     }
     let modifiers = keystroke.modifiers;
-    if !modifiers.secondary() || modifiers.shift || modifiers.alt || modifiers.function {
+    if modifiers.shift || modifiers.alt || modifiers.function {
         return false;
     }
-    // `secondary` is Command on macOS and Control elsewhere. Reject the other
+    // Secondary is Command on macOS and Control elsewhere. Reject the other
     // modifier so Command+Control+K does not open the palette.
     #[cfg(target_os = "macos")]
     {
-        !modifiers.control
+        modifiers.platform && !modifiers.control
     }
     #[cfg(not(target_os = "macos"))]
     {
-        !modifiers.platform
+        modifiers.control && !modifiers.platform
     }
 }
 
@@ -235,17 +235,27 @@ mod tests {
 
     #[test]
     fn secondary_k_toggles_the_palette_and_other_chords_do_not() {
-        let open = Keystroke::parse("secondary-k").expect("shortcut");
+        let open = if cfg!(target_os = "macos") {
+            Keystroke::parse("cmd-k").expect("shortcut")
+        } else {
+            Keystroke::parse("ctrl-k").expect("shortcut")
+        };
         assert!(is_command_palette_shortcut(&open));
         assert!(!is_command_palette_shortcut(
             &Keystroke::parse("k").expect("plain k")
         ));
-        assert!(!is_command_palette_shortcut(
-            &Keystroke::parse("secondary-shift-k").expect("shifted")
-        ));
-        assert!(!is_command_palette_shortcut(
-            &Keystroke::parse("alt-secondary-k").expect("alt")
-        ));
+        let shifted = if cfg!(target_os = "macos") {
+            Keystroke::parse("cmd-shift-k").expect("shifted")
+        } else {
+            Keystroke::parse("ctrl-shift-k").expect("shifted")
+        };
+        assert!(!is_command_palette_shortcut(&shifted));
+        let alt = if cfg!(target_os = "macos") {
+            Keystroke::parse("alt-cmd-k").expect("alt")
+        } else {
+            Keystroke::parse("alt-ctrl-k").expect("alt")
+        };
+        assert!(!is_command_palette_shortcut(&alt));
         // The platform modifier that is not the secondary key (Super / Win,
         // or Control on macOS) is a different chord.
         let other = if cfg!(target_os = "macos") {

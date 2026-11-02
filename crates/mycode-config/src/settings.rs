@@ -28,7 +28,7 @@ pub use mcp::{
 pub use providers::{MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MODELS_PER_PROVIDER, ProviderSettings};
 pub use proxy::{PROXY_SCHEMES, ProxyPreference};
 pub use skills::{MAX_DISABLED_SKILLS, SkillsSettings};
-pub use subagent_roles::{SUBAGENT_CONCURRENCY, SubagentRoleSettings, SubagentSettings};
+pub use subagent_roles::{SubagentRoleSettings, SubagentSettings};
 
 use serde::{Deserialize, Serialize};
 

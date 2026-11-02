@@ -17,7 +17,7 @@ MYCode 是使用 GPUI 的 Rust 原生代理应用。用户在桌面发送消息�
 
 ## 子代理编排
 
-内置角色包括：`scout` 检索，`artisan` 实施有界变更，`sentinel` 审查，`skeptic` 验证明确假设。`scout`、`sentinel`、`skeptic` 在角色文件被覆盖后仍保持内置工具的只读边界：只留下 `read`、`grep`、`find`，远端 MCP 另按只读注解过滤。宿主可把过滤后的工具注册表包装进 CodeMode，但脚本不能借此获得命令行工具或写工具。子代理不能调用父级委派、流程控制或 `ask_user`，因而不能继续嵌套派工。
+内置角色包括：`scout` 检索，`artisan` 实施有界变更，`sentinel` 审查，`skeptic` 验证明确假设。子代理不设全局并发数量上限；`scout`、`sentinel`、`skeptic` 在角色文件被覆盖后仍保持内置工具的只读边界：只留下 `read`、`grep`、`find`，远端 MCP 另按只读注解过滤。宿主可把过滤后的工具注册表包装进 CodeMode，但脚本不能借此获得命令行工具或写工具。子代理不能调用父级委派、流程控制或 `ask_user`，因而不能继续嵌套派工。
 
 `agent` 接收自足的 `prompt`、角色 `agent`，可带 `description`、`isolation`、`phase_id` 和 `scope`。子代理看不到父对话，任务说明应写明目标、相关路径、完成条件和检查。写角色默认使用分离检出的 Git 工作树；显式 `shared` 使用父工作区。`phase_id` 防止重复派发已保留的同阶段工作，`scope.paths` / `scope.symbols` 用确切声明协调活跃和待执行写入任务的重叠。声明范围是协作约定，不是文件系统权限或沙箱；省略它不能获得重叠检查的保护。
 

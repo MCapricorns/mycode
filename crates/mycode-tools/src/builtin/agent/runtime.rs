@@ -44,21 +44,13 @@ pub(super) struct RuntimeState {
 pub struct AgentRuntime {
     pub(super) state: Mutex<RuntimeState>,
     pub(super) artifacts: PathBuf,
-    slots: std::sync::OnceLock<Arc<tokio::sync::Semaphore>>,
 }
 impl AgentRuntime {
     pub fn new(artifact_dir: PathBuf) -> Self {
         Self {
             state: Mutex::new(RuntimeState::default()),
             artifacts: artifact_dir,
-            slots: std::sync::OnceLock::new(),
         }
-    }
-    /// The session-wide host concurrency budget, also shared by yielded cells.
-    pub fn slots(&self, limit: usize) -> Arc<tokio::sync::Semaphore> {
-        self.slots
-            .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(limit.max(1))))
-            .clone()
     }
 
     pub(super) fn snapshots(&self, id: Option<&str>) -> Result<Vec<AgentStateEvent>, ToolError> {

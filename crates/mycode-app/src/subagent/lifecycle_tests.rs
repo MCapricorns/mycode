@@ -71,33 +71,26 @@ async fn actual_host_validates_custom_role_overrides_and_disabled_roles_before_r
     assert!(disabled.validate_role("missing-role").await.is_err());
 }
 #[tokio::test]
-async fn queued_actual_host_cancels_without_allocating_a_worktree_and_keeps_scope_until_settled() {
-    use mycode_agent::builtin::{
-        AgentRunStatus, AgentRuntime, AgentStateEvent, AgentStatusTool, AgentTool,
-    };
+async fn cancelled_actual_host_stops_without_allocating_a_worktree_and_settles_scope() {
+    use mycode_agent::builtin::{AgentRuntime, AgentStateEvent, AgentStatusTool, AgentTool};
     use mycode_agent::{ToolCtx, ToolDyn, ToolStream};
     let f = Fixture::new();
-    let host = Arc::new(
-        f.host(AppSettings::default())
-            .with_slots(Arc::new(Semaphore::new(0))),
-    );
+    let host = Arc::new(f.host(AppSettings::default()));
     let runtime = Arc::new(AgentRuntime::new(f.home.root().join("results")));
     let tool = AgentTool::new(host.clone()).with_runtime(runtime.clone());
-    let ctx = ToolCtx::new(&f.cwd).with_call_id("queued-child");
-    let task = tokio::spawn(async move {
-        tool.execute_dyn(serde_json::json!({"agent":"artisan","prompt":"queued only","scope":{"paths":["src/owned.rs"]}}),&ctx,&mut ToolStream::closed()).await
-    });
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while !host.cancels.lock().contains_key("session:queued-child") {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    let conflict=AgentTool::new(host.clone()).with_runtime(runtime.clone()).execute_dyn(serde_json::json!({"agent":"artisan","prompt":"colliding","scope":{"paths":["src/owned.rs"]}}),&ToolCtx::new(&f.cwd).with_call_id("other"),&mut ToolStream::closed()).await;
-    assert!(conflict.unwrap_err().to_string().contains("active writer"));
-    host.cancels.lock()["session:queued-child"].cancel();
-    assert!(task.await.unwrap().unwrap().is_error);
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let ctx = ToolCtx::new(&f.cwd)
+        .with_call_id("cancelled-child")
+        .with_cancel(cancel);
+    let outcome = tool
+        .execute_dyn(
+            serde_json::json!({"agent":"artisan","prompt":"cancelled before start","scope":{"paths":["src/owned.rs"]}}),
+            &ctx,
+            &mut ToolStream::closed(),
+        )
+        .await;
+    assert!(outcome.is_err());
     let status = AgentStatusTool::new(runtime)
         .execute_dyn(
             serde_json::json!({}),
@@ -108,9 +101,7 @@ async fn queued_actual_host_cancels_without_allocating_a_worktree_and_keeps_scop
         .unwrap();
     let states: Vec<AgentStateEvent> =
         serde_json::from_value(status.details.unwrap()["agent_states"].clone()).unwrap();
-    assert!(
-        matches!(&states[0],AgentStateEvent::Run(r) if r.call_id=="queued-child" && r.status==AgentRunStatus::Cancelled)
-    );
+    assert!(states.is_empty(), "{states:?}");
     assert!(!f.home.root().join("agent-worktrees").exists());
     assert!(host.cancels.lock().is_empty());
 }

@@ -359,7 +359,7 @@ pub(super) fn render_chat(
                             .overflow_x_hidden()
                             .overflow_y_scroll()
                             .track_scroll(&scroll_handle)
-                            .on_scroll_wheel(cx.listener(|workspace, _, _, cx| {
+                            .on_scroll(cx.listener(|workspace, _, _, cx| {
                                 workspace.on_conversation_scrolled(cx);
                             }))
                             .on_mouse_up(

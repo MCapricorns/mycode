@@ -169,8 +169,8 @@ jobs:
               echo "bump to ${VERSION} did not change version files" >&2
               exit 1
             fi
-            export GIT_AUTHOR_NAME="github-actions[bot]"
-            export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+            export GIT_AUTHOR_NAME="MaMy"
+            export GIT_AUTHOR_EMAIL="mamy@mamy.tech"
             export GIT_COMMITTER_NAME="${GIT_AUTHOR_NAME}"
             export GIT_COMMITTER_EMAIL="${GIT_AUTHOR_EMAIL}"
             git add Cargo.toml Cargo.lock CHANGELOG.md

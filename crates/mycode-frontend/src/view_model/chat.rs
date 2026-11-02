@@ -59,8 +59,6 @@ pub struct LiveJob {
     pub step: String,
     /// Recent progress lines for the detail window.
     pub log: Vec<String>,
-    /// An artisan is waiting because every concurrency slot is taken.
-    pub capped: bool,
     /// Unix milliseconds when the job was first seen, for its running-time
     /// line. `0` means unknown (defaulted state), not epoch.
     pub started_ms: u64,
@@ -84,8 +82,7 @@ impl LiveJob {
         }
     }
 
-    /// Progress line for a row. Token steps are localized; a cap warning is
-    /// already a sentence.
+    /// Progress line for a row. Token steps are localized.
     #[must_use]
     pub fn step_label(&self) -> String {
         match self.step.as_str() {
@@ -125,43 +122,12 @@ pub fn elapsed_label(ms: u64) -> String {
     }
 }
 
-/// How many listed jobs are artisans waiting past the concurrency cap.
-#[must_use]
-pub fn capped_artisan_count(jobs: &[LiveJob]) -> usize {
-    jobs.iter()
-        .filter(|job| job.capped && job.role == "artisan")
-        .count()
-}
-
-/// Status and banner copy for artisans queued past the concurrency cap.
-#[must_use]
-pub fn capped_artisan_status(count: usize) -> String {
-    if count == 1 {
-        crate::i18n::t(
-            "1 artisan queued past the concurrency cap",
-            "1 个 artisan 超过并发上限在排队",
-        )
-        .to_owned()
-    } else {
-        format!(
-            "{count} {}",
-            crate::i18n::t(
-                "artisans queued past the concurrency cap",
-                "个 artisan 超过并发上限在排队",
-            )
-        )
-    }
-}
-
 /// Status-line copy while subagents run. The transcript row of each `agent`
-/// call already names its task, so the line only says the turn is waiting;
-/// a cap warning is the one detail it still carries.
+/// call already names its task, so the line only says the turn is waiting.
 #[must_use]
 pub fn subagent_wait_status(jobs: &[LiveJob]) -> Option<String> {
-    let capped = capped_artisan_count(jobs);
     match jobs.len() {
         0 => None,
-        _ if capped > 0 => Some(capped_artisan_status(capped)),
         1 => Some(crate::i18n::t("Waiting for the agent to finish", "等待代理结束").to_owned()),
         count => Some(if crate::i18n::is_chinese() {
             format!("等待 {count} 个代理结束")
