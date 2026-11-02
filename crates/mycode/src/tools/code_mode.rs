@@ -92,7 +92,8 @@ impl Tool for RunCodeTool {
          metadata without base64. Dispatch refusals also include the legacy `__error__` message. `log(text)` reports \
          progress; `complete(value)` ends the script and returns \
          value, cancelling outstanding calls; await required work first. Only registered tools are reachable; \
-         the script cannot add capabilities. A long script returns a cell id to continue \
+         the script cannot add capabilities. Logs have a cumulative 4 MiB / 1024-entry budget; \
+         exhausting either limit stops the script. A long script returns a cell id to continue \
          with wait_code."
     }
 

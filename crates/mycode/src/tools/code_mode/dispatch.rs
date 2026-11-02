@@ -79,9 +79,9 @@ pub(crate) struct DispatchContext {
     pub(crate) call_id: String,
 }
 
-/// One progress line from a script is bounded before it reaches the tool
-/// stream: the model can build 4 MiB strings, and an unbounded progress
-/// channel would let `log` bypass `max_output_bytes`.
+/// Bound each rendered progress line before it reaches the tool stream.
+/// The engine separately bounds cumulative log bytes and entries before
+/// admission to the host queue, including while an exclusive tool blocks it.
 const MAX_PROGRESS_BYTES: usize = 2048;
 
 /// Drives one cell until the script finishes or the cell is terminated.

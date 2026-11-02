@@ -372,3 +372,26 @@ complete('escaped');
     );
     assert!(!text_of(&result).contains("escaped"));
 }
+
+#[tokio::test]
+async fn log_budget_exhaustion_cannot_be_caught_or_keep_exclusive_work_alive() {
+    let calls = Arc::new(Calls::default());
+    let result = probe_script(
+        r#"
+const pending = callAsync('probe', {id: 'held', parallel: false, hold: true});
+try {
+    for (let i = 0; i < 1025; i++) log('');
+} catch (_) { complete('escaped'); }
+finally { log('escaped finally'); }
+await pending;
+complete('escaped');
+"#,
+        Arc::clone(&calls),
+        None,
+    )
+    .await;
+    assert!(result.is_error, "{result:?}");
+    assert!(text_of(&result).contains("log budget exhausted (entry limit)"));
+    assert!(!text_of(&result).contains("escaped"));
+    assert_eq!(calls.active.load(Ordering::SeqCst), 0);
+}

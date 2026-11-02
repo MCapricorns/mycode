@@ -6,6 +6,9 @@
 
 mod promises;
 
+#[cfg(test)]
+mod log_tests;
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -33,6 +36,11 @@ pub const MAX_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_STACK_BYTES: usize = 256 * 1024;
 /// Source limit, checked before parsing.
 pub const MAX_SCRIPT_BYTES: usize = 4 * 1024 * 1024;
+/// Cumulative UTF-8 log payload admitted outside the JavaScript heap.
+/// The dispatcher may be unable to consume logs while an exclusive tool runs.
+pub const MAX_LOG_BYTES: usize = 4 * 1024 * 1024;
+/// Bounds queued empty/tiny logs and their retained journal entries as well.
+pub const MAX_LOG_ENTRIES: usize = 1024;
 
 /// Runs one script; no QuickJS value or runtime crosses a thread boundary.
 pub(crate) fn evaluate(
@@ -217,12 +225,30 @@ fn register_host_functions<'js>(
 
     let log_tx = host_tx.clone();
     let log_cell = Arc::clone(&cell);
+    let log_budget = Rc::new(Cell::new((0_usize, 0_usize)));
+    let log_usage = Rc::clone(&log_budget);
     ctx.globals().set(
         "log",
         Function::new(
             ctx.clone(),
             move |ctx: Ctx<'js>, value: JsValue<'js>| -> rquickjs::Result<()> {
+                // Admission is cumulative, not reset when the dispatcher drains:
+                // it bounds both the native queue and the retained journal. Check
+                // the entry count before converting another potentially large value.
+                if log_usage.get().0 >= MAX_LOG_ENTRIES {
+                    return Err(stop_evaluation(&ctx, "log budget exhausted (entry limit)"));
+                }
                 let text = render_value(&ctx, &value)?;
+                // JSON conversion may re-enter log through a toJSON method or
+                // getter. Never overwrite budget usage charged by that inner log.
+                let (entries, bytes) = log_usage.get();
+                if entries >= MAX_LOG_ENTRIES {
+                    return Err(stop_evaluation(&ctx, "log budget exhausted (entry limit)"));
+                }
+                if text.len() > MAX_LOG_BYTES.saturating_sub(bytes) {
+                    return Err(stop_evaluation(&ctx, "log budget exhausted (byte limit)"));
+                }
+                log_usage.set((entries + 1, bytes + text.len()));
                 log_cell.push_output(&text);
                 let seq = log_cell.next_seq();
                 let _ = log_tx.send(HostRequest::Log { seq, text });
@@ -243,6 +269,10 @@ fn register_host_functions<'js>(
                     "max_operations": MAX_OPERATIONS,
                     "max_output_bytes": budget_cell.max_output_bytes(),
                     "max_memory_bytes": MAX_MEMORY_BYTES,
+                    "logs_used": log_budget.get().0,
+                    "max_logs": MAX_LOG_ENTRIES,
+                    "log_bytes_used": log_budget.get().1,
+                    "max_log_bytes": MAX_LOG_BYTES,
                 })
                 .to_string(),
             )
