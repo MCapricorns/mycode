@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.35] - 2026-11-02
+
 ### Added
 
 - CodeMode 支持顶层 `await`、Promise 和 `callAsync(name, args)`，可通过 `Promise.all` 并发执行独立的读取与搜索；保留同步 `call(name, args)`。
@@ -567,7 +569,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.34...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.35...HEAD
+[0.12.35]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.35
 [0.12.34]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.34
 [0.12.33]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.33
 [0.12.32]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.32
