@@ -9,6 +9,7 @@
 //! not by this client. The [`JsonRpcChannel`] seam abstracts the byte
 //! transport shared by both.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -66,6 +67,8 @@ pub trait JsonRpcChannel: Send + Sync + 'static {
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// Maximum tools listed per server.
 pub const MAX_TOOLS: usize = 128;
+/// Bounds even a server that returns empty pages with fresh cursors forever.
+const MAX_TOOL_PAGES: usize = MAX_TOOLS;
 /// Per-request timeout every MCP channel is constructed with: it bounds each
 /// JSON-RPC hop for the channel's whole lifetime — the handshake, tools/list,
 /// and every tools/call a turn issues. Both the settings-page probe and the
@@ -245,16 +248,24 @@ impl McpClient {
     ///
     /// Returns [`McpError`] for transport and contract failures.
     pub async fn list_tools(&mut self) -> Result<Vec<McpTool>, McpError> {
-        let result = self.call("tools/list", json!({})).await?;
-        let Some(tools) = result["tools"].as_array() else {
-            return Err(McpError::protocol("tools/list result has no tools array"));
-        };
-        if tools.len() > MAX_TOOLS {
-            return Err(McpError::Oversized);
-        }
-        Ok(tools
-            .iter()
-            .filter_map(|tool| {
+        let mut listed = Vec::new();
+        let mut seen_cursors = HashSet::new();
+        let mut cursor: Option<String> = None;
+        let mut total = 0usize;
+        for _ in 0..MAX_TOOL_PAGES {
+            let params = match cursor.take() {
+                Some(cursor) => json!({ "cursor": cursor }),
+                None => json!({}),
+            };
+            let result = self.call("tools/list", params).await?;
+            let Some(tools) = result["tools"].as_array() else {
+                return Err(McpError::protocol("tools/list result has no tools array"));
+            };
+            total = total.checked_add(tools.len()).ok_or(McpError::Oversized)?;
+            if total > MAX_TOOLS {
+                return Err(McpError::Oversized);
+            }
+            listed.extend(tools.iter().filter_map(|tool| {
                 // A nameless tool cannot be called; skip it instead of
                 // advertising an empty name to the model.
                 let name = tool["name"].as_str()?;
@@ -274,8 +285,23 @@ impl McpClient {
                         .and_then(Value::as_bool)
                         == Some(true),
                 })
-            })
-            .collect())
+            }));
+            match result.get("nextCursor") {
+                None | Some(Value::Null) => return Ok(listed),
+                Some(Value::String(next)) => {
+                    if !seen_cursors.insert(next.clone()) {
+                        return Err(McpError::protocol(
+                            "tools/list repeated a pagination cursor",
+                        ));
+                    }
+                    cursor = Some(next.clone());
+                }
+                Some(_) => {
+                    return Err(McpError::protocol("tools/list nextCursor is not a string"));
+                }
+            }
+        }
+        Err(McpError::Oversized)
     }
 
     /// Calls one tool and returns its concatenated text content together
@@ -344,3 +370,6 @@ impl McpClient {
         self.channel.request(id, method, params).await
     }
 }
+
+#[cfg(test)]
+mod tests;
