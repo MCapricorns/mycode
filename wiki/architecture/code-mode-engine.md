@@ -145,10 +145,13 @@ MCP 图片和音频目前只显示文字占位，不走内置 read 的原生图�
 | JavaScript 堆 | 32 MiB |
 | JavaScript 原生栈 | 256 KiB |
 | 脚本源码 | 4 MiB |
+| 日志 | 每次脚本累计 4 MiB UTF-8 文本、1024 条；空日志也计数 |
 | Promise 任务 | 每次脚本最多执行 10,000 个任务，防止无限微任务链 |
 | QuickJS 中断检查 | 100 次；用于限制执行量，不等于 100 条 JavaScript 指令 |
 | 待交付图片 | 4 张，base64 合计 6 MiB |
 | 保留的执行记录 | 进程内最多 32 个 cell |
+
+日志预算在进入宿主队列前检查，读取日志不会重置累计用量。超限会终止脚本并取消未完成调用，不能通过 JavaScript 的 catch 继续执行。budget() 返回 logs_used、max_logs、log_bytes_used 和 max_log_bytes，分别表示日志条数和字节数的已用量与上限。
 
 没有 setTimeout、Date、performance 或 Math.random。eval、Function 及动态构造入口也不可用。文件、进程和网络访问都通过注册工具完成；这些资源限制不等于操作系统沙箱。
 

@@ -8,6 +8,15 @@
 
 ## [Unreleased]
 
+## [0.12.37] - 2026-11-02
+
+### Fixed
+
+- MCP 工具发现读取全部分页，并对工具总数、页数和重复游标设限，避免漏掉后续工具或无限翻页。
+- CodeMode 在日志进入宿主队列前执行累计 4 MiB / 1024 条预算，覆盖空日志、UTF-8 文本和重入序列化；超限终止脚本并取消未完成调用。
+- Markdown 代码块、行内代码、引用、缩进代码及转义后的 XML 示例保留为文本，避免误触发工具；继续支持 MiniMax、Qwen 等端点的原始 XML 工具调用。
+- 发送消息后切换会话或模型时，继续使用提交时的会话和模型；失败草稿及附件只恢复到原会话，提交期间停止和取消失败均正确清理发送状态。
+
 ## [0.12.36] - 2026-11-02
 
 ### Fixed
@@ -576,7 +585,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.36...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.37...HEAD
+[0.12.37]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.37
 [0.12.36]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.36
 [0.12.35]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.35
 [0.12.34]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.34
