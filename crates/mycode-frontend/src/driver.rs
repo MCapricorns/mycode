@@ -13,7 +13,7 @@
 //! frontend can pace streamed deltas (the desktop's typewriter frames)
 //! while control messages are handled immediately.
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
@@ -385,8 +385,6 @@ pub struct FrontendDriver {
     repairs_toasted: usize,
     /// A single toast for the untoasted repairs is already scheduled.
     repair_toast_armed: bool,
-    /// Bundle of the import in flight.
-    import_request: Option<PathBuf>,
     /// Roles resolved from built-ins, the home `agents` directory, and the
     /// open project's `.mycode/agents`. `None` until a surface asks for them.
     agent_roles: Option<Arc<mycode_app::RoleCatalog>>,
@@ -481,7 +479,6 @@ impl FrontendDriver {
             repaired_configs: Vec::new(),
             repairs_toasted: 0,
             repair_toast_armed: false,
-            import_request: None,
             agent_roles: None,
             agent_roles_project: None,
             agent_roles_stale: false,

@@ -443,7 +443,6 @@ pub(crate) fn section_icon(section: SettingsSection) -> IconName {
         SettingsSection::Agents => IconName::Sparkles,
         SettingsSection::Skills => IconName::Terminal,
         SettingsSection::Mcp => IconName::PlugZap,
-        SettingsSection::Data => IconName::Database,
         SettingsSection::About => IconName::Info,
     }
 }

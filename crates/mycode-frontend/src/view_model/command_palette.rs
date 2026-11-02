@@ -327,7 +327,6 @@ fn section_keywords(section: SettingsSection) -> &'static [&'static str] {
         SettingsSection::Agents => &["agents", "子代理", "scout", "artisan", "roles", "角色"],
         SettingsSection::Skills => &["skills", "技能", "slash", "斜杠"],
         SettingsSection::Mcp => &["mcp", "tool servers", "工具服务器"],
-        SettingsSection::Data => &["data", "数据", "export", "import", "导出", "导入"],
         SettingsSection::About => &["about", "关于", "version", "updates", "版本", "更新"],
     }
 }

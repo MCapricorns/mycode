@@ -6,7 +6,6 @@
 //! layout pass.
 mod about;
 mod agents;
-mod data;
 mod general;
 mod mcp;
 mod models;
@@ -147,9 +146,6 @@ pub(super) fn render_settings_view(
                                         }
                                         SettingsSection::Mcp => {
                                             mcp::render_mcp_section(workspace, cx)
-                                        }
-                                        SettingsSection::Data => {
-                                            data::render_data_section(workspace, cx)
                                         }
                                         SettingsSection::About => {
                                             about::render_about_section(workspace, cx)
@@ -316,7 +312,6 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
                 lamp: None,
             },
         ),
-        (SettingsSection::Data, NavBadge::default()),
         (
             SettingsSection::About,
             NavBadge {

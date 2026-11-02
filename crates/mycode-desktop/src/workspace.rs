@@ -27,7 +27,7 @@ mod palette;
 mod projects;
 mod settings_editor;
 mod toasts;
-mod updates_data;
+mod updates;
 
 pub(crate) use toasts::{Toast, ToastKind};
 

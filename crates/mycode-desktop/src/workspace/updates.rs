@@ -1,5 +1,5 @@
-//! Self-update buttons, data export/import prompts, the pending-ask card's
-//! input entities, and the Escape key's layer dismissal. The product side
+//! Self-update buttons, the pending-ask card's input entities, and the
+//! Escape key's layer dismissal. The product side
 //! of every one of these lives in the frontend driver; this file keeps the
 //! prompts and the per-question text fields only gpui can own.
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -186,55 +186,6 @@ impl Workspace {
         }
         // Escape never stops a running turn: the Stop button is the only way
         // out, so a stray keypress cannot touch running work.
-    }
-
-    // ---- data export / import ----
-
-    /// Exports the product configuration (settings, UI state, provider API
-    /// keys) to a file chosen in a save dialog. Conversations never travel,
-    /// and the file carries the keys as plaintext JSON.
-    pub(crate) fn on_export_data(&mut self, cx: &mut Context<Self>) {
-        let home = crate::ui::project_picker::starting_directory();
-        let documents = home.join("Documents");
-        let directory = if documents.is_dir() { documents } else { home };
-        let stamp = crate::unix_now().as_secs();
-        let suggested = format!("mycode-export-{stamp}.json");
-        let receiver = cx.prompt_for_new_path(&directory, Some(&suggested));
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(path))) = receiver.await else {
-                return;
-            };
-            let _ = this.update(cx, |workspace, _cx| {
-                workspace.driver.export_data(path);
-            });
-        })
-        .detach();
-    }
-
-    /// Applies one export bundle chosen in an open dialog: settings, UI
-    /// state, and provider keys. Conversations are never imported.
-    pub(crate) fn on_import_data(&mut self, cx: &mut Context<Self>) {
-        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some(
-                crate::i18n::t("Choose a MYCode export bundle", "选择 MYCode 导出文件").into(),
-            ),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = receiver.await else {
-                return;
-            };
-            let Some(path) = paths.first().cloned() else {
-                return;
-            };
-            let _ = this.update(cx, |workspace, cx| {
-                workspace.driver.import_data(path);
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     /// Probes one MCP server for its tool list.

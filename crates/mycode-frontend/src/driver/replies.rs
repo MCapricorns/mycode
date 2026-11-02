@@ -242,44 +242,6 @@ impl FrontendDriver {
                 self.act(FrontendAction::Failed(message), out);
                 self.toast_applied_update(out);
             }
-            BridgeReply::Exported(Ok(_summary)) => {}
-            BridgeReply::Exported(Err(message)) => {
-                self.act(
-                    FrontendAction::Failed(format!(
-                        "{} {message}",
-                        crate::i18n::t("export failed:", "导出失败：")
-                    )),
-                    out,
-                );
-            }
-            BridgeReply::Imported(Ok(summary)) => {
-                self.import_request = None;
-                // Reload everything the bundle replaced: settings, key
-                // markers, and UI state. Sessions were not touched.
-                self.reload_settings();
-                self.dispatch(BridgeCommand::LoadUiState);
-                let message = if summary.secrets > 0 {
-                    format!(
-                        "{} {} {}",
-                        crate::i18n::t("imported configuration and", "已导入配置和"),
-                        summary.secrets,
-                        crate::i18n::t("API key(s)", "个 API 密钥")
-                    )
-                } else {
-                    crate::i18n::t("imported configuration", "已导入配置").to_owned()
-                };
-                self.toast(message, ToastKind::Info, out);
-            }
-            BridgeReply::Imported(Err(message)) => {
-                self.import_request = None;
-                self.act(
-                    FrontendAction::Failed(format!(
-                        "{} {message}",
-                        crate::i18n::t("import failed:", "导入失败：")
-                    )),
-                    out,
-                );
-            }
             BridgeReply::Recalled(Ok((conversation, edit))) => {
                 let session_id = conversation.session_id.clone();
                 self.act(FrontendAction::ConversationOpened(*conversation), out);

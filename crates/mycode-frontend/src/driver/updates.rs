@@ -1,6 +1,4 @@
-//! Self-update driving (check, download, install), the ask card's answer
-//! flow, and the configuration export/import pipeline.
-use std::path::PathBuf;
+//! Self-update driving (check, download, install) and the ask card's answer flow.
 
 use mycode_app::BridgeCommand;
 
@@ -238,21 +236,5 @@ impl FrontendDriver {
             session_id,
             answers,
         });
-    }
-
-    // ---- data export / import ----
-
-    /// Exports the product configuration (settings, UI state, provider API
-    /// keys) to `path`. Conversations never travel. The destination picker
-    /// is the frontend's; the driver only takes the chosen file.
-    pub fn export_data(&mut self, path: PathBuf) {
-        self.dispatch(BridgeCommand::ExportData { path });
-    }
-
-    /// Applies one export bundle chosen in an open dialog: settings, UI
-    /// state, and provider keys. Conversations are never imported.
-    pub fn import_data(&mut self, path: PathBuf) {
-        self.import_request = Some(path.clone());
-        self.dispatch(BridgeCommand::ImportData { path });
     }
 }

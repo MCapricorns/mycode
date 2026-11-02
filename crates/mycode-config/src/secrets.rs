@@ -191,42 +191,10 @@ pub fn salvage_provider_secrets(document: &serde_json::Value) -> Option<Provider
     Some(secrets)
 }
 
-/// Replaces `secrets.json` under revision compare-and-swap.
-///
-/// # Errors
-///
-/// Returns [`ConfigErrorKind::RevisionConflict`] for a stale expectation and
-/// [`ConfigError`] for validation or transaction failures.
-pub fn replace_provider_secrets(
-    home: &HomeLayout,
-    expected_revision: AuthorityRevision,
-    secrets: &ProviderSecrets,
-) -> Result<AuthorityRevision, ConfigError> {
-    secrets.validate()?;
-    let mut published_revision = None;
-    locked_update_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES, |current| {
-        let current_revision = match current {
-            Some(bytes) => parse_document_header(bytes)?,
-            None => AuthorityRevision::ABSENT,
-        };
-        if current_revision != expected_revision {
-            return Err(ConfigError::new(ConfigErrorKind::RevisionConflict));
-        }
-        let revision = current_revision.checked_next()?;
-        let bytes = encode_secrets(secrets, revision)?;
-        published_revision = Some(revision);
-        Ok(bytes)
-    })?;
-    published_revision.ok_or_else(|| ConfigError::new(ConfigErrorKind::Serialization))
-}
-
 /// Sets or clears one provider key in a single locked read-modify-write.
 ///
-/// Unlike [`replace_provider_secrets`], two writers that race never fail
-/// each other with a revision conflict: each applies its own key to the
-/// document the lock hands it, so concurrent key saves (an `mcp.json`
-/// import, an OAuth token rotation mid-turn) all land. Returns the store as
-/// published.
+/// Each writer applies its key to the document the lock hands it, so
+/// concurrent key updates all land. Returns the store as published.
 ///
 /// # Errors
 ///
@@ -277,10 +245,6 @@ struct DeserializedSecrets {
 struct ParsedSecrets {
     secrets: ProviderSecrets,
     revision: AuthorityRevision,
-}
-
-fn parse_document_header(bytes: &[u8]) -> Result<AuthorityRevision, ConfigError> {
-    Ok(decode_secrets(bytes)?.revision)
 }
 
 fn decode_secrets(bytes: &[u8]) -> Result<ParsedSecrets, ConfigError> {

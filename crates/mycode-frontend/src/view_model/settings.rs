@@ -137,8 +137,6 @@ pub enum SettingsSection {
     Skills,
     /// MCP servers.
     Mcp,
-    /// Data export/import.
-    Data,
     /// Version and updates.
     About,
 }
@@ -153,7 +151,6 @@ impl SettingsSection {
             Self::Agents => "agents",
             Self::Skills => "skills",
             Self::Mcp => "mcp",
-            Self::Data => "data",
             Self::About => "about",
         }
     }
@@ -167,7 +164,6 @@ impl SettingsSection {
             Self::Agents => t("Agents", "子代理"),
             Self::Skills => t("Skills", "技能"),
             Self::Mcp => "MCP",
-            Self::Data => t("Data", "数据"),
             Self::About => t("About", "关于"),
         }
     }
@@ -190,7 +186,6 @@ impl SettingsSection {
             ),
             Self::Skills => t("Slash commands", "斜杠命令"),
             Self::Mcp => t("Tool servers", "工具服务器"),
-            Self::Data => t("Export, import", "导出、导入"),
             Self::About => t("Version, updates", "版本、更新"),
         }
     }
@@ -202,7 +197,7 @@ impl SettingsSection {
             "Models" => "Magpie",
             "Agents" => t("Agents", "子代理"),
             "Tools" => t("Tools / MCP", "工具 / MCP"),
-            _ => t("Data & Updates", "数据与更新"),
+            _ => t("Application", "应用"),
         }
     }
 
@@ -212,7 +207,7 @@ impl SettingsSection {
         ("Models", &[Self::Models]),
         ("Agents", &[Self::Agents]),
         ("Tools", &[Self::Skills, Self::Mcp]),
-        ("Data", &[Self::Data, Self::About]),
+        ("App", &[Self::About]),
     ];
 }
 
@@ -234,7 +229,7 @@ mod tests {
     #[test]
     fn nav_groups_match_the_settings_shell() {
         let ids: Vec<_> = SettingsSection::GROUPS.iter().map(|(id, _)| *id).collect();
-        assert_eq!(ids, ["Appearance", "Models", "Agents", "Tools", "Data"]);
+        assert_eq!(ids, ["Appearance", "Models", "Agents", "Tools", "App"]);
         let mut members = Vec::new();
         for (_, sections) in SettingsSection::GROUPS {
             members.extend(sections.iter().copied());
@@ -248,7 +243,6 @@ mod tests {
                 SettingsSection::Agents,
                 SettingsSection::Skills,
                 SettingsSection::Mcp,
-                SettingsSection::Data,
                 SettingsSection::About,
             ]
         );

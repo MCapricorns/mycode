@@ -354,8 +354,6 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
         BridgeCommand::RecallMessage { .. } => BridgeReply::Recalled(Err(message)),
         BridgeCommand::DeleteSession { .. } => BridgeReply::SessionDeleted(Err(message)),
         BridgeCommand::RemoveRecent { .. } => BridgeReply::UiStateSaved(Err(message)),
-        BridgeCommand::ExportData { .. } => BridgeReply::Exported(Err(message)),
-        BridgeCommand::ImportData { .. } => BridgeReply::Imported(Err(message)),
         BridgeCommand::ListResources { .. } => BridgeReply::Resources(Err(message)),
         BridgeCommand::AskAnswer { .. } | BridgeCommand::AskDismiss { .. } => {
             BridgeReply::AskAnswered(Err(message))
@@ -619,16 +617,6 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
                 })
                 .await,
             )
-        }
-        BridgeCommand::ExportData { path } => {
-            let home = state.home.clone();
-            let outcome = blocking(move || crate::export::export_to_file(&home, &path)).await;
-            BridgeReply::Exported(outcome)
-        }
-        BridgeCommand::ImportData { path } => {
-            let home = state.home.clone();
-            let outcome = blocking(move || crate::export::import_from_file(&home, &path)).await;
-            BridgeReply::Imported(outcome)
         }
         BridgeCommand::ListResources { session_id } => {
             let home = state.home.clone();

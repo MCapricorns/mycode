@@ -52,8 +52,8 @@ pub use resources::{
 };
 pub use secrets::{
     MAX_SECRETS_BYTES, ProviderSecrets, SECRETS_FORMAT_VERSION, SECRETS_PATH,
-    read_provider_secrets, read_provider_secrets_with_repair, replace_provider_secrets,
-    salvage_provider_secrets, update_provider_key,
+    read_provider_secrets, read_provider_secrets_with_repair, salvage_provider_secrets,
+    update_provider_key,
 };
 #[doc(inline)]
 pub use secure_fs::owned_file::{locked_update_owned_file, read_owned_file};

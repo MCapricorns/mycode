@@ -14,7 +14,6 @@
 mod bridge_tests;
 mod compaction;
 mod dispatch;
-mod export;
 pub mod install;
 mod ledger;
 mod magpie;
@@ -55,7 +54,6 @@ pub use updates::{
 };
 pub use user_agent::default_user_agent;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -245,16 +243,6 @@ pub enum BridgeCommand {
     RemoveRecent {
         /// The project directory to forget.
         project: String,
-    },
-    /// Write one product-data export bundle to a user-chosen file.
-    ExportData {
-        /// Destination file chosen in a save dialog.
-        path: PathBuf,
-    },
-    /// Apply one product-data export bundle from a user-chosen file.
-    ImportData {
-        /// Bundle file chosen in an open dialog.
-        path: PathBuf,
     },
     /// List discovered prompt resources for the session workspace.
     ListResources {
@@ -621,10 +609,6 @@ pub enum BridgeReply {
     Recalled(Result<(Box<ActiveConversation>, Option<String>), String>),
     /// Delete outcome.
     SessionDeleted(Result<(), String>),
-    /// Export outcome.
-    Exported(Result<crate::export::ExportSummary, String>),
-    /// Import outcome.
-    Imported(Result<crate::export::ImportSummary, String>),
     /// Resource list: (name, absolute path) pairs.
     Resources(Result<Vec<(String, String)>, String>),
     /// The user's answers were delivered to the waiting tool.
