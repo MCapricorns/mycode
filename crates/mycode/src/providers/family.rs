@@ -106,10 +106,6 @@ enum ChatFamily {
 
 struct ChatRow {
     family: ChatFamily,
-    /// Stable name for tests and the PR table; only the cfg(test) name
-    /// accessors read it, so the field is dead in a non-test build.
-    #[cfg_attr(not(test), allow(dead_code))]
-    name: &'static str,
     matches: fn(&str, &str) -> bool,
 }
 
@@ -120,12 +116,10 @@ struct ChatRow {
 const CHAT_THINKING: &[ChatRow] = &[
     ChatRow {
         family: ChatFamily::OpenRouter,
-        name: "openrouter",
         matches: host_openrouter,
     },
     ChatRow {
         family: ChatFamily::DashScope,
-        name: "dashscope",
         matches: host_dashscope,
     },
     // The OpenDesign gateway takes plain `reasoning_effort` for every model
@@ -133,37 +127,30 @@ const CHAT_THINKING: &[ChatRow] = &[
     // `thinking` objects of the GLM, Kimi, and DeepSeek rows are not its API.
     ChatRow {
         family: ChatFamily::Generic,
-        name: "opendesign",
         matches: host_opendesign,
     },
     ChatRow {
         family: ChatFamily::Zai,
-        name: "zai",
         matches: glm_target,
     },
     ChatRow {
         family: ChatFamily::MiniMax,
-        name: "minimax",
         matches: minimax_target,
     },
     ChatRow {
         family: ChatFamily::Kimi,
-        name: "kimi",
         matches: match_kimi,
     },
     ChatRow {
         family: ChatFamily::Qwen,
-        name: "qwen",
         matches: match_qwen,
     },
     ChatRow {
         family: ChatFamily::DeepSeek,
-        name: "deepseek",
         matches: match_deepseek,
     },
     ChatRow {
         family: ChatFamily::Generic,
-        name: "generic",
         matches: always,
     },
 ];
@@ -180,37 +167,28 @@ enum AnthropicFamily {
 
 struct AnthropicRow {
     family: AnthropicFamily,
-    /// Stable name for tests and the PR table; only the cfg(test) name
-    /// accessors read it, so the field is dead in a non-test build.
-    #[cfg_attr(not(test), allow(dead_code))]
-    name: &'static str,
     matches: fn(&str, &str) -> bool,
 }
 
 const ANTHROPIC_THINKING: &[AnthropicRow] = &[
     AnthropicRow {
         family: AnthropicFamily::MiniMax,
-        name: "minimax",
         matches: minimax_target,
     },
     AnthropicRow {
         family: AnthropicFamily::Kimi,
-        name: "kimi",
         matches: match_kimi,
     },
     AnthropicRow {
         family: AnthropicFamily::Zai,
-        name: "zai",
         matches: glm_target,
     },
     AnthropicRow {
         family: AnthropicFamily::ClaudeAdaptive,
-        name: "claude-adaptive",
         matches: match_claude_adaptive,
     },
     AnthropicRow {
         family: AnthropicFamily::ClaudeBudget,
-        name: "claude-budget",
         matches: always,
     },
 ];
@@ -253,20 +231,6 @@ const CHAT_CACHE: &[CacheRow] = &[
         claims: claim_dashscope_cache,
     },
 ];
-
-/// Chat family name for the first matching thinking row.
-#[cfg(test)]
-#[must_use]
-pub(crate) fn chat_family_name(model: &str, endpoint: &str) -> &'static str {
-    chat_row(&model.to_ascii_lowercase(), &endpoint.to_ascii_lowercase()).name
-}
-
-/// Messages family name for the first matching thinking row.
-#[cfg(test)]
-#[must_use]
-pub(crate) fn anthropic_family_name(model: &str, endpoint: &str) -> &'static str {
-    anthropic_row(&model.to_ascii_lowercase(), &endpoint.to_ascii_lowercase()).name
-}
 
 /// Applies chat or Responses reasoning fields from [`CHAT_THINKING`].
 pub(crate) fn apply_chat_thinking(

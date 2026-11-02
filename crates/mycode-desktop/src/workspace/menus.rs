@@ -7,6 +7,7 @@ use gpui_kit::{
 use crate::ui::model_picker::{
     ModelPickerTarget, ProviderChoice, preferred_index, selected_in_provider,
 };
+use crate::view_model::nav::{highlight, moved};
 use crate::view_model::{FrontendAction, MentionKind};
 use mycode::frontend::picker::ModelChoice;
 
@@ -28,20 +29,6 @@ pub(super) struct MenuNavigation {
 pub(super) struct MenuNavigationMark {
     session: Option<String>,
     mention_len: Option<usize>,
-}
-
-fn highlight(selected: Option<usize>, len: usize, preferred: usize) -> usize {
-    selected.unwrap_or(preferred).min(len.saturating_sub(1))
-}
-
-fn moved(current: usize, len: usize, down: bool) -> usize {
-    if len == 0 {
-        0
-    } else if down {
-        (current + 1) % len
-    } else {
-        (current + len - 1) % len
-    }
 }
 
 impl Workspace {
@@ -281,20 +268,5 @@ impl Workspace {
             return true;
         }
         false
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{highlight, moved};
-
-    #[test]
-    fn navigation_wraps_and_clamps_after_filtering() {
-        assert_eq!(moved(0, 3, false), 2);
-        assert_eq!(moved(2, 3, true), 0);
-        assert_eq!(moved(0, 0, true), 0);
-        assert_eq!(highlight(None, 5, 3), 3);
-        assert_eq!(highlight(Some(4), 2, 0), 1);
-        assert_eq!(highlight(None, 0, 7), 0);
     }
 }

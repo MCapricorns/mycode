@@ -218,11 +218,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             for entry in results {
                 consume_agent_result(state, &entry);
             }
-            if state.sending && state.turn_started_ms == 0 {
-                // The wire does not carry the real turn start; count from
-                // the reopen so the elapsed label still ticks.
-                state.turn_started_ms = crate::core::unix_now().as_millis() as u64;
-            }
             for session in &mut state.sessions {
                 session.active = session.session_id == session_id;
             }
@@ -334,7 +329,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         FrontendAction::TurnArmed => {
             state.sending = true;
             state.auto_compacting = false;
-            state.turn_started_ms = crate::core::unix_now().as_millis() as u64;
             state.error = None;
             state.turn_alert = None;
             set_streaming_status(

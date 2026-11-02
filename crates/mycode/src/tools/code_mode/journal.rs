@@ -1,11 +1,10 @@
 //! Determinism record for one code-mode script.
 //!
 //! Every host-visible step is journalled as `(seq, kind, blake3(args),
-//! blake3(result))`. The result hash is part of the record on purpose: a
-//! replayed script must be able to notice "same call, different result", not
-//! only "different call". Only the JSON projection the script sees is hashed
+//! blake3(result))`. Only the JSON projection the script sees is hashed
 //! ([`crate::tools::ToolResult::content`]); UI-only `details` never enters the
-//! journal. See `wiki/architecture/code-mode-engine.md` §3.4.
+//! journal. The journal is diagnostic data, not a checkpoint: `wait_code`
+//! collects the same running cell without replaying its script.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -84,51 +83,6 @@ impl ScriptJournal {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-
-    /// Checks this run against an earlier journal from the same script.
-    ///
-    /// A divergence — a call the recording did not make, a different
-    /// argument set, or the same call returning a different result — fails
-    /// the resume instead of silently replaying different work.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first divergence as a message naming its sequence.
-    pub fn verify_replay(&self, recorded: &[JournalEntry]) -> Result<(), String> {
-        for (index, replay) in recorded.iter().enumerate() {
-            let Some(actual) = self.entries.get(index) else {
-                return Err(format!(
-                    "journal divergence at seq {index}: the resume recorded a \
-                     {:?} step the script did not make",
-                    replay.kind
-                ));
-            };
-            if actual.seq != replay.seq || actual.kind != replay.kind {
-                return Err(format!(
-                    "journal divergence at seq {index}: recorded {:?}, replayed {:?}",
-                    replay.kind, actual.kind
-                ));
-            }
-            if actual.args_hash != replay.args_hash {
-                return Err(format!(
-                    "journal divergence at seq {index}: arguments changed"
-                ));
-            }
-            if actual.result_hash != replay.result_hash {
-                return Err(format!(
-                    "journal divergence at seq {index}: the same call returned a different result"
-                ));
-            }
-        }
-        if self.entries.len() != recorded.len() {
-            return Err(format!(
-                "journal divergence: recorded {} steps, replayed {}",
-                recorded.len(),
-                self.entries.len()
-            ));
-        }
-        Ok(())
-    }
 }
 
 /// blake3 of a value's canonical JSON form.
@@ -177,8 +131,6 @@ fn canonical_json(value: &Value, out: &mut String) {
 mod tests {
     use serde_json::json;
 
-    use super::{ScriptEventKind, ScriptJournal};
-
     #[test]
     fn object_key_order_does_not_change_the_hash() {
         let first = json!({"name": "read", "arguments": {"path": "a", "line": 1}});
@@ -186,51 +138,5 @@ mod tests {
         assert_eq!(super::hash_json(&first), super::hash_json(&second));
         let other = json!({"name": "read", "arguments": {"path": "b"}});
         assert_ne!(super::hash_json(&first), super::hash_json(&other));
-    }
-
-    #[test]
-    fn a_replayed_journal_checks_both_hashes() {
-        let args = json!({"name": "read", "arguments": {"path": "a"}});
-        let result = json!({"content": [{"Text": "alpha"}], "is_error": false});
-        let mut recorded = ScriptJournal::new();
-        recorded.record(0, ScriptEventKind::Call, &args, Some(&result));
-
-        let mut same = ScriptJournal::new();
-        same.record(0, ScriptEventKind::Call, &args, Some(&result));
-        assert!(same.verify_replay(recorded.entries()).is_ok());
-
-        // Same arguments, different result: the drift only the result hash
-        // can see.
-        let mut drifted = ScriptJournal::new();
-        drifted.record(
-            0,
-            ScriptEventKind::Call,
-            &args,
-            Some(&json!({"content": [{"Text": "beta"}], "is_error": false})),
-        );
-        let error = drifted.verify_replay(recorded.entries()).unwrap_err();
-        assert!(error.contains("different result"), "{error}");
-
-        // Same result shape, different arguments.
-        let mut changed = ScriptJournal::new();
-        changed.record(
-            0,
-            ScriptEventKind::Call,
-            &json!({"name": "read", "arguments": {"path": "b"}}),
-            Some(&result),
-        );
-        let error = changed.verify_replay(recorded.entries()).unwrap_err();
-        assert!(error.contains("arguments changed"), "{error}");
-
-        // A shorter replay diverges on length.
-        let empty = ScriptJournal::new();
-        let error = empty.verify_replay(recorded.entries()).unwrap_err();
-        assert!(error.contains("the script did not make"), "{error}");
-        // A longer replay diverges on count.
-        let mut longer = ScriptJournal::new();
-        longer.record(0, ScriptEventKind::Call, &args, Some(&result));
-        longer.record(1, ScriptEventKind::Log, &json!("x"), None);
-        let error = longer.verify_replay(recorded.entries()).unwrap_err();
-        assert!(error.contains("recorded 1 steps, replayed 2"), "{error}");
     }
 }

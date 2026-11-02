@@ -340,20 +340,6 @@ impl ScriptCell {
         self.inner.read().journal.clone()
     }
 
-    /// Records or updates one inner call without changing its script order.
-    pub fn record_inner_call(&self, summary: InnerCallSummary) {
-        let mut inner = self.inner.write();
-        if let Some(existing) = inner
-            .inner_calls
-            .iter_mut()
-            .find(|call| call.seq == summary.seq)
-        {
-            *existing = summary;
-        } else {
-            inner.inner_calls.push(summary);
-        }
-    }
-
     /// Publishes the lifecycle transition under the same lock as its
     /// snapshot. A terminal transition wins once, including cell cancellation.
     pub(crate) fn publish_inner_call(&self, summary: InnerCallSummary) {

@@ -58,7 +58,6 @@ pub(super) fn park_steers(state: &mut WorkspaceState, session_id: String, texts:
 /// ever be cleared once another conversation takes the screen.
 pub(super) fn reset_turn_view(state: &mut WorkspaceState) {
     state.sending = false;
-    state.turn_started_ms = 0;
     state.compacting = false;
     state.auto_compacting = false;
     state.pending_summaries.clear();
@@ -86,7 +85,6 @@ pub(super) fn end_turn(state: &mut WorkspaceState) {
     state.ask_answers.clear();
     state.sending = false;
     state.auto_compacting = false;
-    state.turn_started_ms = 0;
 }
 
 pub(super) fn push_entry_once(

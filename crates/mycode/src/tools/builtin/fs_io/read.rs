@@ -214,24 +214,6 @@ pub enum ReadOutcome {
     Text(FileRead),
 }
 
-/// Image media type from the file's leading bytes. Providers accept these
-/// four; PDFs and other documents stay text errors in this tool.
-fn image_mime(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
-        return Some("image/png");
-    }
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        return Some("image/jpeg");
-    }
-    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        return Some("image/gif");
-    }
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        return Some("image/webp");
-    }
-    None
-}
-
 /// Reads one path once: image bytes when the content is a supported picture,
 /// otherwise the text window [`read_file`] returns.
 ///
@@ -253,7 +235,7 @@ pub fn read_any(
         ));
     }
     let raw = read_raw_file(prepared, cwd, path, cancel)?;
-    if let Some(mime) = image_mime(&raw.raw) {
+    if let Some(mime) = crate::core::image_media_type(&raw.raw) {
         if offset.is_some() || limit.is_some() {
             return Err(ToolError::InvalidArgs(
                 "offset and limit apply to text, not to an image".to_owned(),

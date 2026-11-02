@@ -80,12 +80,6 @@ impl ShellKind {
         Self::ALL.into_iter().any(|kind| kind.tool_name() == name)
     }
 
-    /// Whether script mode launches PowerShell (`pwsh` or `powershell.exe`).
-    #[must_use]
-    pub fn is_powershell(self) -> bool {
-        matches!(self, Self::Pwsh | Self::WindowsPowerShell)
-    }
-
     /// Parses a shell family name. `cmd` is intentionally rejected.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
@@ -606,8 +600,6 @@ mod tests {
         assert_eq!(ShellKind::WindowsPowerShell.tool_name(), "powershell");
         assert_eq!(ShellKind::Bash.tool_name(), "bash");
         assert_eq!(ShellKind::Cmd.tool_name(), "cmd");
-        assert!(ShellKind::Pwsh.is_powershell());
-        assert!(!ShellKind::Zsh.is_powershell());
     }
 
     #[test]

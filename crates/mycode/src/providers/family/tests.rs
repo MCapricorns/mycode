@@ -1,71 +1,61 @@
 use crate::core::ReasoningLevel;
 use serde_json::json;
 
-use super::{CHAT_THINKING, ChatFamily, anthropic_family_name, chat_family_name};
 use crate::providers::wire_common::{ReasoningReplay, ThinkingWire};
 
 #[test]
-fn chat_thinking_table_ends_with_the_generic_row() {
-    let last = CHAT_THINKING.last().expect("table");
-    assert_eq!(last.family, ChatFamily::Generic);
-    assert_eq!(last.name, "generic");
-    assert!((last.matches)(
-        "brand-new-model",
-        "https://api.brand-new.example/v1"
-    ));
-    let names: Vec<_> = CHAT_THINKING.iter().map(|row| row.name).collect();
-    assert_eq!(
-        names,
-        [
-            "openrouter",
-            "dashscope",
-            "opendesign",
-            "zai",
-            "minimax",
-            "kimi",
-            "qwen",
-            "deepseek",
-            "generic",
-        ]
-    );
-}
-
-#[test]
-fn host_rows_win_over_model_rows_and_unknown_is_generic() {
-    assert_eq!(
-        chat_family_name("glm-5.3", "https://openrouter.ai/api/v1/chat/completions"),
-        "openrouter"
-    );
-    assert_eq!(
-        chat_family_name(
+fn host_policies_override_model_defaults_on_the_wire() {
+    for (model, endpoint, expected) in [
+        (
+            "glm-5.3",
+            "https://openrouter.ai/api/v1/chat/completions",
+            json!({"reasoning": {"effort": "medium"}}),
+        ),
+        (
             "deepseek-v4-pro",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            json!({"enable_thinking": true, "reasoning_effort": "medium"}),
         ),
-        "dashscope"
-    );
-    assert_eq!(
-        chat_family_name("glm-5.3", "https://api.z.ai/api/paas/v4/chat/completions"),
-        "zai"
-    );
-    assert_eq!(
-        chat_family_name("k3", "http://127.0.0.1:18080/kimi/v1/chat/completions"),
-        "kimi"
-    );
-    assert_eq!(
-        chat_family_name(
+        (
+            "glm-5.3",
+            "https://api.z.ai/api/paas/v4/chat/completions",
+            json!({"thinking": {"type": "enabled", "clear_thinking": false}, "reasoning_effort": "medium"}),
+        ),
+        (
+            "k3",
+            "http://127.0.0.1:18080/kimi/v1/chat/completions",
+            json!({"reasoning_effort": "high"}),
+        ),
+    ] {
+        let mut body = json!({});
+        super::apply_chat_thinking(
+            &mut body,
+            model,
+            endpoint,
+            ReasoningLevel::Medium,
+            ThinkingWire::Completions,
+        );
+        assert_eq!(body, expected, "{model} at {endpoint}");
+    }
+    for (model, expected) in [
+        (
             "brand-new-model",
-            "https://api.brand-new.example/v1/chat/completions"
+            json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}}),
         ),
-        "generic"
-    );
-    assert_eq!(
-        anthropic_family_name("brand-new-model", "https://api.anthropic.com/v1/messages"),
-        "claude-budget"
-    );
-    assert_eq!(
-        anthropic_family_name("claude-sonnet-4-6", "https://api.anthropic.com/v1/messages"),
-        "claude-adaptive"
-    );
+        (
+            "claude-sonnet-4-6",
+            json!({"thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}}),
+        ),
+    ] {
+        let mut body = json!({});
+        super::apply_anthropic_thinking_policy(
+            &mut body,
+            model,
+            "https://api.anthropic.com/v1/messages",
+            ReasoningLevel::Medium,
+        );
+        assert_eq!(body, expected, "{model}");
+    }
 }
 
 #[test]
@@ -132,7 +122,6 @@ fn minimax_off_degrades_to_adaptive() {
 fn opendesign_sends_plain_reasoning_effort_for_vendor_models() {
     let endpoint = "https://amr-link.open-design.ai/v1/chat/completions";
     for model in ["glm-5.3-flash", "deepseek-v4-flash", "kimi-k2.7-code"] {
-        assert_eq!(chat_family_name(model, endpoint), "opendesign");
         let mut body = json!({});
         super::apply_chat_thinking(
             &mut body,
