@@ -44,6 +44,24 @@ fn close_allowed(busy: bool, armed: Option<Instant>, now: Instant) -> bool {
 mod window;
 
 use window::{client_window_options, startup_geometry, strip_dwm_border};
+
+fn bind_command_palette_shortcut(keystrokes: &str, cx: &mut App) {
+    // Shortcuts are optional: a malformed binding must not prevent startup.
+    match gpui_kit::KeyBinding::load(
+        keystrokes,
+        Box::new(crate::ui::ToggleCommandPalette),
+        None,
+        false,
+        None,
+        cx,
+    ) {
+        Ok(binding) => cx.bind_keys([binding]),
+        Err(error) => {
+            eprintln!("mycode: skipped command palette shortcut {keystrokes:?}: {error}");
+        }
+    }
+}
+
 /// Opens the main window over one owned home. `applied_update` is the
 /// version a self-update just installed; it is announced with a toast.
 ///
@@ -52,11 +70,7 @@ use window::{client_window_options, startup_geometry, strip_dwm_border};
 /// Panics when the window cannot open; the process has no useful headless
 /// fallback by design.
 pub fn open_window(home: HomeLayout, applied_update: Option<String>, cx: &mut App) {
-    cx.bind_keys([gpui_kit::KeyBinding::new(
-        "secondary-k",
-        crate::ui::ToggleCommandPalette,
-        None,
-    )]);
+    bind_command_palette_shortcut("secondary-k", cx);
     // The driver owns the core bridge, the view model, and every product
     // decision. Its wake callback hands a thread-safe sender to the gpui
     // pump, which drains replies, timers, and events on the main thread.

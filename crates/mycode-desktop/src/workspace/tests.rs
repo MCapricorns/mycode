@@ -3,6 +3,44 @@ use gpui_kit::{Bounds, px, size};
 use super::window::{TRAFFIC_LIGHTS, WINDOW_FLOOR, WINDOW_SIZE, fit_window};
 use super::*;
 
+#[cfg(feature = "test-support")]
+#[gpui_kit::test]
+fn startup_shortcut_resolves_the_platform_modifier(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(|cx| {
+        bind_command_palette_shortcut("secondary-k", cx);
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let binding = keymap
+            .bindings()
+            .find(|binding| {
+                binding
+                    .action()
+                    .as_any()
+                    .is::<crate::ui::ToggleCommandPalette>()
+            })
+            .expect("command palette shortcut registered");
+        let shortcut = if cfg!(target_os = "macos") {
+            "cmd-k"
+        } else {
+            "ctrl-k"
+        };
+        let keystroke = gpui_kit::Keystroke::parse(shortcut).expect("native shortcut");
+        assert_eq!(binding.match_keystrokes(&[keystroke]), Some(false));
+    });
+}
+
+#[cfg(feature = "test-support")]
+#[gpui_kit::test]
+fn invalid_shortcut_does_not_abort_startup(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(|cx| {
+        let before = cx.key_bindings().borrow().bindings().len();
+        bind_command_palette_shortcut("invalid-modifier-k", cx);
+        assert_eq!(cx.key_bindings().borrow().bindings().len(), before);
+        bind_command_palette_shortcut("secondary-k", cx);
+        assert_eq!(cx.key_bindings().borrow().bindings().len(), before + 1);
+    });
+}
+
 #[test]
 fn client_chrome_hides_the_system_title_bar() {
     let options = client_window_options(
