@@ -41,7 +41,7 @@ struct MarkdownCacheStore {
 
 struct CachedMarkdownEntry {
     source: SharedString,
-    blocks: Vec<MarkdownBlock>,
+    blocks: Rc<[MarkdownBlock]>,
     tables: Vec<Option<CachedTableLayout>>,
     scrolls: Vec<Option<TableScroll>>,
 }
@@ -66,14 +66,14 @@ struct CachedTableLayout {
 impl MarkdownCache {
     /// Returns the parsed blocks for `id` and `source`, reusing the cached
     /// split (and its `SharedString` allocations) when `source` has not changed.
-    fn blocks_for(&self, id: &SharedString, source: &SharedString) -> Vec<MarkdownBlock> {
+    fn blocks_for(&self, id: &SharedString, source: &SharedString) -> Rc<[MarkdownBlock]> {
         let mut store = self.inner.borrow_mut();
         if let Some(entry) = store.entries.get(id)
             && entry.source == *source
         {
             return entry.blocks.clone();
         }
-        let blocks = split_markdown(source.as_ref());
+        let blocks: Rc<[MarkdownBlock]> = split_markdown(source.as_ref()).into();
         let tables = vec![None; blocks.len()];
         // A streaming reply changes its source on every delta. Keeping each
         // table's scroll handles stops a table the reader panned from
@@ -617,14 +617,14 @@ pub(super) fn render_markdown(
 ) -> impl IntoElement {
     let blocks = match cache {
         Some(cache) => cache.blocks_for(&id, &text),
-        None => split_markdown(text.as_ref()),
+        None => split_markdown(text.as_ref()).into(),
     };
     render_blocks(id, blocks, cache, theme, stream_fade, window)
 }
 
 fn render_blocks(
     id: SharedString,
-    blocks: Vec<MarkdownBlock>,
+    blocks: Rc<[MarkdownBlock]>,
     cache: Option<&MarkdownCache>,
     theme: &Theme,
     stream_fade: bool,
@@ -643,7 +643,7 @@ fn render_blocks(
         .gap(skin::space(2))
         .text_color(ink)
         .test_support()
-        .children(blocks.into_iter().enumerate().map(|(index, block)| {
+        .children(blocks.iter().cloned().enumerate().map(|(index, block)| {
             let fade = stream_fade && index == last;
             match block {
                 MarkdownBlock::Prose(body) => {
@@ -1213,6 +1213,10 @@ mod tests {
         );
         let first = cache.blocks_for(&id, &text);
         let second = cache.blocks_for(&id, &text);
+        assert!(
+            std::rc::Rc::ptr_eq(&first, &second),
+            "cache hits share the block array"
+        );
         let (Some(MarkdownBlock::Prose(p1)), Some(MarkdownBlock::Prose(p2))) =
             (first.first(), second.first())
         else {
@@ -1228,6 +1232,10 @@ mod tests {
             "Updated paragraph exceeding inline SmolStr storage to verify cache invalidation on edit.",
         );
         let third = cache.blocks_for(&id, &updated);
+        assert!(
+            !std::rc::Rc::ptr_eq(&first, &third),
+            "changed text invalidates the block array"
+        );
         let Some(MarkdownBlock::Prose(p3)) = third.first() else {
             panic!("expected updated prose block");
         };

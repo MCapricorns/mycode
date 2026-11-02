@@ -22,10 +22,11 @@ pub(super) fn render_page_band(
     let theme = cx.theme();
     let vm = workspace.vm();
     let active_id = vm.active.as_ref().map(|active| active.session_id.as_str());
-    let title = crate::view_model::session_rows(vm)
-        .into_iter()
-        .find(|(summary, _)| Some(summary.session_id.as_str()) == active_id)
-        .map(|(summary, _)| summary.title.clone())
+    let title = vm
+        .sessions
+        .iter()
+        .find(|summary| Some(summary.session_id.as_str()) == active_id)
+        .map(|summary| summary.title.clone())
         .filter(|title| !title.is_empty())
         .unwrap_or_else(|| t("New conversation", "新对话").to_owned());
     let scope = vm

@@ -48,29 +48,28 @@ pub(super) fn render_sidebar(
     window: &Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-    let cwd = workspace.vm().project_dir.clone();
+    let cwd = workspace.vm().project_dir.as_deref();
     let view = workspace.vm().view;
     // Project scope applies before text search, including empty search results.
-    let filter = workspace.vm().session_filter.clone();
+    let filter = &workspace.vm().session_filter;
     let rows = crate::view_model::project_session_rows(workspace.vm());
     let session_count = rows.len();
     let filtering = !filter.trim().is_empty();
-    let visible_sessions: Vec<(SessionSummary, Option<String>)> = rows
+    let visible_sessions: Vec<(&SessionSummary, Option<&str>)> = rows
         .into_iter()
-        .filter(|(summary, project)| {
+        .filter(|(summary, _)| {
             !filtering
                 || crate::view_model::session_title_matches(
-                    &displayed_session_title(summary, *project),
-                    &filter,
+                    displayed_session_title(summary),
+                    filter,
                 )
         })
-        .map(|(summary, project)| (summary.clone(), project.map(str::to_owned)))
         .collect();
-    let filter_miss = !filter.trim().is_empty() && visible_sessions.is_empty() && session_count > 0;
+    let filter_miss = filtering && visible_sessions.is_empty() && session_count > 0;
     let filter_input = workspace.session_filter_input();
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
-    let armed_delete = workspace.armed_session_delete().map(str::to_owned);
+    let armed_delete = workspace.armed_session_delete();
 
     div()
         .id("sidebar")
@@ -87,11 +86,11 @@ pub(super) fn render_sidebar(
         .child(sessions_section(
             cx,
             &visible_sessions,
-            cwd.as_deref(),
+            cwd,
             filter_input,
             filter_miss,
             desk.faint,
-            armed_delete.as_deref(),
+            armed_delete,
         ))
         .child(render_sidebar_footer(view, cx))
 }
@@ -130,7 +129,7 @@ fn section_label(text: &str, theme: &Theme) -> impl IntoElement {
 /// Sessions of the workspace the sidebar shows. Separate from folders.
 fn sessions_section(
     cx: &mut Context<Workspace>,
-    sessions: &[(SessionSummary, Option<String>)],
+    sessions: &[(&SessionSummary, Option<&str>)],
     cwd: Option<&str>,
     filter_input: Option<gpui_kit::Entity<InputState>>,
     filter_miss: bool,
@@ -206,7 +205,7 @@ fn sessions_section(
 }
 
 fn build_grouped_session_rows(
-    sessions: &[(SessionSummary, Option<String>)],
+    sessions: &[(&SessionSummary, Option<&str>)],
     cwd: Option<&str>,
     now: chrono::DateTime<chrono::Local>,
     armed_delete: Option<&str>,
@@ -214,7 +213,7 @@ fn build_grouped_session_rows(
 ) -> Vec<gpui_kit::AnyElement> {
     let theme = cx.theme();
     // Each session is bucketed once instead of once per date group.
-    let mut buckets: Vec<Vec<&(SessionSummary, Option<String>)>> =
+    let mut buckets: Vec<Vec<&(&SessionSummary, Option<&str>)>> =
         vec![Vec::new(); DateGroup::ALL.len()];
     for row in sessions {
         let group = classify_session_group(row.0.updated_at_ms, row.0.corrupt, now);
@@ -265,13 +264,13 @@ fn date_group_header(group: DateGroup, first: bool, theme: &Theme) -> impl IntoE
         .child(group.label())
 }
 
-fn displayed_session_title(summary: &SessionSummary, _project: Option<&str>) -> String {
+fn displayed_session_title(summary: &SessionSummary) -> &str {
     if summary.corrupt {
-        t("Unreadable conversation", "无法读取的对话").to_owned()
+        t("Unreadable conversation", "无法读取的对话")
     } else if !summary.title.is_empty() {
-        summary.title.clone()
+        &summary.title
     } else {
-        super::chat::new_task_label().to_owned()
+        super::chat::new_task_label()
     }
 }
 
@@ -286,7 +285,7 @@ fn session_row(
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);
     let is_open = summary.active;
-    let title: SharedString = displayed_session_title(summary, project).into();
+    let title: SharedString = displayed_session_title(summary).to_owned().into();
     let elsewhere = !summary.corrupt
         && project.is_some_and(|path| {
             cwd.is_none_or(|current| !crate::view_model::same_project_path(current, path))
