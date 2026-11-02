@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.36] - 2026-11-02
+
 ### Fixed
 
 - 修复升级 GPUI 后，启动时注册 `secondary-k` 快捷键触发 panic、双击应用无法打开的问题。快捷键通过当前平台解析为 Windows 的 Ctrl-K 或 macOS 的 Cmd-K。
@@ -574,7 +576,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.35...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.36...HEAD
+[0.12.36]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.36
 [0.12.35]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.35
 [0.12.34]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.34
 [0.12.33]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.33
