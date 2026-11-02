@@ -37,7 +37,7 @@ pub(crate) fn render_models_section(
     let models = vm
         .catalog
         .as_ref()
-        .and_then(|catalog| catalog.provider(mycode_frontend::MAGPIE_PROVIDER_ID))
+        .and_then(|catalog| catalog.provider(mycode::config::MAGPIE_PROVIDER_ID))
         .map(|provider| provider.models.clone())
         .unwrap_or_default();
     let connected = magpie.is_active();
@@ -70,7 +70,7 @@ pub(crate) fn render_models_section(
     } else {
         crate::view_model::model_display_name(
             workspace.vm(),
-            mycode_frontend::MAGPIE_PROVIDER_ID,
+            mycode::config::MAGPIE_PROVIDER_ID,
             &magpie.model,
         )
     };
@@ -83,7 +83,7 @@ pub(crate) fn render_models_section(
 
     let selected_id = crate::view_model::canonical_model_id(
         vm,
-        mycode_frontend::MAGPIE_PROVIDER_ID,
+        mycode::config::MAGPIE_PROVIDER_ID,
         &magpie.model,
     );
     let rows: Vec<AnyElement> = models
@@ -92,7 +92,7 @@ pub(crate) fn render_models_section(
             let selected = model.id == selected_id;
             let name = crate::view_model::model_display_name(
                 vm,
-                mycode_frontend::MAGPIE_PROVIDER_ID,
+                mycode::config::MAGPIE_PROVIDER_ID,
                 &model.id,
             );
             div()

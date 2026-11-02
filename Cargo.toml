@@ -1,18 +1,7 @@
 [workspace]
 resolver = "3"
-# Linear chain: core → config → providers → tools → agent → app → frontend → desktop.
-# Each crate depends only on its predecessor and re-exports it (`pub use prev::*`),
-# keeping every lower-layer API reachable and the allocator link covering all targets.
-members = [
-    "crates/mycode-core",
-    "crates/mycode-config",
-    "crates/mycode-providers",
-    "crates/mycode-tools",
-    "crates/mycode-agent",
-    "crates/mycode-app",
-    "crates/mycode-frontend",
-    "crates/mycode-desktop",
-]
+# The runtime owns application behavior; the desktop owns GPUI and native windows.
+members = ["crates/mycode", "crates/mycode-desktop"]
 # mod.rs is legacy module layout; modern foo.rs + foo/ is enforced.
 [workspace.lints]
 clippy.mod_module_files = "deny"
@@ -48,9 +37,9 @@ tokio-util = "0.7.20"
 # `join_all` over borrowed futures; already in the graph through reqwest.
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 parking_lot = "0.13.0"
-# Global allocator for every binary and test target; declared once in mycode-core.
+# One allocator for the runtime, desktop binary, and test targets.
 mimalloc = "0.1.52"
-# MSVC builds link the OS-builtin CRT; declared once in mycode-core.
+# MSVC builds link the OS-builtin CRT through the runtime.
 vc-ltl = "5.3.1"
 globset = "0.4.21"
 ignore = "0.4.34"

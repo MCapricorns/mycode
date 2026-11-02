@@ -1,4 +1,4 @@
-//! Fenced-code colors. The lexer is `mycode_frontend::highlight`; this maps
+//! Fenced-code colors. The lexer is `mycode::frontend::highlight`; this maps
 //! its token kinds onto Desk colors and installs the result as the app-wide
 //! TextView code-block highlighter, so every reply, user bubble, and
 //! subagent transcript colors code the same way.
@@ -6,7 +6,7 @@ use gpui_kit::base::TextViewDefaults;
 use gpui_kit::base::text::CodeBlock;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::{App, FontStyle, HighlightStyle, Hsla};
-use mycode_frontend::highlight::{TokenKind, highlight};
+use mycode::frontend::highlight::{TokenKind, highlight};
 
 /// Rebuilds the Base theme, then installs the code highlighter on top.
 ///

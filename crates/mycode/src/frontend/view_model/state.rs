@@ -1,0 +1,665 @@
+//! Whole-window state and the action vocabulary the render layer feeds back.
+
+use std::sync::Arc;
+
+use crate::app::{
+    ActiveConversation, AskPrompt, ConversationEntry, PreparedUpdate, SessionSummary,
+};
+
+use super::chat::{ComposerMention, LiveJob};
+use super::settings::{ModelsSubview, SettingsSection, SettingsState, SkillEntry};
+use super::usage::{CacheAlert, CacheBreak, CacheWatch, TurnStats};
+
+/// The main area view: chat or full-page settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MainView {
+    /// Conversation with the agent.
+    #[default]
+    Chat,
+    /// Full-page visual settings.
+    Settings,
+}
+
+/// The settings page's proxy connectivity check.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ProxyTestState {
+    /// No test has run for the value on screen.
+    #[default]
+    Idle,
+    /// A test request is in flight.
+    Testing,
+    /// The test ran; the report says which route it took and how it went.
+    Done(crate::providers::ProxyTestReport),
+    /// The value on screen is not a proxy setting.
+    Invalid(String),
+}
+
+/// Self-update progress shown in settings and banners.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum UpdateState {
+    /// No check has run yet.
+    #[default]
+    Idle,
+    /// A check is in flight.
+    Checking,
+    /// The running version is the latest.
+    UpToDate,
+    /// A newer release is published.
+    Available {
+        /// New version (no `v` prefix).
+        version: String,
+        /// Release page URL.
+        notes_url: String,
+    },
+    /// The update is downloading and verifying.
+    Downloading {
+        /// New version (no `v` prefix).
+        version: String,
+    },
+    /// The staged update is ready; a restart installs it.
+    Ready {
+        /// New version (no `v` prefix).
+        version: String,
+    },
+    /// The last check or download failed.
+    Failed(String),
+}
+
+/// Whole-window state.
+#[derive(Clone, Debug, Default)]
+pub struct WorkspaceState {
+    /// Sidebar sessions, newest-relevant order preserved from the core.
+    pub sessions: Vec<SessionSummary>,
+    /// Open conversation, when any.
+    pub active: Option<ActiveConversation>,
+    /// Case-insensitive filter over the titles already in the session list.
+    pub session_filter: String,
+    /// An older transcript page is in flight for the open conversation.
+    pub history_loading: bool,
+    /// Composer draft text.
+    pub composer_draft: String,
+    /// Text typed on the welcome desk, sent once the new session is open.
+    pub pending_welcome_send: Option<String>,
+    /// Steers sent to the running turn that its ledger has not shown yet.
+    pub pending_steers: Vec<String>,
+    /// Steers a chat kept while another one was on screen, by session id.
+    /// They come back to the composer when that chat opens again.
+    pub parked_steers: Vec<(String, Vec<String>)>,
+    /// Every thinking trace shows as one collapsed row. Persisted in
+    /// `ui.json`; expanded by default.
+    pub thinking_collapsed: bool,
+    /// A send is in flight.
+    pub sending: bool,
+    /// Unix milliseconds when the in-flight turn armed. `0` while idle; a
+    /// reopened session counts from the reopen because the real start is
+    /// not carried over the wire.
+    pub turn_started_ms: u64,
+    /// A manual `/compact` is running. It is not a turn — no streaming
+    /// bubble — but it locks the composer the same way, so a send cannot
+    /// race the compaction's expected-head check.
+    pub compacting: bool,
+    /// The running turn waits on an automatic compaction summary. An
+    /// interrupt holds off until it ends, so the summary is not thrown away.
+    pub auto_compacting: bool,
+    /// Compaction cards held until the in-flight reply is committed.
+    ///
+    /// A mid-turn summary arrives after the tool rows and before `ChatDone`
+    /// appends the final reply. Inserting it immediately paints the card
+    /// above that reply; the ledger has the card after the reply. The cards
+    /// stay here until the turn commits, then they are appended last, in
+    /// order: a turn that compacts twice files two.
+    pub pending_summaries: Vec<ConversationEntry>,
+    /// Per-server tool names from the last listing, keyed by server id.
+    pub mcp_tools: Vec<(String, Vec<String>)>,
+    /// MCP servers magpie's Library writes to `~/.mycode/mcp.json`. They are
+    /// read-only here, and a configured server with the same id wins.
+    pub mcp_library: Vec<crate::config::McpServerSettings>,
+    /// Why the Library's `mcp.json` could not be read, when it could not.
+    pub mcp_library_error: Option<String>,
+    /// MCP server ids with a tools probe in flight.
+    pub mcp_probing: Vec<String>,
+    /// Prompt resources for the open session: (name, path).
+    pub resources: Vec<(String, String)>,
+    /// Slash-command skills from the project and user `.agents` trees.
+    pub skills: Vec<SkillEntry>,
+    /// Placeholder rows for `agent` calls the model is still writing, in the
+    /// order it opened them. Kept out of the transcript entries: frontends
+    /// draw them after the streaming reply, and each one leaves when its
+    /// call starts (the started row then follows the committed step) or the
+    /// turn ends.
+    pub preparing_calls: Vec<ConversationEntry>,
+    /// Compatibility projection of currently active calls for transcript tools.
+    pub live_jobs: Vec<LiveJob>,
+    /// Typed run/workflow history, bounded per session in this process.
+    pub subagents: super::subagents::SubagentHistory,
+    /// Expanded optional sections in the selected agent detail.
+    pub subagent_sections: std::collections::HashSet<String>,
+    /// Final runtimes of finished subagent calls, `(call_id, ms)`. A row
+    /// looks its duration up here once the job left `live_jobs`.
+    pub job_elapsed: Vec<(String, u64)>,
+    /// Terminal or individually stopped jobs in the current conversation.
+    /// Retiring a view or ending a turn alone does not finish yielded cells.
+    pub finished_jobs: std::collections::HashSet<String>,
+    /// Stable run/workflow id (or legacy call id) selected in the agent detail.
+    pub subagent_window: Option<String>,
+    /// Whether the full working-tree changes drawer is open.
+    pub changes_panel_open: bool,
+    /// Whether the right inspector is open. It starts closed.
+    pub inspector_open: bool,
+    /// Whether a pinned inspector docks beside the chat instead of covering it.
+    pub inspector_pinned: bool,
+    /// Pending ask rows awaiting user answers.
+    pub pending_ask: Option<Vec<AskPrompt>>,
+    /// Draft answers aligned with [`Self::pending_ask`].
+    pub ask_answers: Vec<String>,
+    /// Most recent committed turn's timing and token metrics, promoted from
+    /// the live meter when the turn finishes.
+    pub last_turn: Option<TurnStats>,
+    /// Token counts for the turn that is still running, when the provider
+    /// has reported any. Cleared when the turn commits or fails.
+    pub live_turn: Option<TurnStats>,
+    /// Latest prompt size for the open session, in tokens. This is the last
+    /// provider-reported input count, not the sum of every tool round, and
+    /// it stays put when a send is interrupted.
+    pub context_used: u64,
+    /// Cache-read tokens on the latest prompt. `0` when the provider reported
+    /// none. Shown on the composer chip row and the inspector context meter.
+    pub context_cache: u64,
+    /// Armed after compaction, a steer, or a model switch until the next
+    /// prompt reports usage. The baseline is the hit percent already on the
+    /// meter.
+    pub cache_watch: Option<CacheWatch>,
+    /// Details warning after that prompt's cache hit collapses. Cleared when
+    /// a later prompt is warm again, or when the open session changes.
+    pub cache_alert: Option<CacheAlert>,
+    /// Active composer mention autocomplete, when a trigger is typed.
+    pub mention: Option<ComposerMention>,
+    /// The editable settings projection.
+    pub settings: Option<SettingsState>,
+    /// Last terminal error surfaced to the user.
+    pub error: Option<String>,
+    /// Red transcript-tail row for a turn that ended without a reply —
+    /// provider failure or a user stop. Cleared when the next turn arms or
+    /// the conversation leaves the screen; not part of the ledger, so a
+    /// reopened transcript does not show it again.
+    pub turn_alert: Option<String>,
+    /// Chat or settings main view.
+    pub view: MainView,
+    /// Settings navigation section.
+    pub settings_section: SettingsSection,
+    /// Whether the sidebar project switcher dropdown is open.
+    pub project_menu_open: bool,
+    /// The resolved provider catalog.
+    pub catalog: Option<Arc<crate::providers::catalog::CatalogDocument>>,
+    /// Unix seconds of the catalog's last successful cloud fetch.
+    pub catalog_fetched_at: u64,
+    /// The active workspace folder: the open chat's working directory when it
+    /// has one, otherwise the folder the desk last opened.
+    pub project_dir: Option<String>,
+    /// Recent project directories, most recent first.
+    pub recents: Vec<String>,
+    /// Session-to-project bindings (session id, project path), most recent
+    /// first. Restores each chat's tool working directory.
+    pub session_projects: Vec<(String, String)>,
+    /// Per-session provider, model, and reasoning. Newest first.
+    pub session_models: Vec<crate::config::SessionModelPin>,
+    /// Workspace folders, most recently added first. Sessions bind one of
+    /// them as their working directory; the others stay reachable extras.
+    pub workspace_roots: Vec<String>,
+    /// Whether update checks run automatically.
+    pub auto_update: bool,
+    /// Self-update progress.
+    pub update: UpdateState,
+    /// The proxy connectivity check. Reset whenever the proxy value
+    /// changes, so a stale result never vouches for a new setting.
+    pub proxy_test: ProxyTestState,
+    /// Last persisted windowed size; written back on resize.
+    pub window_size: Option<crate::config::WindowSize>,
+    /// Whether the update dialog (download/install prompt) is open.
+    pub update_dialog_open: bool,
+    /// The staged update waiting for a restart, when any.
+    pub prepared_update: Option<PreparedUpdate>,
+    /// The newest release offer, when one is available.
+    pub last_offer: Option<crate::app::UpdateOffer>,
+    /// Selected provider id in the model picker.
+    pub selected_provider: Option<String>,
+    /// Selected model id for the selected provider.
+    pub selected_model: Option<String>,
+    /// Reasoning effort a fresh session starts from. The composer's last
+    /// pick; the per-session pin still overrides it once chosen.
+    pub default_reasoning: Option<String>,
+    /// Whether the model picker is open.
+    pub model_menu_open: bool,
+    /// Provider whose models the open picker is showing. `None` is the
+    /// provider step. Does not change the session until a model row is picked.
+    pub model_menu_browse: Option<String>,
+    /// Filter text for the model step of the picker.
+    pub picker_query: String,
+    /// Models picked from the session picker, newest first.
+    pub recent_models: Vec<crate::config::ModelPin>,
+    /// Filter text for the settings navigation.
+    pub settings_query: String,
+    /// Whether the thinking-effort submenu is open.
+    pub reasoning_menu_open: bool,
+    /// Open Agents-page model picker: (role name, field). The field is
+    /// `model`.
+    pub subagent_menu: Option<(String, String)>,
+    /// Whether the General page's language dropdown is open.
+    pub language_menu_open: bool,
+    /// The Models settings sub-page.
+    pub models_subview: ModelsSubview,
+    /// Whether the global command palette is open.
+    pub command_palette_open: bool,
+}
+
+impl WorkspaceState {
+    /// Agent snapshots for the open session only.
+    pub fn subagent_session(&self) -> Option<&super::subagents::SubagentSession> {
+        self.subagents.session(
+            self.active
+                .as_ref()
+                .map_or("", |active| active.session_id.as_str()),
+        )
+    }
+
+    /// Whether the inspector has retained or active agent records to display.
+    pub fn has_subagents(&self) -> bool {
+        !self.live_jobs.is_empty()
+            || self
+                .subagent_session()
+                .is_some_and(|session| !session.runs.is_empty() || !session.workflows.is_empty())
+    }
+
+    /// Milliseconds the in-flight turn has been running. `0` when no turn
+    /// is armed or the clock was never stamped.
+    pub fn turn_elapsed_ms(&self) -> u64 {
+        if self.turn_started_ms == 0 || !self.sending {
+            return 0;
+        }
+        crate::core::unix_now()
+            .as_millis()
+            .saturating_sub(u128::from(self.turn_started_ms)) as u64
+    }
+
+    /// Final runtime of a finished subagent call, in milliseconds. The
+    /// latest entry wins when a call id was reused.
+    pub fn job_elapsed(&self, call_id: &str) -> Option<u64> {
+        self.job_elapsed
+            .iter()
+            .rev()
+            .find(|(id, _)| id == call_id)
+            .map(|(_, ms)| *ms)
+    }
+
+    /// Discovered skills minus the ones switched off on the Skills page.
+    /// The composer `/` menu and the command palette list only these.
+    pub fn enabled_skills(&self) -> Vec<SkillEntry> {
+        let disabled = self.settings.as_ref().map(|settings| &settings.skills);
+        self.skills
+            .iter()
+            .filter(|skill| disabled.is_none_or(|skills| skills.is_enabled(&skill.slug)))
+            .cloned()
+            .collect()
+    }
+}
+
+/// Everything the UI can do to the state.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FrontendAction {
+    /// The core returned the session list.
+    SessionsLoaded(Vec<SessionSummary>),
+    /// A session was created and opened.
+    SessionCreated(SessionSummary),
+    /// A generated title replaced one session row's stored title.
+    SessionTitled {
+        /// Session identity spelling.
+        session_id: String,
+        /// The generated title already stored in the index.
+        title: String,
+    },
+    /// A session finished recovery and its conversation is ready.
+    ConversationOpened(ActiveConversation),
+    /// The open session's data was deleted; drop the conversation.
+    SessionDeleted,
+    /// The open conversation belongs to another folder. Hide it without
+    /// deleting the session or stopping its turn.
+    ConversationParked,
+    /// The composer text changed.
+    ComposerChanged(String),
+    /// Hold welcome-desk text until the new session can take it.
+    WelcomeSendHeld(String),
+    /// The held welcome text was sent, or the create failed.
+    WelcomeSendConsumed,
+    /// The composer sent; the entry was durably committed.
+    MessageSent {
+        /// New head spelling.
+        head: String,
+        /// The committed entry.
+        entry: ConversationEntry,
+    },
+    /// A request failed.
+    Failed(String),
+    /// Settings loaded from the core.
+    SettingsLoaded(Box<SettingsState>),
+    /// The user picked a UI language (`auto`, `en`, `zh`); applies live and
+    /// persists with settings.
+    SettingsLanguageSelected(String),
+    /// The user picked dark or light; persists with settings.
+    SettingsThemeSelected(String),
+    /// The user picked an interface font size (`s`, `m`, `l`, `xl`).
+    SettingsFontSizeSelected(String),
+    /// Opens, closes, or pins the right inspector. Layout only.
+    InspectorChanged {
+        /// Whether the inspector is visible.
+        open: bool,
+        /// Whether it stays resident beside the conversation instead of floating.
+        pinned: bool,
+    },
+    /// The settings editor changed the proxy preference. `typed` edits come
+    /// from the URL field and save on the text debounce.
+    SettingsProxyChanged {
+        /// New stored value: empty (follow the system) or a valid proxy URL.
+        value: String,
+        /// Whether the URL field produced it.
+        typed: bool,
+    },
+    /// The settings editor changed subagent role routes.
+    SettingsSubagentsChanged(crate::config::SubagentSettings),
+    /// The Skills page switched one skill on or off.
+    SettingsSkillToggled(String, bool),
+    /// The Agents-page model dropdown opened or closed.
+    SubagentMenuToggled(Option<(String, String)>),
+    /// The General-page language dropdown opened or closed.
+    LanguageMenuToggled(bool),
+    /// A tools probe started for one MCP server (the row shows a spinner
+    /// state until the listing or a failure arrives).
+    McpProbeStarted(String),
+    /// A server's tools listing arrived.
+    McpToolsListed {
+        server_id: String,
+        tools: Vec<String>,
+    },
+    /// A server's tools probe failed; the row shows the reason inline.
+    McpProbeFailed { server_id: String, message: String },
+    /// The magpie Library's MCP servers were read from `mcp.json`.
+    McpLibraryLoaded {
+        /// Servers in file order.
+        servers: Vec<crate::config::McpServerSettings>,
+        /// Why the file could not be read, when it could not.
+        error: Option<String>,
+    },
+    /// The model is still writing an `agent` call: show or relabel its
+    /// placeholder row until the call starts.
+    ToolPreparing {
+        provider_call_id: String,
+        name: String,
+        target: String,
+    },
+    /// A tool call started on the open conversation.
+    ToolStarted {
+        call_id: String,
+        provider_call_id: String,
+        name: String,
+        target: String,
+    },
+    /// Incremental tool or subagent progress for the live status line.
+    ToolProgress {
+        call_id: String,
+        provider_call_id: String,
+        name: String,
+        message: String,
+    },
+    /// A committed tool-result entry arrived.
+    ToolResultAppended(ConversationEntry),
+    /// Prompt resources discovered for the open session.
+    ResourcesLoaded(Vec<(String, String)>),
+    /// Discovered slash-command skills for the current project.
+    SkillsLoaded(Vec<SkillEntry>),
+    /// File matches for the active `@` mention arrived from the bridge.
+    MentionFiles(Vec<String>),
+    /// Live token counts for the turn that is still running.
+    UsageSnapshot {
+        model: String,
+        input: u64,
+        context: u64,
+        context_cache: u64,
+        output: u64,
+        cache: Option<u64>,
+        requests: u32,
+        elapsed_ms: u64,
+    },
+    /// The agent asked the user structured questions.
+    AskRequested(Vec<AskPrompt>),
+    /// The user picked one choice on a pending ask question.
+    AskChoicePicked { index: usize, answer: String },
+    /// The user submitted answers locally; clear the pending panel.
+    AskAnswered,
+    /// The sidebar session-title filter changed.
+    SessionFilterChanged(String),
+    /// An older-page read started.
+    HistoryLoadStarted,
+    /// An older-page read finished without changing the transcript.
+    HistoryLoadFinished,
+    /// An older page arrived. Applied only when `requested_before` is still
+    /// the open window's cursor.
+    OlderLoaded {
+        /// Session the page belongs to.
+        session_id: String,
+        /// Entries in ledger order, strictly before the cursor.
+        entries: Vec<ConversationEntry>,
+        /// Next backward cursor, or `None` at the branch start.
+        older_before: Option<String>,
+        /// Cursor the UI asked for.
+        requested_before: String,
+    },
+    /// Settings were persisted under CAS.
+    ///
+    /// `edit_epoch` is the epoch captured when the save was dispatched. The
+    /// reducer clears `dirty` only when the editor has not changed since.
+    SettingsSaved {
+        /// Revision the store assigned.
+        revision: u64,
+        /// Editor epoch at dispatch.
+        edit_epoch: u64,
+    },
+    /// A settings save failed. The document stays dirty and a chat turn's
+    /// `sending` flag is left alone.
+    SettingsSaveFailed(String),
+    /// One MCP server's API key was stored or cleared; refreshes key markers.
+    ProviderKeySaved {
+        /// MCP server ids with a stored key.
+        mcp_keys: Vec<String>,
+    },
+    /// The user steered the running turn: the text goes to the model
+    /// before its next step, without stopping the turn. It shows as
+    /// pending until the ledger commits it.
+    SteerSent(String),
+    /// Steers the turn did not take: a refused `Steer`, or texts the core
+    /// returned after the turn's last request. They leave the pending strip;
+    /// the driver puts them back in the composer.
+    SteersReturned(Vec<String>),
+    /// One pending steer the user took back before the turn read it. The
+    /// core confirmed it left the steer inbox, so it leaves the pending
+    /// strip; the driver puts the text back in the composer.
+    SteerRetracted(String),
+    /// Steers a chat that is not on screen did not take. They wait parked
+    /// and come back to the composer when that chat opens.
+    SteersParked {
+        /// Session identity spelling.
+        session_id: String,
+        texts: Vec<String>,
+    },
+    /// Opens or closes the subagent detail window.
+    SubagentWindowChanged(Option<String>),
+    /// Toggles a progressively disclosed prompt or activity section.
+    SubagentSectionToggled(String),
+    /// The core acknowledged cancellation of one running subagent.
+    SubagentDismissed(String),
+    /// Opens or closes the full changes drawer.
+    ChangesPanelToggled(bool),
+    /// The user sent a prompt; show a working status before the first token.
+    TurnArmed,
+    /// Incremental assistant text from the active model turn.
+    ChatDelta(String),
+    /// Incremental assistant reasoning from the active model turn.
+    ChatThinkingDelta(String),
+    /// An intermediate assistant step (with tool calls) was committed; the
+    /// streamed text so far belongs to it, so the live bubble resets.
+    AssistantStepCommitted(ConversationEntry),
+    /// Manual or automatic compaction wrote a summary the transcript should show.
+    SummaryShown(ConversationEntry),
+    /// A manual `/compact` started: the composer locks until the finish.
+    CompactArmed,
+    /// `/compact` reported its outcome. `head` is the durable branch head
+    /// after the attempt — the summary card advances it — so the next
+    /// compact or send does not trip the moved-head check on its own row.
+    CompactFinished { ok: bool, head: String },
+    /// The model turn finished and its entry was committed.
+    ChatDone {
+        head: String,
+        entry: ConversationEntry,
+    },
+    /// The model turn failed. A non-empty `head` is the ledger head after
+    /// writes this turn already committed; empty leaves the UI head alone.
+    ChatFailed {
+        /// Banner text. [`crate::frontend::view_model::CHAT_CANCELLED`] is a quiet cancel.
+        message: String,
+        /// Ledger head spelling, or empty when the head must not move.
+        head: String,
+    },
+    /// Compaction or a steer rewrote the prompt prefix. The next usage
+    /// snapshot is compared with the cache hit already on the meter.
+    CacheBreakArmed(CacheBreak),
+    /// The running turn started (`true`) or finished summarizing its
+    /// history for an automatic compaction.
+    ContextCompacting(bool),
+    /// A steer was committed on the active session while the turn kept running.
+    SteerCommitted {
+        /// Session identity spelling.
+        session_id: String,
+        /// Branch head after the steered user message.
+        head: String,
+        /// Transcript row for that message.
+        entry: ConversationEntry,
+    },
+    /// Switch the main area between chat and settings.
+    ShowMainView(MainView),
+    /// Switch the settings secondary menu.
+    ShowSettingsSection(SettingsSection),
+    /// The sidebar project switcher opened or closed.
+    ProjectMenuToggled(bool),
+    /// The provider catalog resolved (bundled or cloud).
+    CatalogLoaded {
+        /// The catalog document.
+        document: Arc<crate::providers::catalog::CatalogDocument>,
+        /// Unix seconds of the last cloud fetch.
+        fetched_at: u64,
+    },
+    /// The durable UI state loaded.
+    UiStateLoaded {
+        /// Recent project directories.
+        recents: Vec<String>,
+        /// Last opened project directory.
+        last_project: Option<String>,
+        /// Whether update checks run automatically.
+        auto_update: bool,
+        /// Last selected provider id.
+        selected_provider: Option<String>,
+        /// Last selected model id.
+        selected_model: Option<String>,
+        /// Reasoning effort fresh sessions start from.
+        selected_reasoning: Option<String>,
+        /// Session-to-project bindings.
+        session_projects: Vec<(String, String)>,
+        /// Per-session model pins.
+        session_models: Vec<crate::config::SessionModelPin>,
+        /// Workspace folders, most recently added first.
+        workspace_roots: Vec<String>,
+        /// Recent model pins, newest first.
+        recent_models: Vec<crate::config::ModelPin>,
+        /// Thinking traces start collapsed.
+        thinking_collapsed: bool,
+        /// The Details panel was open.
+        inspector_open: bool,
+        /// The Details panel was pinned resident.
+        inspector_pinned: bool,
+        /// Persisted windowed size.
+        window_size: Option<crate::config::WindowSize>,
+    },
+    /// A thinking header was clicked: every trace expands or collapses.
+    ThinkingCollapsedToggled,
+    /// Every remembered binding for one session was dropped (its data was
+    /// deleted).
+    SessionBindingsForgotten(String),
+    /// A folder was added to the workspace list.
+    WorkspaceRootAdded(String),
+    /// A folder was removed from the workspace list; its chats go with it.
+    WorkspaceRootRemoved(String),
+    /// A project directory became the active workspace folder.
+    ProjectOpened(String),
+    /// A session was bound to a project in the durable map.
+    ///
+    /// The first folder sticks. A later bind to a different folder is ignored
+    /// so opening another directory cannot move a chat that already has one.
+    SessionProjectBound {
+        /// Session identity spelling.
+        session_id: String,
+        /// Project directory path.
+        project: String,
+    },
+    /// The open chat's working directory moved to another workspace folder.
+    /// The other folders stay in the list.
+    WorkspaceFolderFocused {
+        /// Session identity spelling.
+        session_id: String,
+        /// Folder that becomes the session working directory.
+        project: String,
+    },
+    /// The active project filter changed (sidebar project switcher).
+    ActiveProjectChanged(Option<String>),
+    /// A remembered project was removed from the recent list.
+    RecentRemoved(String),
+    /// The model picker selected a provider.
+    ProviderSelected(String),
+    /// The model picker selected a model.
+    ModelSelected(String),
+    /// The model picker opened or closed. Opening starts on the provider step.
+    ModelMenuToggled(bool),
+    /// The open picker moved into one provider, or back to the provider step
+    /// when the id is absent. Does not itself open the picker.
+    ModelMenuBrowse(Option<String>),
+    /// The model step's search box changed.
+    PickerQueryChanged(String),
+    /// The settings navigation filter changed.
+    SettingsQueryChanged(String),
+    /// The thinking-effort submenu opened or closed.
+    ReasoningMenuToggled(bool),
+    /// The composer's thinking-effort pick. Stored on the open session's
+    /// model pin and mirrored into the live settings projection so the
+    /// chip matches. This action does not mark the document dirty and does
+    /// not change the reasoning effort that a later settings save writes.
+    SettingsReasoningChanged(String),
+    /// The Models settings sub-page changed.
+    ShowModelsSubview(ModelsSubview),
+    /// Self-update progress changed.
+    UpdateStateChanged(UpdateState),
+    /// The proxy connectivity check started, finished, or was invalidated.
+    ProxyTestChanged(ProxyTestState),
+    /// A release offer was resolved. Publishing it also flips the update
+    /// state to `Available`; the download button reads the stored offer.
+    UpdateOfferFound(crate::app::UpdateOffer),
+    /// The auto-update preference changed.
+    AutoUpdateToggled(bool),
+    /// A verified update is staged and waiting for a restart.
+    UpdateStaged(PreparedUpdate),
+    /// The update dialog opened or closed.
+    UpdateDialogToggled(bool),
+    /// The global command palette opened or closed.
+    ///
+    /// Opening dismisses other floating menus so the palette is the only
+    /// layer asking for the keyboard.
+    CommandPaletteSet(bool),
+}
+
+/// Maximum composer text before the send is rejected locally.
+pub const MAX_COMPOSER_CHARS: usize = 64 * 1024;

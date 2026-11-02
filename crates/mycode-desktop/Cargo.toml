@@ -9,14 +9,14 @@ license.workspace = true
 parking_lot.workspace = true
 # Sync primitives only; channels are runtime-independent.
 tokio = { workspace = true, features = ["sync"] }
-# gpui-kit stays in this binary only; it links the smol runtime beside
-# tokio. Fenced code is colored by mycode-frontend's lexer, not tree-sitter.
+# GPUI and its smol executor stay at the desktop boundary.
+# Fenced code uses the runtime's small lexer.
 gpui-kit = "0.8.1"
 chrono.workspace = true
 base64.workspace = true
 # Clipboard bitmaps are re-encoded to PNG for providers.
 image.workspace = true
-mycode-frontend = { path = "../mycode-frontend" }
+mycode = { path = "../mycode" }
 [features]
 # Headless GPUI layout tests. Off for the normal desktop build.
 test-support = ["gpui-kit/test-support"]

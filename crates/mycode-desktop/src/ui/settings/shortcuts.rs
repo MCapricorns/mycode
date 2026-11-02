@@ -1,13 +1,13 @@
 //! The Keyboard shortcuts settings page: one card per group of keys, each
 //! row naming what the keys do beside the keys drawn as keycaps.
 //!
-//! The list is `mycode_frontend::shortcuts`.
+//! The list is `mycode::frontend::shortcuts`.
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div, px,
 };
-use mycode_frontend::shortcuts::{Group, Shortcut, shortcuts};
+use mycode::frontend::shortcuts::{Group, Shortcut, shortcuts};
 
 use super::widgets::{settings_card, settings_row};
 use crate::workspace::Workspace;
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn every_desktop_shortcut_draws_clean_caps() {
-        for shortcut in mycode_frontend::shortcuts::shortcuts() {
+        for shortcut in mycode::frontend::shortcuts::shortcuts() {
             let labels = keycap_labels(&shortcut.keys);
             assert!(!labels.is_empty(), "{}", shortcut.keys);
             for label in labels {

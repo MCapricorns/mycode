@@ -1,13 +1,12 @@
-//! GPUI desktop frontend for MYCode.
+//! GPUI windows, rendering and native desktop integration.
 //!
-//! The application core lives in `mycode-app` (a [`mycode_frontend::CoreBridge`]
-//! thread owns sessions and turns); the shared product layer in
-//! `mycode-frontend`. This crate owns windows and chrome; it never runs a
-//! model turn or a tool itself.
+//! Application behavior lives in `mycode`. The desktop translates input into
+//! `mycode::frontend` actions and renders its state; `mycode::app::CoreBridge`
+//! owns the thread that executes sessions, model turns and tools.
 pub mod instance;
 pub mod ui;
 pub mod workspace;
 
-pub use mycode_frontend::{git_status, i18n, launch, view_model};
+pub use mycode::frontend::{git_status, i18n, launch, view_model};
 
-pub(crate) use mycode_frontend::unix_now;
+pub(crate) use mycode::core::unix_now;

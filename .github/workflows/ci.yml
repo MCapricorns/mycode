@@ -47,7 +47,14 @@ jobs:
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy,rustfmt
+
+      - name: Formatting and Wiki snapshot
+        shell: bash
+        run: |
+          cargo fmt --all -- --check
+          python scripts/build_wiki.py --check
+          python -B -m unittest discover -s wiki/tests -v
 
       - name: cargo test --workspace
         shell: bash
@@ -55,6 +62,16 @@ jobs:
           CARGO_NET_RETRY: "10"
           CARGO_HTTP_TIMEOUT: "60"
         run: cargo test --workspace --locked
+
+      - name: Desktop layout tests
+        shell: bash
+        run: cargo test -p mycode-desktop --features test-support --locked
+
+      - name: Rust API documentation
+        shell: bash
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps --locked
 
       - name: cargo clippy --workspace --all-targets
         shell: bash

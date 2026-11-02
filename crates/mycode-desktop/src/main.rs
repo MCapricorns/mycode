@@ -8,8 +8,7 @@ use std::borrow::Cow;
 
 use mycode_desktop::workspace;
 
-// The global allocator lives in mycode-core's crate root: a bin target's
-// own `#[global_allocator]` here would collide with it.
+// The mycode library supplies the process allocator, including this binary.
 
 /// Kit icons plus the embedded application mark used in the title bar.
 struct BrandAssets;
@@ -92,7 +91,7 @@ fn install_surface_panic_hook() {
             .map(str::to_owned)
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| info.to_string());
-        if let Some(notice) = mycode_frontend::launch::surface_failure_message(&message) {
+        if let Some(notice) = mycode::frontend::launch::surface_failure_message(&message) {
             eprintln!("{notice}");
             std::process::exit(1);
         }
@@ -103,24 +102,24 @@ fn install_surface_panic_hook() {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The self-update helper entry is shared with every `mycode*` binary.
-    if let Some(code) = mycode_frontend::launch::apply_update_from_args(&args) {
+    if let Some(code) = mycode::frontend::launch::apply_update_from_args(&args) {
         std::process::exit(code);
     }
-    if let Some(action) = mycode_frontend::launch::early_action(&args) {
+    if let Some(action) = mycode::frontend::launch::early_action(&args) {
         let text = match action {
-            mycode_frontend::launch::EarlyAction::Version => {
+            mycode::frontend::launch::EarlyAction::Version => {
                 format!(
                     "{}\n",
-                    mycode_frontend::launch::version_line("mycode-desktop")
+                    mycode::frontend::launch::version_line("mycode-desktop")
                 )
             }
-            mycode_frontend::launch::EarlyAction::Help => {
-                mycode_frontend::launch::help_text("mycode-desktop")
+            mycode::frontend::launch::EarlyAction::Help => {
+                mycode::frontend::launch::help_text("mycode-desktop")
             }
-            mycode_frontend::launch::EarlyAction::Unknown(flag) => {
+            mycode::frontend::launch::EarlyAction::Unknown(flag) => {
                 emit_early_text(&format!(
                     "mycode: unknown option {flag}\n\n{}",
-                    mycode_frontend::launch::help_text("mycode-desktop")
+                    mycode::frontend::launch::help_text("mycode-desktop")
                 ));
                 std::process::exit(1);
             }
@@ -131,7 +130,7 @@ fn main() {
         std::process::exit(0);
     }
     install_surface_panic_hook();
-    let home = match mycode_frontend::launch::home() {
+    let home = match mycode::frontend::launch::home() {
         Ok(home) => home,
         Err(error) => {
             eprintln!("mycode home unavailable: {error}");
@@ -150,28 +149,28 @@ fn main() {
             std::process::exit(0);
         }
     };
-    let mycode_frontend::launch::Launch { home, update } =
-        mycode_frontend::launch::settle(home, true);
+    let mycode::frontend::launch::Launch { home, update } =
+        mycode::frontend::launch::settle(home, true);
     // A pending payload a previous session staged but never swapped — a
     // crash or a lost helper — re-arms here and this launch exits into it:
     // the process that comes back up is the new version. A payload that
     // already landed is reported once, so the swap is never silent.
     let applied_update = match update {
-        mycode_frontend::PendingUpdate::Armed(_) => return,
-        mycode_frontend::PendingUpdate::Applied(version) => Some(version),
-        mycode_frontend::PendingUpdate::None => None,
+        mycode::app::PendingUpdate::Armed(_) => return,
+        mycode::app::PendingUpdate::Applied(version) => Some(version),
+        mycode::app::PendingUpdate::None => None,
     };
     // Relocate a downloaded binary into the install dir: the installed copy
     // is spawned with the source path, this process exits, and the new copy
     // deletes the download and writes the desktop shortcut.
-    match mycode_frontend::install::ensure_desktop_installed(&home) {
-        mycode_frontend::install::DesktopInstall::Exit => std::process::exit(0),
-        mycode_frontend::install::DesktopInstall::Run {
+    match mycode::app::install::ensure_desktop_installed(&home) {
+        mycode::app::install::DesktopInstall::Exit => std::process::exit(0),
+        mycode::app::install::DesktopInstall::Run {
             cleanup: Some(source),
         } => {
-            std::thread::spawn(move || mycode_frontend::install::cleanup_installed_source(source));
+            std::thread::spawn(move || mycode::app::install::cleanup_installed_source(source));
         }
-        mycode_frontend::install::DesktopInstall::Run { cleanup: None } => {}
+        mycode::app::install::DesktopInstall::Run { cleanup: None } => {}
     }
     gpui_kit::application()
         .with_assets(BrandAssets)

@@ -8,7 +8,7 @@ use crate::ui::model_picker::{
     ModelPickerTarget, ProviderChoice, preferred_index, selected_in_provider,
 };
 use crate::view_model::{FrontendAction, MentionKind};
-use mycode_frontend::picker::ModelChoice;
+use mycode::frontend::picker::ModelChoice;
 
 use super::Workspace;
 

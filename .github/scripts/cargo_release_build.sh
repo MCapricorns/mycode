@@ -53,7 +53,7 @@ self_test() {
   checksum="$(mktemp)"
   ansi="$(mktemp)"
   cat >"${dns}" <<'EOF'
-error: failed to get `async-trait` as a dependency of package `mycode-core v0.9.27`
+error: failed to get `async-trait` as a dependency of package `mycode v0.9.27`
 Caused by:
   failed to load source for dependency `async-trait`
   download of config.json failed
@@ -61,7 +61,7 @@ Caused by:
 EOF
   cat >"${compile}" <<'EOF'
 error[E0308]: mismatched types
-   --> crates/mycode-tools/src/builtin/shell.rs:1:1
+   --> crates/mycode/src/tools/builtin/shell.rs:1:1
 EOF
   echo 'error: checksum failed for `libc v0.2.190`' >"${checksum}"
   printf '\033[1m\033[91merror\033[0m: download of config.json failed\nCould not resolve host: index.crates.io\n' >"${ansi}"

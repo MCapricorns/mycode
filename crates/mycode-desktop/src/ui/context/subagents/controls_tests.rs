@@ -1,5 +1,5 @@
 use super::*;
-use mycode_frontend::builtin::{AgentStateEvent, AgentWorkflowNode};
+use mycode::tools::builtin::{AgentStateEvent, AgentWorkflowNode};
 
 pub(super) fn reworked_state() -> WorkspaceState {
     let mut state = WorkspaceState {

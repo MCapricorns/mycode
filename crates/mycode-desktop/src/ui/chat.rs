@@ -167,7 +167,7 @@ pub(super) fn render_chat(
             match item {
                 TranscriptBlock::User { entry, index } => {
                     turn_has_assistant_header = false;
-                    let child = if mycode_frontend::is_compaction_summary(&entry.text) {
+                    let child = if mycode::app::is_compaction_summary(&entry.text) {
                         let open = workspace.summary_open(&entry.event_id);
                         transcript::render_summary_entry(entry, open, cx).into_any_element()
                     } else {
@@ -273,7 +273,7 @@ pub(super) fn render_chat(
                 event_id: format!("inner-{}", job.call_id),
                 kind: EntryKind::ToolCall,
                 agent_states: None,
-                text: mycode_frontend::tool_label("agent", &format!("{} {}", job.role, job.label))
+                text: mycode::app::tool_label("agent", &format!("{} {}", job.role, job.label))
                     .into(),
                 call_id: Some(job.call_id.clone()),
                 thinking: String::new(),

@@ -12,6 +12,26 @@
   ],
   "nodes": [
     {
+      "id": "runtime",
+      "label": "运行时包",
+      "group": "crate",
+      "lane": 2,
+      "summary": "mycode 是桌面唯一的内部依赖，包含七个职责模块，不依赖 GPUI。模块直接导入所属类型；原有八包转导出链已收拢为运行时与桌面两个 package。",
+      "links": [
+        "frontend",
+        "app",
+        "agent",
+        "tools",
+        "providers",
+        "config",
+        "core"
+      ],
+      "files": [
+        "crates/mycode/Cargo.toml",
+        "crates/mycode/src/lib.rs"
+      ]
+    },
+    {
       "id": "code-mode",
       "label": "代码编排",
       "group": "module",
@@ -24,14 +44,14 @@
         "code-progress"
       ],
       "files": [
-        "crates/mycode-tools/src/code_mode.rs",
-        "crates/mycode-tools/src/code_mode/cell.rs",
-        "crates/mycode-tools/src/code_mode/engine.rs",
-        "crates/mycode-tools/src/code_mode/dispatch.rs",
-        "crates/mycode-tools/src/code_mode/journal.rs",
-        "crates/mycode-tools/src/code_mode/tests.rs",
-        "crates/mycode-tools/src/code_mode/regressions.rs",
-        "crates/mycode-tools/src/code_mode/image_tests.rs"
+        "crates/mycode/src/tools/code_mode.rs",
+        "crates/mycode/src/tools/code_mode/cell.rs",
+        "crates/mycode/src/tools/code_mode/engine.rs",
+        "crates/mycode/src/tools/code_mode/dispatch.rs",
+        "crates/mycode/src/tools/code_mode/journal.rs",
+        "crates/mycode/src/tools/code_mode/tests.rs",
+        "crates/mycode/src/tools/code_mode/regressions.rs",
+        "crates/mycode/src/tools/code_mode/image_tests.rs"
       ]
     },
     {
@@ -46,15 +66,15 @@
         "view_model"
       ],
       "files": [
-        "crates/mycode-tools/src/code_mode/progress.rs",
-        "crates/mycode-frontend/src/view_model/reduce/jobs.rs",
-        "crates/mycode-frontend/src/view_model/reduce/jobs/code_mode.rs",
-        "crates/mycode-frontend/src/stream.rs",
-        "crates/mycode-app/src/protocol.rs",
-        "crates/mycode-app/src/projection.rs",
-        "crates/mycode-frontend/src/view_model/reduce/jobs/snapshots.rs",
-        "crates/mycode-frontend/src/view_model/subagents.rs",
-        "crates/mycode-tools/src/code_mode/progress_tests.rs"
+        "crates/mycode/src/tools/code_mode/progress.rs",
+        "crates/mycode/src/frontend/view_model/reduce/jobs.rs",
+        "crates/mycode/src/frontend/view_model/reduce/jobs/code_mode.rs",
+        "crates/mycode/src/frontend/stream.rs",
+        "crates/mycode/src/app/protocol.rs",
+        "crates/mycode/src/app/projection.rs",
+        "crates/mycode/src/frontend/view_model/reduce/jobs/snapshots.rs",
+        "crates/mycode/src/frontend/view_model/subagents.rs",
+        "crates/mycode/src/tools/code_mode/progress_tests.rs"
       ]
     },
     {
@@ -68,9 +88,9 @@
         "code-mode"
       ],
       "files": [
-        "crates/mycode-app/src/tool_search.rs",
-        "crates/mycode-app/src/mcp_tools.rs",
-        "crates/mycode-app/src/mcp_tools/tests.rs"
+        "crates/mycode/src/app/tool_search.rs",
+        "crates/mycode/src/app/mcp_tools.rs",
+        "crates/mycode/src/app/mcp_tools/tests.rs"
       ]
     },
     {
@@ -85,9 +105,9 @@
         "home"
       ],
       "files": [
-        "crates/mycode-config/src/resources.rs",
-        "crates/mycode-agent/src/prompt.rs",
-        "crates/mycode-app/src/turn/prompt.rs"
+        "crates/mycode/src/config/resources.rs",
+        "crates/mycode/src/agent/prompt.rs",
+        "crates/mycode/src/app/turn/prompt.rs"
       ]
     },
     {
@@ -97,6 +117,7 @@
       "lane": 0,
       "summary": "mycode-desktop 提供 GPUI 原生工作台、项目和会话导航、对话、子代理结果与设置；把交互转成前端动作，按视图模型渲染。模型循环、工具执行与会话提交由下层负责。",
       "links": [
+        "runtime",
         "frontend",
         "launch",
         "composer",
@@ -172,7 +193,7 @@
         "core"
       ],
       "files": [
-        "crates/mycode-core/src/attachments.rs",
+        "crates/mycode/src/core/attachments.rs",
         "crates/mycode-desktop/src/workspace/attachments.rs"
       ]
     },
@@ -203,7 +224,7 @@
         "composer"
       ],
       "files": [
-        "crates/mycode-frontend/src/shortcuts.rs",
+        "crates/mycode/src/frontend/shortcuts.rs",
         "crates/mycode-desktop/src/ui/settings/shortcuts.rs"
       ]
     },
@@ -219,15 +240,15 @@
         "update"
       ],
       "files": [
-        "crates/mycode-frontend/src/launch.rs"
+        "crates/mycode/src/frontend/launch.rs"
       ]
     },
     {
       "id": "frontend",
-      "label": "前端产品层",
-      "group": "crate",
+      "label": "前端产品层模块",
+      "group": "module",
       "lane": 2,
-      "summary": "mycode-frontend 包含与 GPUI 无关的视图模型、状态归约器、动作驱动、中英文文本、Git 状态和快捷键；按会话隔离的子代理快照支持跨回合查看。",
+      "summary": "mycode::frontend 包含与 GPUI 无关的视图模型、状态归约器、动作驱动、中英文文本、Git 状态和快捷键；按会话隔离的子代理快照支持跨回合查看。",
       "links": [
         "desktop",
         "app",
@@ -235,9 +256,9 @@
         "view_model"
       ],
       "files": [
-        "crates/mycode-frontend/src/lib.rs",
-        "crates/mycode-frontend/src/stream.rs",
-        "crates/mycode-frontend/src/view_model/subagents.rs"
+        "crates/mycode/src/frontend.rs",
+        "crates/mycode/src/frontend/stream.rs",
+        "crates/mycode/src/frontend/view_model/subagents.rs"
       ]
     },
     {
@@ -251,10 +272,10 @@
         "app"
       ],
       "files": [
-        "crates/mycode-frontend/src/driver.rs",
-        "crates/mycode-frontend/src/driver/pump.rs",
-        "crates/mycode-frontend/src/driver/replies.rs",
-        "crates/mycode-frontend/src/driver/sessions.rs"
+        "crates/mycode/src/frontend/driver.rs",
+        "crates/mycode/src/frontend/driver/pump.rs",
+        "crates/mycode/src/frontend/driver/replies.rs",
+        "crates/mycode/src/frontend/driver/sessions.rs"
       ]
     },
     {
@@ -268,19 +289,19 @@
         "driver"
       ],
       "files": [
-        "crates/mycode-frontend/src/view_model.rs",
-        "crates/mycode-frontend/src/view_model/state.rs",
-        "crates/mycode-frontend/src/view_model/reduce.rs",
-        "crates/mycode-frontend/src/view_model/subagents.rs",
-        "crates/mycode-frontend/src/view_model/reduce/jobs/snapshots.rs"
+        "crates/mycode/src/frontend/view_model.rs",
+        "crates/mycode/src/frontend/view_model/state.rs",
+        "crates/mycode/src/frontend/view_model/reduce.rs",
+        "crates/mycode/src/frontend/view_model/subagents.rs",
+        "crates/mycode/src/frontend/view_model/reduce/jobs/snapshots.rs"
       ]
     },
     {
       "id": "app",
-      "label": "应用核心",
-      "group": "crate",
+      "label": "应用核心模块",
+      "group": "module",
       "lane": 4,
-      "summary": "mycode-app 通过独立核心线程的 CoreBridge 接收命令、回复并推送事件；负责回合装配、账本投影、压缩、子代理宿主、MCP 连接、设置和自更新。",
+      "summary": "mycode::app 通过独立核心线程的 CoreBridge 接收命令、回复并推送事件；负责回合装配、账本投影、压缩、子代理宿主、MCP 连接、设置和自更新。",
       "links": [
         "frontend",
         "agent",
@@ -291,11 +312,11 @@
         "mcp"
       ],
       "files": [
-        "crates/mycode-app/src/lib.rs",
-        "crates/mycode-app/src/dispatch.rs",
-        "crates/mycode-app/src/state.rs",
-        "crates/mycode-app/src/protocol.rs",
-        "crates/mycode-app/src/projection.rs"
+        "crates/mycode/src/app.rs",
+        "crates/mycode/src/app/dispatch.rs",
+        "crates/mycode/src/app/state.rs",
+        "crates/mycode/src/app/protocol.rs",
+        "crates/mycode/src/app/projection.rs"
       ]
     },
     {
@@ -310,8 +331,8 @@
         "desktop"
       ],
       "files": [
-        "crates/mycode-app/src/updates.rs",
-        "crates/mycode-app/src/updates/apply.rs"
+        "crates/mycode/src/app/updates.rs",
+        "crates/mycode/src/app/updates/apply.rs"
       ]
     },
     {
@@ -326,20 +347,20 @@
         "config"
       ],
       "files": [
-        "crates/mycode-app/src/mcp_client.rs",
-        "crates/mycode-app/src/mcp_client/stdio_channel.rs",
-        "crates/mycode-app/src/mcp_tools.rs",
-        "crates/mycode-app/src/mcp_client/http_channel.rs",
-        "crates/mycode-app/src/mcp_tools/results.rs",
-        "crates/mycode-app/src/tool_search.rs"
+        "crates/mycode/src/app/mcp_client.rs",
+        "crates/mycode/src/app/mcp_client/stdio_channel.rs",
+        "crates/mycode/src/app/mcp_tools.rs",
+        "crates/mycode/src/app/mcp_client/http_channel.rs",
+        "crates/mycode/src/app/mcp_tools/results.rs",
+        "crates/mycode/src/app/tool_search.rs"
       ]
     },
     {
       "id": "agent",
-      "label": "代理循环",
-      "group": "crate",
+      "label": "代理循环模块",
+      "group": "module",
       "lane": 5,
-      "summary": "mycode-agent 装配提示、请求服务商、消费流并分发工具，向会话账本提交事件。取消终止当前回合，已提交内容继续保留；界面不运行此循环。",
+      "summary": "mycode::agent 装配提示、请求服务商、消费流并分发工具，向会话账本提交事件。取消终止当前回合，已提交内容继续保留；界面不运行此循环。",
       "links": [
         "app",
         "sessions",
@@ -347,10 +368,9 @@
         "tools"
       ],
       "files": [
-        "crates/mycode-agent/src/lib.rs",
-        "crates/mycode-agent/src/agent.rs",
-        "crates/mycode-agent/src/turn.rs",
-        "crates/mycode-agent/src/prompt.rs"
+        "crates/mycode/src/agent.rs",
+        "crates/mycode/src/agent/turn.rs",
+        "crates/mycode/src/agent/prompt.rs"
       ]
     },
     {
@@ -365,10 +385,10 @@
         "home"
       ],
       "files": [
-        "crates/mycode-agent/src/session/ledger.rs",
-        "crates/mycode-agent/src/session/store/index.rs",
-        "crates/mycode-agent/src/session/actor/recovery.rs",
-        "crates/mycode-app/src/ledger.rs"
+        "crates/mycode/src/agent/session/ledger.rs",
+        "crates/mycode/src/agent/session/store/index.rs",
+        "crates/mycode/src/agent/session/actor/recovery.rs",
+        "crates/mycode/src/app/ledger.rs"
       ]
     },
     {
@@ -382,8 +402,8 @@
         "sessions"
       ],
       "files": [
-        "crates/mycode-app/src/compaction.rs",
-        "crates/mycode-app/src/turn/compact.rs"
+        "crates/mycode/src/app/compaction.rs",
+        "crates/mycode/src/app/turn/compact.rs"
       ]
     },
     {
@@ -398,36 +418,36 @@
         "app"
       ],
       "files": [
-        "crates/mycode-app/src/subagent.rs",
-        "crates/mycode-app/src/subagent/worktree.rs",
-        "crates/mycode-tools/src/builtin/agent.rs",
-        "crates/mycode-tools/src/builtin/agent/runtime.rs",
-        "crates/mycode-tools/src/builtin/agent/control.rs",
-        "crates/mycode-tools/src/builtin/agent/workflow.rs",
-        "crates/mycode-tools/src/builtin/agent/state.rs",
-        "crates/mycode-frontend/src/view_model/subagents.rs",
+        "crates/mycode/src/app/subagent.rs",
+        "crates/mycode/src/app/subagent/worktree.rs",
+        "crates/mycode/src/tools/builtin/agent.rs",
+        "crates/mycode/src/tools/builtin/agent/runtime.rs",
+        "crates/mycode/src/tools/builtin/agent/control.rs",
+        "crates/mycode/src/tools/builtin/agent/workflow.rs",
+        "crates/mycode/src/tools/builtin/agent/state.rs",
+        "crates/mycode/src/frontend/view_model/subagents.rs",
         "crates/mycode-desktop/src/ui/context/subagents.rs",
-        "crates/mycode-tools/src/builtin/agent/rework.rs",
-        "crates/mycode-tools/src/builtin/agent/scope.rs",
-        "crates/mycode-tools/src/builtin/agent/runtime_tests.rs",
-        "crates/mycode-tools/src/builtin/agent/rework_tests.rs"
+        "crates/mycode/src/tools/builtin/agent/rework.rs",
+        "crates/mycode/src/tools/builtin/agent/scope.rs",
+        "crates/mycode/src/tools/builtin/agent/runtime_tests.rs",
+        "crates/mycode/src/tools/builtin/agent/rework_tests.rs"
       ]
     },
     {
       "id": "providers",
-      "label": "模型协议适配",
-      "group": "crate",
+      "label": "模型协议适配模块",
+      "group": "module",
       "lane": 6,
-      "summary": "mycode-providers 将 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 转为共享流事件，处理思考档位、工具调用、缓存统计和传输；应用实际路由仍经 magpie 网关。",
+      "summary": "mycode::providers 将 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 转为共享流事件，处理思考档位、工具调用、缓存统计和传输；应用实际路由仍经 magpie 网关。",
       "links": [
         "agent",
         "core",
         "magpie"
       ],
       "files": [
-        "crates/mycode-providers/src/lib.rs",
-        "crates/mycode-providers/src/family.rs",
-        "crates/mycode-providers/src/transport.rs"
+        "crates/mycode/src/providers.rs",
+        "crates/mycode/src/providers/family.rs",
+        "crates/mycode/src/providers/transport.rs"
       ]
     },
     {
@@ -441,37 +461,37 @@
         "config"
       ],
       "files": [
-        "crates/mycode-app/src/magpie.rs",
-        "crates/mycode-config/src/settings/magpie.rs",
-        "crates/mycode-providers/src/catalog/magpie.rs"
+        "crates/mycode/src/app/magpie.rs",
+        "crates/mycode/src/config/settings/magpie.rs",
+        "crates/mycode/src/providers/catalog/magpie.rs"
       ]
     },
     {
       "id": "tools",
-      "label": "工具注册与执行",
-      "group": "crate",
+      "label": "工具注册与执行模块",
+      "group": "module",
       "lane": 6,
-      "summary": "mycode-tools 提供文件读写编辑、find、grep、平台命令行工具、CodeMode 和子代理控制协议。脚本同步 call 到达同一工具注册表并经过调用前检查；结果先查 is_error，文本读取 content[0].Text。",
+      "summary": "mycode::tools 提供文件读写编辑、find、grep、平台命令行工具、CodeMode 和子代理控制协议。脚本同步 call 到达同一工具注册表并经过调用前检查；结果先查 is_error，文本读取 content[0].Text。",
       "links": [
         "agent",
         "core",
         "mcp"
       ],
       "files": [
-        "crates/mycode-tools/src/lib.rs",
-        "crates/mycode-tools/src/tool.rs",
-        "crates/mycode-tools/src/registry.rs",
-        "crates/mycode-tools/src/invoke.rs",
-        "crates/mycode-tools/src/stream.rs",
-        "crates/mycode-tools/src/builtin.rs"
+        "crates/mycode/src/tools.rs",
+        "crates/mycode/src/tools/tool.rs",
+        "crates/mycode/src/tools/registry.rs",
+        "crates/mycode/src/tools/invoke.rs",
+        "crates/mycode/src/tools/stream.rs",
+        "crates/mycode/src/tools/builtin.rs"
       ]
     },
     {
       "id": "core",
-      "label": "共享类型与接口",
-      "group": "crate",
+      "label": "共享类型与接口模块",
+      "group": "module",
       "lane": 7,
-      "summary": "mycode-core 定义消息、事件、工具规格、附件限制、服务商接口和全局分配器。这里的载荷限制各有作用范围，不是全进程内存预算。",
+      "summary": "mycode::core 定义消息、事件、工具规格、附件限制和 provider 接口。全局分配器位于运行时 lib.rs；各载荷上限不构成进程总内存预算。",
       "links": [
         "providers",
         "tools",
@@ -479,29 +499,29 @@
         "attachments"
       ],
       "files": [
-        "crates/mycode-core/src/lib.rs",
-        "crates/mycode-core/src/message.rs",
-        "crates/mycode-core/src/attachments.rs",
-        "crates/mycode-core/src/provider.rs"
+        "crates/mycode/src/core.rs",
+        "crates/mycode/src/core/message.rs",
+        "crates/mycode/src/core/attachments.rs",
+        "crates/mycode/src/core/provider.rs"
       ]
     },
     {
       "id": "config",
-      "label": "配置与资源",
-      "group": "crate",
+      "label": "配置与资源模块",
+      "group": "module",
       "lane": 7,
-      "summary": "mycode-config 管理数据目录、严格 JSON 设置、资源与角色发现以及受管文件写入。有效的 magpie 首次创建格式在完全没有文档封装元数据时导入 revision 修订号 1；部分或非法封装仍走验证与修复。",
+      "summary": "mycode::config 管理数据目录、严格 JSON 设置、资源与角色发现以及受管文件写入。有效的 magpie 首次创建格式在完全没有文档封装元数据时导入 revision 修订号 1；部分或非法封装仍走验证与修复。",
       "links": [
         "core",
         "home",
         "settings"
       ],
       "files": [
-        "crates/mycode-config/src/lib.rs",
-        "crates/mycode-config/src/settings.rs",
-        "crates/mycode-config/src/home.rs",
-        "crates/mycode-config/src/subagents.rs",
-        "crates/mycode-config/src/resources.rs"
+        "crates/mycode/src/config.rs",
+        "crates/mycode/src/config/settings.rs",
+        "crates/mycode/src/config/home.rs",
+        "crates/mycode/src/config/subagents.rs",
+        "crates/mycode/src/config/resources.rs"
       ]
     },
     {
@@ -515,10 +535,10 @@
         "sessions"
       ],
       "files": [
-        "crates/mycode-config/src/home.rs",
-        "crates/mycode-app/src/turn.rs",
-        "crates/mycode-app/src/subagent/worktree.rs",
-        "crates/mycode-app/src/mcp_tools/results.rs"
+        "crates/mycode/src/config/home.rs",
+        "crates/mycode/src/app/turn.rs",
+        "crates/mycode/src/app/subagent/worktree.rs",
+        "crates/mycode/src/app/mcp_tools/results.rs"
       ]
     },
     {
@@ -534,11 +554,11 @@
         "sessions"
       ],
       "files": [
-        "crates/mycode-app/src/turn.rs",
-        "crates/mycode-app/src/turn/pump.rs",
-        "crates/mycode-agent/src/turn.rs",
-        "crates/mycode-app/src/projection.rs",
-        "crates/mycode-app/src/ledger.rs"
+        "crates/mycode/src/app/turn.rs",
+        "crates/mycode/src/app/turn/pump.rs",
+        "crates/mycode/src/agent/turn.rs",
+        "crates/mycode/src/app/projection.rs",
+        "crates/mycode/src/app/ledger.rs"
       ]
     }
   ]

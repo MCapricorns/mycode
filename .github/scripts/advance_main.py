@@ -536,7 +536,7 @@ def _expect_resolve() -> None:
     _expect('description = "kept"' in resolved["Cargo.toml"], resolved["Cargo.toml"])
     _expect('name = "tokio"' in resolved["Cargo.lock"], resolved["Cargo.lock"])
     _expect(
-        'name = "mycode-core"\nversion = "0.9.1"\n' in resolved["Cargo.lock"],
+        'name = "mycode"\nversion = "0.9.1"\n' in resolved["Cargo.lock"],
         resolved["Cargo.lock"],
     )
     _expect(
@@ -555,7 +555,7 @@ def _expect_resolve() -> None:
     )
     _expect(workspace_version(newer["Cargo.toml"]) == "0.9.2", newer["Cargo.toml"])
     _expect(
-        'name = "mycode-core"\nversion = "0.9.2"\n' in newer["Cargo.lock"],
+        'name = "mycode"\nversion = "0.9.2"\n' in newer["Cargo.lock"],
         newer["Cargo.lock"],
     )
     _expect("## [0.9.1]" in newer["CHANGELOG.md"], newer["CHANGELOG.md"])
@@ -674,7 +674,7 @@ def _expect_replay() -> None:
         _expect(workspace_version(cargo_out) == "0.9.1", cargo_out)
         _expect('description = "kept"' in cargo_out, cargo_out)
         _expect('name = "tokio"' in lock_out, lock_out)
-        _expect('name = "mycode-core"\nversion = "0.9.1"\n' in lock_out, lock_out)
+        _expect('name = "mycode"\nversion = "0.9.1"\n' in lock_out, lock_out)
         _expect('name = "serde"\nversion = "1.0.0"\n' in lock_out, lock_out)
         unreleased = section_body_unreleased(log_out)
         released = section_body(log_out, "0.9.1")

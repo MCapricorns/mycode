@@ -1,0 +1,578 @@
+//! Direct image launch used by `shell` when `mode` is `program`.
+//!
+//! This module is not a tool. The model-facing name is the active shell tool
+//! (`powershell`, `bash`, `zsh`, `sh`, or `cmd`). The caller supplies `program` plus
+//! `args`; this path never inserts a shell or parses shell syntax. PE, ELF,
+//! and Mach-O images launch directly. A direct shebang wrapper (one
+//! interpreter, at most one argument, no `-c` or `env -S`) is exec'd as that
+//! interpreter with the script path and `args`. Batch files and anything else
+//! require an explicit interpreter, or shell-tool `mode` `script`. Execution
+//! is unsandboxed current-user execution. Environment
+//! allowlisting is not isolation. There is no Core permission prompt: a
+//! registered, schema-valid shell-tool call is dispatched directly.
+//! Same-account hostile processes remain outside the security boundary.
+//! stdout/stderr are captured with the shared 50 KiB
+//! truncation cap; a non-zero exit is an error result, not a tool failure.
+//! Timeout and cancel await terminate-and-reap; dropping the future transfers
+//! cleanup ownership. Launch is Windows x64, Windows ARM64, and macOS Apple
+//! Silicon; every other target is unsupported.
+//! Windows x64 and Windows ARM64 share the `CreateProcessW` path.
+mod argv;
+#[cfg(windows)]
+pub(crate) use argv::{
+    is_batch_script, windows_batch_command_line_utf16, windows_command_line_utf16,
+};
+mod env;
+mod image;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod macos;
+mod prepare;
+mod resolve;
+mod spawn;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod unix;
+#[cfg(all(windows, any(target_arch = "x86_64", target_arch = "aarch64")))]
+mod windows;
+
+use std::ffi::OsString;
+use std::fmt::Write as _;
+use std::path::Path;
+use std::pin::Pin;
+use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+pub(crate) use resolve::windows_app_exec_link_target;
+
+use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
+use tokio::time::Sleep;
+use tokio_util::sync::CancellationToken;
+
+use crate::tools::builtin::blocking::run_blocking_supervised;
+use crate::tools::builtin::process::{
+    CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, captured_text,
+    collection_error, command_cancelled_error, display_exit, mark_timed_out,
+};
+use crate::tools::ctx::ToolCtx;
+use crate::tools::tool::{ToolError, ToolResult};
+
+use prepare::environment_summary;
+use resolve::encode_hex;
+
+/// Prepared launch snapshot and run outcome shared with the shell tool.
+pub(crate) use prepare::PreparedInvocation;
+pub(crate) use spawn::{ExecutionMetadata, RunOutcome};
+
+/// Pin/resolve failure with a typed executable-not-found case.
+///
+/// Only [`Self::NotFound`] may try another shell candidate. Image, identity,
+/// digest, permission, and cancellation failures stay [`Self::Other`].
+#[derive(Debug)]
+pub(crate) enum ResolveError {
+    /// PATH lookup or opening the resolved path found no executable file.
+    NotFound {
+        /// Requested program or basename, not a host path dump.
+        program: String,
+        /// Absolute PATH entries searched; `None` when a path open missed.
+        searched: Option<usize>,
+    },
+    /// The resolved file is a direct shebang wrapper, not a kernel image.
+    Shebang {
+        /// Canonical path of the script.
+        script: std::path::PathBuf,
+        /// Parsed shebang line.
+        shebang: image::Shebang,
+    },
+    /// Any other rejection; callers must fail closed.
+    Other(ToolError),
+}
+
+impl ResolveError {
+    /// Whether another candidate may be attempted.
+    #[must_use]
+    pub(crate) const fn is_not_found(&self) -> bool {
+        matches!(self, Self::NotFound { .. })
+    }
+
+    pub(super) fn path_not_found(path: &Path) -> Self {
+        let program = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "program".to_owned());
+        Self::NotFound {
+            program,
+            searched: None,
+        }
+    }
+
+    /// Converts this failure into the public tool error.
+    #[must_use]
+    pub(crate) fn into_tool_error(self) -> ToolError {
+        match self {
+            not_found @ Self::NotFound { .. } => ToolError::InvalidArgs(not_found.to_string()),
+            shebang @ Self::Shebang { .. } => ToolError::InvalidArgs(shebang.to_string()),
+            Self::Other(error) => error,
+        }
+    }
+}
+
+impl From<ToolError> for ResolveError {
+    fn from(error: ToolError) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound {
+                program,
+                searched: Some(searched),
+            } => write!(
+                f,
+                "program {program} not found on PATH ({searched} directories searched)"
+            ),
+            Self::NotFound {
+                program,
+                searched: None,
+            } => write!(f, "program {program} not found"),
+            Self::Shebang { script, shebang } => write!(
+                f,
+                "{} is a wrapper script ({}). program mode follows that shebang \
+                 by running the interpreter with the script path and args",
+                script.display(),
+                shebang.line
+            ),
+            Self::Other(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+/// Maximum number of argument and environment entries whose lengths are
+/// retained in the redacted result summary.
+///
+/// The full vectors are represented by length-framed digests, so increasing
+/// this limit only adds UI/session metadata and does not improve identity.
+const MAX_ARGUMENT_LENGTH_SUMMARY: usize = 64;
+
+/// Captured launch identity for UI details after preparation succeeds.
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedIdentity {
+    /// Canonical native path of the pinned executable.
+    pub program: String,
+    /// SHA-256 digest of the pinned image bytes.
+    pub digest: String,
+    /// SHA-256 invocation digest over path, identity, argv, cwd, and env.
+    pub invocation_digest: String,
+    /// Native file-identity token (volume/file id or device/inode).
+    pub image_identity: String,
+    /// Classified kernel image kind (`pe`, `elf`, `mach-o`, or
+    /// `mach-o-fat`).
+    pub image: &'static str,
+    /// Redacted environment lengths; values are never copied here.
+    pub env_summary: Value,
+    /// Script path when `program` was a direct shebang wrapper.
+    pub wrapper: Option<String>,
+}
+
+/// Snapshots the allowlisted child environment for one structured launch.
+///
+/// # Errors
+///
+/// Returns [`ToolError::InvalidArgs`] when the reconstructed block exceeds budget.
+pub(crate) fn snapshot_child_environment() -> Result<Vec<(OsString, OsString)>, ToolError> {
+    env::snapshot_child_environment()
+}
+
+/// Pins `program` and preserves its requested spelling as `argv[0]`.
+///
+/// The environment is supplied by a previously captured snapshot.
+///
+/// # Errors
+///
+/// Returns [`ResolveError::NotFound`] when PATH or path lookup misses the
+/// executable, and [`ResolveError::Other`] for every fail-closed rejection.
+pub(crate) fn prepare_from_snapshot(
+    session_cwd: &Path,
+    program: &str,
+    args: &[String],
+    env: &[(OsString, OsString)],
+    cancel: &CancellationToken,
+) -> Result<PreparedInvocation, ResolveError> {
+    PreparedInvocation::from_snapshot_with_argv0(session_cwd, program, program, args, env, cancel)
+}
+
+/// Extracts redacted launch identity before the snapshot is consumed by spawn.
+#[must_use]
+pub(crate) fn prepared_identity(prepared: &PreparedInvocation) -> PreparedIdentity {
+    let program = prepared
+        .canonical_path()
+        .to_str()
+        .expect("pin_program validated canonical path Unicode")
+        .to_owned();
+    PreparedIdentity {
+        program,
+        digest: encode_hex(prepared.image_digest()),
+        invocation_digest: encode_hex(prepared.invocation_digest()),
+        image_identity: prepared.image_identity().debug_token(),
+        image: image_kind_label(prepared.image_kind()),
+        env_summary: environment_summary(prepared.env(), MAX_ARGUMENT_LENGTH_SUMMARY),
+        wrapper: prepared.wrapper().map(str::to_owned),
+    }
+}
+
+fn image_kind_label(kind: image::ImageKind) -> &'static str {
+    match kind {
+        image::ImageKind::Elf => "elf",
+        image::ImageKind::Pe => "pe",
+        image::ImageKind::MachO { fat: true } => "mach-o-fat",
+        image::ImageKind::MachO { fat: false } => "mach-o",
+    }
+}
+
+/// Spawns a prepared invocation for `shell` mode `program`.
+///
+/// # Errors
+///
+/// Returns [`ToolError::Execution`] or [`ToolError::InvalidArgs`] when spawn
+/// itself fails. Collection failures are returned as [`RunOutcome`].
+pub(crate) async fn run_prepared(
+    prepared: PreparedInvocation,
+    lease: ExecutionLease,
+    cancel: &CancellationToken,
+    deadline: &mut Pin<&mut Sleep>,
+) -> Result<RunOutcome, ToolError> {
+    spawn::run_pinned(prepared, lease, cancel, deadline).await
+}
+
+/// Writes image, digest, identity, and redacted env summary onto tool details.
+pub(crate) fn apply_execution_details(
+    details: &mut Value,
+    identity: &PreparedIdentity,
+    metadata: ExecutionMetadata,
+) {
+    details["program"] = json!(identity.program);
+    details["image"] = json!(identity.image);
+    details["image_identity"] = json!(identity.image_identity);
+    details["digest_sha256"] = json!(identity.digest);
+    details["invocation_digest_sha256"] = json!(identity.invocation_digest);
+    details["identity"] = json!(execution_identity(&identity.invocation_digest, metadata));
+    details["env_summary"] = identity.env_summary.clone();
+    if let Some(architecture) = metadata.loaded_architecture() {
+        details["loaded_architecture"] = json!(architecture);
+    }
+    if let Some(translated) = metadata.translated() {
+        details["translated"] = json!(translated);
+    }
+    if let Some(wrapper) = &identity.wrapper {
+        details["wrapper"] = json!(wrapper);
+    }
+}
+
+/// Spawns one kernel image, or a direct shebang wrapper, for `shell` program mode.
+///
+/// # Errors
+///
+/// Returns [`ToolError`] when the image cannot be pinned or the spawn fails.
+/// A non-zero exit is an error [`ToolResult`], not an error return.
+pub(crate) async fn launch_program(
+    program: String,
+    args: Vec<String>,
+    timeout: Duration,
+    ctx: &ToolCtx,
+) -> Result<ToolResult, ToolError> {
+    let started = Instant::now();
+    if ctx.cancel.is_cancelled() {
+        return Err(command_cancelled_error(None));
+    }
+    resolve::validate_request(&program, &args)?;
+
+    let program_arg = program.clone();
+    let argv = args.clone();
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    let lease = tokio::select! {
+        biased;
+        _ = ctx.cancel.cancelled() => return Err(command_cancelled_error(None)),
+        _ = &mut deadline => {
+            return Ok(timed_out_before_spawn_result(
+                &program_arg,
+                &argv,
+                started.elapsed().as_millis() as u64,
+                timeout,
+            ));
+        }
+        lease = acquire_execution_lease() => lease,
+    };
+    let cwd = ctx.cwd.clone();
+    let pin_args = args;
+    let pin_work =
+        run_blocking_supervised("program resolution", &ctx.cancel, move |worker_cancel| {
+            let prepared = PreparedInvocation::prepare(&cwd, &program, &pin_args, &worker_cancel);
+            Ok((prepared?, lease))
+        });
+    tokio::pin!(pin_work);
+
+    let (prepared, lease) = tokio::select! {
+        biased;
+        _ = ctx.cancel.cancelled() => return Err(command_cancelled_error(None)),
+        _ = &mut deadline => {
+            return Ok(timed_out_before_spawn_result(
+                &program_arg,
+                &argv,
+                started.elapsed().as_millis() as u64,
+                timeout,
+            ));
+        }
+        prepared = &mut pin_work => prepared?,
+    };
+    if ctx.cancel.is_cancelled() {
+        return Err(command_cancelled_error(None));
+    }
+
+    let identity = prepared_identity(&prepared);
+    let outcome = run_prepared(prepared, lease, &ctx.cancel, &mut deadline).await?;
+    let duration_ms = started.elapsed().as_millis() as u64;
+    let (mut result, metadata) = match outcome {
+        RunOutcome::Done {
+            status,
+            stdout,
+            stderr,
+            metadata,
+        } => {
+            let result = format_result(
+                Some(status),
+                &identity.program,
+                &argv,
+                &execution_identity(&identity.invocation_digest, metadata),
+                &identity.digest,
+                stdout,
+                stderr,
+                duration_ms,
+                false,
+                None,
+            );
+            (result, metadata)
+        }
+        RunOutcome::CollectFailed { error, teardown } => {
+            return Err(collection_error(&error, teardown.err()));
+        }
+        RunOutcome::Timeout {
+            stdout,
+            stderr,
+            teardown,
+            started,
+            metadata,
+        } => {
+            let result = timed_out_result(
+                &identity.program,
+                &argv,
+                &execution_identity(&identity.invocation_digest, metadata),
+                &identity.digest,
+                stdout,
+                stderr,
+                duration_ms,
+                timeout,
+                teardown,
+                started,
+            );
+            (result, metadata)
+        }
+        RunOutcome::Cancelled { teardown } => {
+            return Err(command_cancelled_error(teardown.err()));
+        }
+    };
+    let details = result
+        .details
+        .as_mut()
+        .expect("format_result populates details");
+    apply_execution_details(details, &identity, metadata);
+    Ok(result)
+}
+
+fn timed_out_before_spawn_result(
+    program: &str,
+    argv: &[String],
+    duration_ms: u64,
+    timeout: Duration,
+) -> ToolResult {
+    timed_out_result(
+        program,
+        argv,
+        "",
+        "",
+        CapturedStream::default(),
+        CapturedStream::default(),
+        duration_ms,
+        timeout,
+        Ok(()),
+        false,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "timeout result assembly mirrors the tool's stable output fields"
+)]
+fn timed_out_result(
+    program: &str,
+    argv: &[String],
+    identity: &str,
+    digest: &str,
+    stdout: CapturedStream,
+    stderr: CapturedStream,
+    duration_ms: u64,
+    timeout: Duration,
+    teardown: Result<(), std::io::Error>,
+    started: bool,
+) -> ToolResult {
+    let notice = match (started, teardown.as_ref().err()) {
+        (_, Some(err)) => format!(
+            "[command timed out after {}s; termination failed: {err}]",
+            timeout.as_secs()
+        ),
+        (true, None) => format!(
+            "[command timed out after {}s and was killed]",
+            timeout.as_secs()
+        ),
+        (false, None) => format!(
+            "[command timed out after {}s before the program started]",
+            timeout.as_secs()
+        ),
+    };
+    mark_timed_out(format_result(
+        None,
+        program,
+        argv,
+        identity,
+        digest,
+        stdout,
+        stderr,
+        duration_ms,
+        true,
+        Some(&notice),
+    ))
+}
+
+fn execution_identity(invocation_digest: &str, metadata: ExecutionMetadata) -> String {
+    match (metadata.loaded_architecture(), metadata.translated()) {
+        (Some(architecture), Some(translated)) => {
+            format!("{invocation_digest} arch:{architecture} translated:{translated}")
+        }
+        _ => invocation_digest.to_owned(),
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "result assembly mirrors the tool's stable output fields"
+)]
+fn format_result(
+    status: Option<std::process::ExitStatus>,
+    program: &str,
+    argv: &[String],
+    identity: &str,
+    digest: &str,
+    stdout: CapturedStream,
+    stderr: CapturedStream,
+    duration_ms: u64,
+    forced_error: bool,
+    notice: Option<&str>,
+) -> ToolResult {
+    let (stdout_text, stdout_cut) = captured_text(&stdout);
+    let (stderr_text, stderr_cut) = captured_text(&stderr);
+
+    let mut text = String::new();
+    if !stdout_text.trim().is_empty() {
+        text.push_str(&stdout_text);
+    }
+    if !stderr_text.trim().is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str("[stderr]\n");
+        text.push_str(&stderr_text);
+    }
+
+    let (mut text, cut) = crate::tools::builtin::truncate_middle(&text, MAX_OUTPUT_BYTES);
+    let truncated = cut || stdout_cut || stderr_cut;
+    if truncated {
+        let total = stdout.total_bytes.saturating_add(stderr.total_bytes);
+        let _ = write!(
+            text,
+            "\n[output truncated: showed the start and end of {total} bytes]"
+        );
+    }
+
+    let is_error = forced_error || status.is_some_and(|s| !s.success());
+    if is_error {
+        match &status {
+            Some(s) => {
+                let _ = write!(text, "\n[exit code: {}]", display_exit(s));
+            }
+            None => match notice {
+                Some(notice) => {
+                    text.push('\n');
+                    text.push_str(notice);
+                }
+                None => text.push_str("\n[no exit status: command did not finish]"),
+            },
+        }
+    } else if let Some(notice) = notice {
+        text.push('\n');
+        text.push_str(notice);
+    }
+
+    let mut details = json!({
+        "program": program,
+        "args_count": argv.len(),
+        "args_digest_sha256": argument_digest(argv),
+        "args_summary": argument_summary(argv),
+        "identity": identity,
+        "digest_sha256": digest,
+        "stdout_bytes": stdout.total_bytes,
+        "stderr_bytes": stderr.total_bytes,
+        "duration_ms": duration_ms,
+        "truncated": truncated,
+    });
+    if let Some(s) = status {
+        details["exit_code"] = json!(display_exit(&s));
+    }
+
+    ToolResult {
+        content: vec![crate::core::message::ContentBlock::Text(text.into())],
+        is_error,
+        details: Some(details),
+    }
+}
+
+fn argument_digest(argv: &[String]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(u64::try_from(argv.len()).unwrap_or(u64::MAX).to_be_bytes());
+    for argument in argv {
+        hasher.update(
+            u64::try_from(argument.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
+        hasher.update(argument.as_bytes());
+    }
+    let digest: [u8; 32] = hasher.finalize().into();
+    encode_hex(&digest)
+}
+
+fn argument_summary(argv: &[String]) -> Value {
+    let byte_lengths: Vec<usize> = argv
+        .iter()
+        .take(MAX_ARGUMENT_LENGTH_SUMMARY)
+        .map(String::len)
+        .collect();
+    json!({
+        "byte_lengths": byte_lengths,
+        "omitted": argv.len().saturating_sub(MAX_ARGUMENT_LENGTH_SUMMARY),
+    })
+}
+
+#[cfg(test)]
+mod launch_test;

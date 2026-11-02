@@ -9,7 +9,7 @@ use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
     StyledText, div, px,
 };
-use mycode_frontend::highlight::highlight;
+use mycode::frontend::highlight::highlight;
 
 use crate::i18n::{is_chinese, t};
 use crate::ui::skin;
@@ -437,7 +437,7 @@ pub(super) fn tool_call_parts(
 }
 
 fn is_shell_tool(tool: &str) -> bool {
-    tool == "shell" || mycode_frontend::ShellKind::is_tool_name(tool)
+    tool == "shell" || mycode::tools::ShellKind::is_tool_name(tool)
 }
 
 fn tool_icon(tool: &str) -> IconName {

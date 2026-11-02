@@ -24,16 +24,7 @@ from pathlib import Path
 
 REPO_URL = "https://github.com/MCapricorns/mycode"
 ROOT = Path(__file__).resolve().parents[2]
-WORKSPACE_PACKAGES = (
-    "mycode-agent",
-    "mycode-app",
-    "mycode-config",
-    "mycode-core",
-    "mycode-desktop",
-    "mycode-frontend",
-    "mycode-providers",
-    "mycode-tools",
-)
+WORKSPACE_PACKAGES = ("mycode", "mycode-desktop")
 # Used only when a patch bump has nowhere else to take notes from.
 # Commit history is intentionally not rendered into the release body.
 DEFAULT_NOTES = "### Changed\n\n- 带 `[release]` 标记的 `main` 推送发布。\n"

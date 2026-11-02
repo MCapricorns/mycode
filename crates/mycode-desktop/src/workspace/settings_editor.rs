@@ -3,7 +3,7 @@
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{AppContext as _, Context, Entity, Window};
 
-use mycode_frontend::forms::DEFAULT_PROXY_URL;
+use mycode::frontend::forms::DEFAULT_PROXY_URL;
 
 use crate::view_model::FrontendAction;
 use crate::workspace::Workspace;
@@ -46,8 +46,8 @@ impl Workspace {
                 .map(|settings| settings.proxy.clone())
                 .filter(|proxy| {
                     matches!(
-                        mycode_frontend::ProxyPreference::parse(proxy),
-                        Some(mycode_frontend::ProxyPreference::Url(_))
+                        mycode::config::ProxyPreference::parse(proxy),
+                        Some(mycode::config::ProxyPreference::Url(_))
                     )
                 })
                 .unwrap_or_default();

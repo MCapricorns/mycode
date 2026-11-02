@@ -12,7 +12,7 @@ use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled,
     TestSupportExt as _, Window, div, px,
 };
-use mycode_frontend::view_model::ProxyTestState;
+use mycode::frontend::view_model::ProxyTestState;
 
 use super::widgets::{DropdownSpec, choice_chips, dropdown_field, settings_card, settings_row};
 use crate::i18n::t;
@@ -123,8 +123,8 @@ pub(super) fn render_general_section(
 
 /// Mode chip id for one stored proxy value.
 fn proxy_mode(stored: &str) -> &'static str {
-    match mycode_frontend::ProxyPreference::parse(stored) {
-        Some(mycode_frontend::ProxyPreference::Url(_)) => "manual",
+    match mycode::config::ProxyPreference::parse(stored) {
+        Some(mycode::config::ProxyPreference::Url(_)) => "manual",
         _ => "system",
     }
 }
@@ -132,7 +132,7 @@ fn proxy_mode(stored: &str) -> &'static str {
 /// One line for the proxy test result and whether it reads as success
 /// (`None` while idle or running).
 fn proxy_test_line(test: &ProxyTestState) -> (String, Option<bool>) {
-    use mycode_frontend::ProxyTestRoute;
+    use mycode::providers::ProxyTestRoute;
     match test {
         ProxyTestState::Idle => (
             t(
@@ -167,7 +167,7 @@ fn proxy_test_line(test: &ProxyTestState) -> (String, Option<bool>) {
                     format!(
                         "{} · {route} · {}",
                         t("google.com unreachable", "google.com 不通"),
-                        mycode_frontend::brief_error(message)
+                        mycode::app::brief_error(message)
                     ),
                     Some(false),
                 ),
@@ -207,8 +207,8 @@ fn proxy_field(
     let input = (mode == "manual").then(|| workspace.settings_proxy_input(window, cx));
     let invalid = input.as_ref().is_some_and(|input| {
         !matches!(
-            mycode_frontend::ProxyPreference::parse(input.read(cx).value().trim()),
-            Some(mycode_frontend::ProxyPreference::Url(_))
+            mycode::config::ProxyPreference::parse(input.read(cx).value().trim()),
+            Some(mycode::config::ProxyPreference::Url(_))
         )
     });
     let chips = choice_chips(

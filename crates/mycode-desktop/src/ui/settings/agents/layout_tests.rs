@@ -19,7 +19,7 @@ impl Render for RolesProbe {
             .flex()
             .flex_col()
             .test_support()
-            .children(mycode_frontend::builtin_roles().roles.iter().map(|role| {
+            .children(mycode::config::builtin_roles().roles.iter().map(|role| {
                 role_settings_row(
                     role,
                     RoleControls {

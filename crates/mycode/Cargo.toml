@@ -1,0 +1,82 @@
+[package]
+name = "mycode"
+description = "MYCode runtime, application services, and presentation state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+aho-corasick.workspace = true
+base64.workspace = true
+blake3.workspace = true
+bm25.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures-util = { features = ["std"], workspace = true }
+globset.workspace = true
+grep-matcher.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+http = "1.5.0"
+hyper-util = { version = "0.1.21", default-features = false, features = [
+    "client-proxy",
+    "client-proxy-system",
+] }
+ignore.workspace = true
+jsonschema.workspace = true
+memchr.workspace = true
+mimalloc.workspace = true
+notify = "8.2.1"
+parking_lot.workspace = true
+regex.workspace = true
+reqwest = { features = ["form", "json"], workspace = true }
+rquickjs.workspace = true
+rusqlite.workspace = true
+schemars.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "net", "process"] }
+tokio-util.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tokio-util = { features = ["io"], workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+vc-ltl.workspace = true
+windows-sys = { workspace = true, features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Wdk_System_SystemServices",
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_WindowsAndMessaging",
+] }
+winreg = "0.56"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+rustix = { features = ["fs", "process", "system"], workspace = true }
+
+[lints]
+workspace = true

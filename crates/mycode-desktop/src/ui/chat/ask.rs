@@ -129,7 +129,7 @@ pub(crate) fn render_ask_card(
                                 .map(|(choice_index, choice)| {
                                     let answer = choice.clone();
                                     let multiple = row.multiple;
-                                    let selected = mycode_frontend::builtin::ask_choice_selected(
+                                    let selected = mycode::tools::builtin::ask_choice_selected(
                                         &picked, choice,
                                     );
                                     ask_choice_row(

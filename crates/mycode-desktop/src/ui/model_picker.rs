@@ -5,7 +5,7 @@
 //! plus a virtualized list of that provider's catalog and configured ids.
 //! The catalog is directory data: the list is filtered, never truncated.
 //! Which rows exist and which one Enter takes live in
-//! [`mycode_frontend::picker`]; this module only paints them.
+//! [`mycode::frontend::picker`]; this module only paints them.
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
@@ -23,8 +23,8 @@ use crate::ui::skin::{self, menu_panel};
 use crate::view_model::FrontendAction;
 pub(crate) use crate::view_model::{model_display_name, provider_display_name};
 use crate::workspace::Workspace;
-use mycode_frontend::picker::{ModelChoice, current_provider, enabled_providers, recent_pins};
-pub(crate) use mycode_frontend::picker::{
+use mycode::frontend::picker::{ModelChoice, current_provider, enabled_providers, recent_pins};
+pub(crate) use mycode::frontend::picker::{
     ModelPickerTarget, ProviderChoice, filter_model_choices, preferred_index, provider_choices,
     provider_model_choices, provider_scroll_index, selected_in_provider, selected_model_label,
 };
@@ -388,7 +388,7 @@ pub(crate) fn select_model(
 
 fn pin_row(
     workspace: &Workspace,
-    pin: &mycode_frontend::ModelPin,
+    pin: &mycode::config::ModelPin,
     target: &ModelPickerTarget,
     highlighted: bool,
     cx: &Context<Workspace>,

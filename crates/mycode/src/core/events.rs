@@ -1,0 +1,85 @@
+//! Agent loop fan-out events.
+//!
+//! `AgentEvent`, `MessageDelta`, and `TurnOutcome` form the live Agent loop
+//! fan-out protocol. `crate::agent` distributes `AgentEvent` through
+//! `tokio::broadcast`, so the event type must stay `Clone`.
+
+use serde::{Deserialize, Serialize};
+
+use crate::core::error::MycodeError;
+use crate::core::ids::CallId;
+use crate::core::message::SharedMessage;
+
+/// Events emitted by the Agent loop.
+///
+/// Subscribers receive them via `tokio::broadcast`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum AgentEvent {
+    /// A new turn started processing.
+    TurnStarted,
+    /// Incremental delta while an assistant message streams in.
+    MessageDelta(MessageDelta),
+    /// A complete message was appended to the Agent history.
+    ///
+    /// Shared with the in-memory history so a broadcast clone does not copy
+    /// the message body.
+    MessageAdded(SharedMessage),
+    /// A tool call started executing.
+    ToolStarted {
+        call_id: CallId,
+        name: String,
+        /// Path, query, or command the call is acting on. Empty when unknown.
+        target: String,
+    },
+    /// Progress update from a running tool.
+    ToolProgress { call_id: CallId, message: String },
+    /// A tool call finished.
+    ToolCompleted {
+        call_id: CallId,
+        /// Always a [`Message::ToolResult`](crate::core::message::Message): the
+        /// same allocation the history receives, so a broadcast clone does
+        /// not copy the tool output.
+        result: SharedMessage,
+    },
+    /// The next provider request follows a compaction that rewrote the prefix.
+    ///
+    /// Emitted from `before_request`, after the previous response is already
+    /// on this bus and before the new request's deltas. The UI must not hear
+    /// about it on a side channel: a slow consumer would otherwise pair the
+    /// warning with the previous prompt.
+    CacheDisrupted,
+    /// A compaction summary request started (`true`) or ended (`false`).
+    ///
+    /// Sent from the request hook on this bus, like
+    /// [`AgentEvent::CacheDisrupted`], so it lands after the previous
+    /// response and before the next request's deltas.
+    Compacting(bool),
+    /// The current turn ended.
+    TurnEnded(TurnOutcome),
+    /// An error occurred within the Agent loop.
+    Error(MycodeError),
+}
+
+/// Incremental assistant content while streaming. See `wiki/index.html`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum MessageDelta {
+    /// Partial text content.
+    TextDelta(String),
+    /// Partial thinking content.
+    ThinkingDelta(String),
+    /// A tool call began streaming; its arguments follow as deltas.
+    ToolCallStarted { id: String, name: String },
+    /// Partial tool-call arguments (raw JSON fragment).
+    ToolCallDelta { id: String, partial_json: String },
+}
+
+/// Why a turn ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TurnOutcome {
+    /// The model stopped without further tool calls.
+    Completed,
+    /// The turn was aborted via cancellation.
+    Aborted,
+}

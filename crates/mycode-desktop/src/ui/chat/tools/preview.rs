@@ -2,7 +2,7 @@
 //! captions a tool row renders under its status line.
 
 use super::*;
-use mycode_frontend::InnerCallPhase;
+use mycode::tools::InnerCallPhase;
 pub(super) fn tool_paints_diff(tool: &str) -> bool {
     matches!(tool, "edit" | "write")
 }
@@ -127,7 +127,7 @@ pub(super) fn tool_status_node(status: &str, alert: bool, theme: &Theme) -> gpui
 
 /// The path inside a `read` target.
 ///
-/// [`mycode_frontend::tool_target`] appends a line window (`path L520+620` or
+/// [`mycode::core::tool_target`] appends a line window (`path L520+620` or
 /// `path +200`); the path itself may contain spaces, so only a trailing
 /// window is stripped.
 pub(super) fn read_path(target: &str) -> &str {
@@ -220,7 +220,7 @@ pub(super) fn split_code_calls(text: &str) -> Option<(String, Vec<CodeCall<'_>>)
     let lines: Vec<&str> = text.lines().collect();
     let at = lines
         .iter()
-        .position(|line| *line == mycode_frontend::CODE_CALLS_HEADING)?;
+        .position(|line| *line == mycode::app::CODE_CALLS_HEADING)?;
     let head = lines[..at].join("\n");
     let mut calls: Vec<CodeCall<'_>> = Vec::new();
     for line in &lines[at + 1..] {
@@ -265,7 +265,7 @@ pub(super) fn code_call_count(text: &str) -> usize {
     let mut count = 0usize;
     for line in text.lines() {
         if !in_calls {
-            in_calls = line == mycode_frontend::CODE_CALLS_HEADING;
+            in_calls = line == mycode::app::CODE_CALLS_HEADING;
             continue;
         }
         let continuation = count > 0

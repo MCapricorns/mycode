@@ -8,10 +8,10 @@ use gpui_kit::component::command::CommandState;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::{App, AppContext as _, Context, Entity, Pixels, Window, WindowBounds};
-use mycode_frontend::BridgeEvent;
-use mycode_frontend::HomeLayout;
-use mycode_frontend::driver::{Effect, FrontendDriver};
-use mycode_frontend::stream;
+use mycode::app::BridgeEvent;
+use mycode::config::HomeLayout;
+use mycode::frontend::driver::{Effect, FrontendDriver};
+use mycode::frontend::stream;
 
 use crate::view_model::{FrontendAction, MainView, WorkspaceState};
 
@@ -73,7 +73,7 @@ pub fn open_window(home: HomeLayout, applied_update: Option<String>, cx: &mut Ap
     // maximize-on-open workaround for gpui's stale-scale sizing is retired
     // by user request (DPI edge cases accepted); the user can maximize
     // manually.
-    let saved_size = mycode_frontend::read_ui_state(&home)
+    let saved_size = mycode::config::read_ui_state(&home)
         .ok()
         .and_then(|state| state.window_size);
     let (bounds, min_size) = startup_geometry(cx, saved_size);
@@ -121,7 +121,7 @@ pub struct Workspace {
     /// by default; the summary row keeps the count and the current name.
     pub(crate) magpie_models_open: bool,
     /// Pictures and code files waiting to ride the next prompt.
-    pub(crate) attachments: mycode_frontend::Attachments,
+    pub(crate) attachments: mycode::core::Attachments,
     /// Root focus so key events (Escape) reach the workspace node even when
     /// no input holds focus.
     focus_handle: gpui_kit::FocusHandle,
@@ -228,7 +228,7 @@ impl Workspace {
         let workspace = cx.new(|_| Self {
             driver,
             magpie_models_open: false,
-            attachments: mycode_frontend::Attachments::default(),
+            attachments: mycode::core::Attachments::default(),
             focus_handle,
             composer,
             composer_busy: false,
@@ -397,9 +397,9 @@ impl Workspace {
             match effect {
                 Effect::Toast { kind, text } => {
                     let kind = match kind {
-                        mycode_frontend::driver::ToastKind::Info => ToastKind::Info,
-                        mycode_frontend::driver::ToastKind::Warning => ToastKind::Warning,
-                        mycode_frontend::driver::ToastKind::Error => ToastKind::Error,
+                        mycode::frontend::driver::ToastKind::Info => ToastKind::Info,
+                        mycode::frontend::driver::ToastKind::Warning => ToastKind::Warning,
+                        mycode::frontend::driver::ToastKind::Error => ToastKind::Error,
                     };
                     self.push_toast(text, kind, cx);
                 }
@@ -664,7 +664,7 @@ impl Workspace {
 
     /// Role catalog last resolved for settings. Built-ins only before the
     /// first settings paint.
-    pub(crate) fn agent_roles(&self) -> std::sync::Arc<mycode_frontend::RoleCatalog> {
+    pub(crate) fn agent_roles(&self) -> std::sync::Arc<mycode::config::RoleCatalog> {
         self.driver.agent_roles()
     }
 

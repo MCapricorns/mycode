@@ -49,14 +49,14 @@ fn hex_a(value: u32, alpha: f32) -> Hsla {
 /// GPUI mode for a stored appearance id.
 #[must_use]
 pub fn theme_mode(theme: &str) -> ThemeMode {
-    if mycode_frontend::normalize_theme(theme) == "light" {
+    if mycode::frontend::normalize_theme(theme) == "light" {
         ThemeMode::Light
     } else {
         ThemeMode::Dark
     }
 }
 
-pub use mycode_frontend::normalize_font_size;
+pub use mycode::frontend::normalize_font_size;
 
 /// Body size in pixels. `.text_sm()` is 0.875rem, so the window rem is chosen
 /// to land `text_sm` on this value.
@@ -610,7 +610,7 @@ mod tests {
     #[test]
     fn syntax_colors_stay_readable_on_the_code_fill() {
         use crate::ui::syntax::{KINDS, color};
-        use mycode_frontend::highlight::TokenKind;
+        use mycode::frontend::highlight::TokenKind;
         for (mode, light) in [("dark", false), ("light", true)] {
             let fill = super::semantic_tokens(light).surface_2;
             for kind in KINDS {

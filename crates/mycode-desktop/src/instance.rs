@@ -14,7 +14,7 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::time::{Duration, Instant};
 
-use mycode_frontend::HomeLayout;
+use mycode::config::HomeLayout;
 
 /// Lock file in the home root, beside `mycode-desktop.shortcut`.
 const LOCK_FILE: &str = "mycode-desktop.instance";
@@ -197,7 +197,7 @@ fn raise_running_window() -> bool {
 mod tests {
     use std::time::Duration;
 
-    use mycode_frontend::HomeLayout;
+    use mycode::config::HomeLayout;
 
     use super::{Claim, claim_within};
 

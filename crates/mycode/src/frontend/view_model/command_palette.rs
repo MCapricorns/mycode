@@ -1,0 +1,617 @@
+//! Global command palette catalog.
+//!
+//! The list is a pure projection of [`WorkspaceState`]: sessions, models the
+//! picker can already select, slash commands, and settings pages. The GPUI
+//! command widget filters that list. A case-insensitive match on the label
+//! and keywords is what a query is expected to hit.
+
+use std::collections::HashSet;
+
+use super::chat::COMPOSER_COMMANDS;
+use super::models::{canonical_model_id, model_display_name, provider_display_name};
+use super::projects::{project_label, project_session_rows};
+use super::settings::SettingsSection;
+use super::state::{MainView, WorkspaceState};
+use crate::frontend::i18n::t;
+
+/// One thing the palette can run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaletteCommand {
+    /// Start a task in the open folder.
+    NewSession,
+    /// Open a session that can be read.
+    OpenSession(String),
+    /// Switch the session model to one enabled provider's model.
+    SelectModel { provider: String, model: String },
+    /// The same token the composer `/` menu accepts.
+    Slash(String),
+    /// Open one settings page.
+    OpenSettings(SettingsSection),
+}
+
+/// Which block a row belongs to. Order is the palette order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaletteGroupId {
+    Sessions,
+    Models,
+    Commands,
+    Settings,
+}
+
+/// One searchable row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaletteItem {
+    pub command: PaletteCommand,
+    pub label: String,
+    /// Extra terms matched besides [`Self::label`]. Both languages are
+    /// included so a search works after the UI language flips.
+    pub keywords: Vec<String>,
+    /// The row that is already in effect (open session, current model, page).
+    pub checked: bool,
+}
+
+/// One headed block of rows. Empty blocks are omitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaletteGroup {
+    pub id: PaletteGroupId,
+    pub items: Vec<PaletteItem>,
+}
+
+/// The full palette, before the query filter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaletteCatalog {
+    pub groups: Vec<PaletteGroup>,
+}
+
+/// Builds the palette from the current desk. Corrupt sessions and disabled
+/// providers are left out: those rows cannot be opened or selected.
+#[must_use]
+pub fn palette_catalog(state: &WorkspaceState) -> PaletteCatalog {
+    let mut groups = Vec::new();
+    push_group(&mut groups, PaletteGroupId::Sessions, session_items(state));
+    push_group(&mut groups, PaletteGroupId::Models, model_items(state));
+    push_group(&mut groups, PaletteGroupId::Commands, command_items(state));
+    push_group(&mut groups, PaletteGroupId::Settings, settings_items(state));
+    PaletteCatalog { groups }
+}
+
+/// The row at one unfiltered group/item coordinate.
+///
+/// The command widget reports the same coordinates after a query filter, so
+/// confirm can resolve the row without storing the filtered list.
+#[must_use]
+pub fn palette_item(catalog: &PaletteCatalog, section: usize, row: usize) -> Option<&PaletteItem> {
+    catalog
+        .groups
+        .get(section)
+        .and_then(|group| group.items.get(row))
+}
+
+/// Whether a row matches a query. Empty matches everything. The comparison
+/// is case-insensitive and covers the label and the keywords, matching the
+/// command widget's own filter.
+#[cfg(test)]
+#[must_use]
+fn palette_matches(item: &PaletteItem, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let query = query.to_lowercase();
+    item.label.to_lowercase().contains(&query)
+        || item
+            .keywords
+            .iter()
+            .any(|keyword| keyword.to_lowercase().contains(&query))
+}
+
+fn push_group(groups: &mut Vec<PaletteGroup>, id: PaletteGroupId, items: Vec<PaletteItem>) {
+    if items.is_empty() {
+        return;
+    }
+    groups.push(PaletteGroup { id, items });
+}
+
+fn session_items(state: &WorkspaceState) -> Vec<PaletteItem> {
+    let open_id = state
+        .active
+        .as_ref()
+        .map(|conversation| conversation.session_id.as_str());
+    let mut items = vec![PaletteItem {
+        command: PaletteCommand::NewSession,
+        label: t("New conversation", "新对话").to_owned(),
+        keywords: words(&["new", "session", "chat", "新建", "对话", "会话"]),
+        checked: false,
+    }];
+    for (session, project) in project_session_rows(state) {
+        if session.corrupt {
+            continue;
+        }
+        let title = if !session.title.trim().is_empty() {
+            one_line(session.title.trim())
+        } else {
+            t("New conversation", "新对话").to_owned()
+        };
+        let mut keywords = words(&["session", "chat", "对话", "会话"]);
+        keywords.push(session.session_id.clone());
+        if let Some(project) = project {
+            keywords.push(project_label(project));
+        }
+        items.push(PaletteItem {
+            command: PaletteCommand::OpenSession(session.session_id.clone()),
+            label: title,
+            keywords,
+            checked: open_id == Some(session.session_id.as_str()),
+        });
+    }
+    items
+}
+
+fn model_items(state: &WorkspaceState) -> Vec<PaletteItem> {
+    let Some(settings) = state.settings.as_ref() else {
+        return Vec::new();
+    };
+    let enabled: Vec<&crate::config::ProviderSettings> = settings
+        .providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .collect();
+    if enabled.is_empty() {
+        return Vec::new();
+    }
+    let mut seen = HashSet::new();
+    let mut items = Vec::new();
+    let mut push = |provider: &str, model: &str| {
+        let model = canonical_model_id(state, provider, model);
+        let model = model.as_str();
+        // A hidden model stays out of the palette as it does the picker.
+        let offered = crate::frontend::picker::offers_model(state, provider, model);
+        if !offered || model.is_empty() {
+            return;
+        }
+        if !seen.insert((provider.to_owned(), model.to_owned())) {
+            return;
+        }
+        let provider_name = provider_display_name(state, provider);
+        let model_name = model_display_name(state, provider, model);
+        let mut keywords = words(&["model", "模型"]);
+        keywords.push(provider.to_owned());
+        keywords.push(provider_name.clone());
+        keywords.push(model.to_owned());
+        if model_name != model {
+            keywords.push(model_name.clone());
+        }
+        let checked = state.selected_provider.as_deref() == Some(provider)
+            && state
+                .selected_model
+                .as_deref()
+                .is_some_and(|selected| canonical_model_id(state, provider, selected) == model);
+        items.push(PaletteItem {
+            command: PaletteCommand::SelectModel {
+                provider: provider.to_owned(),
+                model: model.to_owned(),
+            },
+            label: format!("{model_name} · {provider_name}"),
+            keywords,
+            checked,
+        });
+    };
+    for pin in &state.recent_models {
+        push(&pin.provider, &pin.model);
+    }
+    for provider in &enabled {
+        for model in &provider.models {
+            push(&provider.id, model);
+        }
+    }
+    items
+}
+
+fn command_items(state: &WorkspaceState) -> Vec<PaletteItem> {
+    let mut items = Vec::new();
+    for (name, english, chinese) in COMPOSER_COMMANDS {
+        let mut keywords = words(&["command", "命令", english, chinese]);
+        keywords.push(name.trim_start_matches('/').to_owned());
+        items.push(PaletteItem {
+            command: PaletteCommand::Slash((*name).to_owned()),
+            label: format!("{name} · {}", t(english, chinese)),
+            keywords,
+            checked: false,
+        });
+    }
+    for skill in &state.enabled_skills() {
+        let slug = skill.slug.trim();
+        if slug.is_empty() {
+            continue;
+        }
+        let mut keywords = words(&["skill", "技能", "command", "命令"]);
+        keywords.push(slug.to_owned());
+        if !skill.title.is_empty() {
+            keywords.push(skill.title.clone());
+        }
+        items.push(PaletteItem {
+            command: PaletteCommand::Slash(format!("/{slug}")),
+            label: format!("/{slug} · {}", one_line(&skill.title)),
+            keywords,
+            checked: false,
+        });
+    }
+    if let Some(settings) = state.settings.as_ref() {
+        for server in settings.mcp_servers.iter().filter(|server| server.enabled) {
+            let mut keywords = words(&["mcp", "command", "命令"]);
+            keywords.push(server.id.clone());
+            items.push(PaletteItem {
+                command: PaletteCommand::Slash(format!("mcp:{}", server.id)),
+                label: format!("/{} · {}", server.id, t("MCP server", "MCP 服务")),
+                keywords,
+                checked: false,
+            });
+            let Some(tools) = state
+                .mcp_tools
+                .iter()
+                .find(|(id, _)| id == &server.id)
+                .map(|(_, tools)| tools.as_slice())
+            else {
+                continue;
+            };
+            for tool in tools {
+                if tool.is_empty() {
+                    continue;
+                }
+                let mut keywords = words(&["mcp", "tool", "工具", "command", "命令"]);
+                keywords.push(server.id.clone());
+                keywords.push(tool.clone());
+                items.push(PaletteItem {
+                    command: PaletteCommand::Slash(format!("mcp:{}/{}", server.id, tool)),
+                    label: format!("/{}/{} · {}", server.id, tool, t("MCP tool", "MCP 工具")),
+                    keywords,
+                    checked: false,
+                });
+            }
+        }
+    }
+    items
+}
+
+fn settings_items(state: &WorkspaceState) -> Vec<PaletteItem> {
+    let mut items = Vec::new();
+    for (_, sections) in SettingsSection::GROUPS {
+        for section in *sections {
+            let mut keywords = words(section_keywords(*section));
+            keywords.push(section.id().to_owned());
+            keywords.extend(words(&["settings", "设置"]));
+            items.push(PaletteItem {
+                command: PaletteCommand::OpenSettings(*section),
+                label: section.label().to_owned(),
+                keywords,
+                checked: state.view == MainView::Settings && state.settings_section == *section,
+            });
+        }
+    }
+    items
+}
+
+fn section_keywords(section: SettingsSection) -> &'static [&'static str] {
+    match section {
+        SettingsSection::General => &[
+            "general",
+            "通用",
+            "appearance",
+            "外观",
+            "language",
+            "语言",
+            "identity",
+            "身份",
+            "theme",
+            "主题",
+            "font",
+            "字体",
+        ],
+        SettingsSection::Shortcuts => &[
+            "shortcuts",
+            "快捷键",
+            "keyboard",
+            "键盘",
+            "keys",
+            "按键",
+            "hotkeys",
+        ],
+        SettingsSection::Models => &[
+            "models",
+            "模型",
+            "providers",
+            "服务商",
+            "default model",
+            "默认模型",
+        ],
+        SettingsSection::Agents => &["agents", "子代理", "scout", "artisan", "roles", "角色"],
+        SettingsSection::Skills => &["skills", "技能", "slash", "斜杠"],
+        SettingsSection::Mcp => &["mcp", "tool servers", "工具服务器"],
+        SettingsSection::About => &["about", "关于", "version", "updates", "版本", "更新"],
+    }
+}
+
+fn one_line(text: &str) -> String {
+    text.chars()
+        .take(80)
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect()
+}
+
+fn words(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{palette_catalog, palette_item, palette_matches};
+    use crate::frontend::view_model::{
+        FrontendAction, MainView, PaletteCommand, PaletteGroupId, SettingsSection, SettingsState,
+        SkillEntry, WorkspaceState, reduce,
+    };
+
+    fn session(
+        id: &str,
+        title: &str,
+        corrupt: bool,
+    ) -> crate::frontend::view_model::SessionSummary {
+        crate::frontend::view_model::SessionSummary {
+            session_id: id.to_owned(),
+            root_branch_id: "br".to_owned(),
+            title: title.to_owned(),
+            updated_at_ms: None,
+            event_count: 1,
+            active: false,
+            corrupt,
+        }
+    }
+
+    fn populated() -> WorkspaceState {
+        let document = crate::config::AppSettings {
+            magpie: crate::config::MagpieSettings {
+                enabled: true,
+                base_url: "http://127.0.0.1:3425/v1".to_owned(),
+                api_key: "magpie-mycode".to_owned(),
+                model: "gpt-5".to_owned(),
+                hidden_models: vec!["hidden-model".to_owned()],
+            },
+            ..crate::config::AppSettings::default()
+        };
+        let mut settings = SettingsState::from_settings(&document, 1);
+        // `settings.mcp_servers` mirrors magpie's Library catalog; a test
+        // fills the mirror the way `McpLibraryLoaded` does at runtime.
+        settings.mcp_servers.push(crate::config::McpServerSettings {
+            id: "docs".to_owned(),
+            enabled: true,
+            transport: "stdio".to_owned(),
+            command: None,
+            args: Vec::new(),
+            env: std::collections::BTreeMap::new(),
+            headers: Default::default(),
+            endpoint: None,
+            key_header: None,
+        });
+        WorkspaceState {
+            settings: Some(settings),
+            sessions: vec![
+                session("ses-live", "Fix the parser", false),
+                session("ses-bad", "Broken", true),
+            ],
+            skills: vec![SkillEntry {
+                slug: "review".to_owned(),
+                title: "Review diff".to_owned(),
+                path: "/tmp/review/SKILL.md".to_owned(),
+                global: false,
+            }],
+            mcp_tools: vec![("docs".to_owned(), vec!["search".to_owned()])],
+            selected_provider: Some("magpie".to_owned()),
+            selected_model: Some("gpt-5".to_owned()),
+            recent_models: vec![crate::config::ModelPin::new("magpie", "gpt-5")],
+            ..WorkspaceState::default()
+        }
+    }
+
+    fn labels_matching(state: &WorkspaceState, query: &str) -> Vec<String> {
+        palette_catalog(state)
+            .groups
+            .into_iter()
+            .flat_map(|group| group.items)
+            .filter(|item| palette_matches(item, query))
+            .map(|item| item.label)
+            .collect()
+    }
+
+    #[test]
+    fn palette_search_cannot_reveal_another_projects_conversation() {
+        let mut state = populated();
+        state
+            .sessions
+            .push(session("ses-other", "Other project parser", false));
+        state.session_projects = vec![
+            ("ses-live".to_owned(), "/current".to_owned()),
+            ("ses-other".to_owned(), "/other".to_owned()),
+        ];
+        state.project_dir = Some("/current".to_owned());
+        assert_eq!(labels_matching(&state, "parser"), ["Fix the parser"]);
+        state.project_dir = Some("/other".to_owned());
+        assert_eq!(labels_matching(&state, "parser"), ["Other project parser"]);
+    }
+
+    #[test]
+    fn catalog_covers_sessions_models_commands_and_settings() {
+        let catalog = palette_catalog(&populated());
+        let ids: Vec<_> = catalog.groups.iter().map(|group| group.id).collect();
+        assert_eq!(
+            ids,
+            [
+                PaletteGroupId::Sessions,
+                PaletteGroupId::Models,
+                PaletteGroupId::Commands,
+                PaletteGroupId::Settings,
+            ]
+        );
+        let sessions = &catalog.groups[0].items;
+        assert!(matches!(sessions[0].command, PaletteCommand::NewSession));
+        assert!(sessions.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::OpenSession(id) if id == "ses-live"
+        )));
+        assert!(!sessions.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::OpenSession(id) if id == "ses-bad"
+        )));
+
+        let models = &catalog.groups[1].items;
+        assert!(models.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::SelectModel { model, .. } if model == "gpt-5"
+        )));
+        assert!(models.iter().any(|item| item.checked));
+        assert!(!models.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::SelectModel { model, .. } if model == "hidden-model"
+        )));
+
+        let commands = &catalog.groups[2].items;
+        assert!(commands.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::Slash(insert) if insert == "/new"
+        )));
+        assert!(commands.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::Slash(insert) if insert == "/compact"
+        )));
+        assert!(commands.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::Slash(insert) if insert == "/settings"
+        )));
+        assert!(commands.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::Slash(insert) if insert == "/review"
+        )));
+        assert!(commands.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::Slash(insert) if insert == "mcp:docs"
+        )));
+        assert!(commands.iter().any(|item| matches!(
+            &item.command,
+            PaletteCommand::Slash(insert) if insert == "mcp:docs/search"
+        )));
+
+        let settings = &catalog.groups[3].items;
+        assert_eq!(
+            settings.len(),
+            SettingsSection::GROUPS
+                .iter()
+                .map(|(_, sections)| sections.len())
+                .sum::<usize>()
+        );
+        assert!(settings.iter().any(|item| matches!(
+            item.command,
+            PaletteCommand::OpenSettings(SettingsSection::Mcp)
+        )));
+    }
+
+    #[test]
+    fn switched_off_skill_leaves_the_palette_and_marks_settings_dirty() {
+        let mut state = populated();
+        reduce(
+            &mut state,
+            FrontendAction::SettingsSkillToggled("review".to_owned(), false),
+        );
+        let settings = state.settings.as_ref().expect("settings");
+        assert!(settings.dirty);
+        assert_eq!(settings.to_settings().skills.disabled, ["review"]);
+        assert!(state.enabled_skills().is_empty());
+        assert_eq!(state.skills.len(), 1, "the Skills page still lists it");
+        assert!(
+            !labels_matching(&state, "/review")
+                .iter()
+                .any(|label| label.starts_with("/review"))
+        );
+
+        reduce(
+            &mut state,
+            FrontendAction::SettingsSkillToggled("review".to_owned(), true),
+        );
+        assert_eq!(state.enabled_skills().len(), 1);
+        assert!(
+            labels_matching(&state, "/review")
+                .iter()
+                .any(|label| label.starts_with("/review"))
+        );
+    }
+
+    #[test]
+    fn search_is_case_insensitive_across_labels_and_keywords() {
+        let state = populated();
+        let parser = labels_matching(&state, "PARSER");
+        assert!(parser.iter().any(|label| label.contains("parser")));
+        let model = labels_matching(&state, "gpt-5");
+        assert!(model.iter().any(|label| label.contains("gpt-5")));
+        let settings = labels_matching(&state, "设置");
+        assert!(settings.iter().any(|label| label.contains("设置")
+            || label.contains("General")
+            || label.contains("通用")
+            || label.contains("/settings")));
+        assert!(
+            labels_matching(&state, "slash")
+                .iter()
+                .any(|label| label.contains("/review")
+                    || label.contains("Skills")
+                    || label.contains("技能"))
+        );
+        assert!(labels_matching(&state, "no-such-row").is_empty());
+        assert!(palette_matches(
+            &palette_catalog(&state).groups[0].items[0],
+            "   "
+        ));
+    }
+
+    #[test]
+    fn confirm_index_uses_the_unfiltered_group_and_row() {
+        let catalog = palette_catalog(&populated());
+        let item = palette_item(&catalog, 2, 0).expect("first command");
+        assert!(matches!(item.command, PaletteCommand::Slash(ref insert) if insert == "/new"));
+        assert!(palette_item(&catalog, 9, 0).is_none());
+    }
+
+    #[test]
+    fn opening_the_palette_closes_other_floating_menus() {
+        let mut state = WorkspaceState {
+            model_menu_open: true,
+            reasoning_menu_open: true,
+            view: MainView::Chat,
+            ..WorkspaceState::default()
+        };
+        reduce(&mut state, FrontendAction::CommandPaletteSet(true));
+        assert!(state.command_palette_open);
+        assert!(!state.model_menu_open);
+        assert!(!state.reasoning_menu_open);
+        reduce(&mut state, FrontendAction::CommandPaletteSet(false));
+        assert!(!state.command_palette_open);
+    }
+
+    #[test]
+    fn settings_page_is_checked_only_while_that_page_is_open() {
+        let mut state = populated();
+        state.view = MainView::Settings;
+        state.settings_section = SettingsSection::Agents;
+        let catalog = palette_catalog(&state);
+        let settings = catalog
+            .groups
+            .iter()
+            .find(|group| group.id == PaletteGroupId::Settings)
+            .expect("settings");
+        let checked: Vec<_> = settings
+            .items
+            .iter()
+            .filter(|item| item.checked)
+            .map(|item| match item.command {
+                PaletteCommand::OpenSettings(section) => section,
+                _ => panic!("settings group only opens pages"),
+            })
+            .collect();
+        assert_eq!(checked, vec![SettingsSection::Agents]);
+    }
+}

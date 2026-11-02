@@ -44,7 +44,7 @@ class WikiGeneratorTests(unittest.TestCase):
         wiki.validate_graph(graph)
         files, missing = wiki.collect_files(graph)
         self.assertEqual(missing, [])
-        self.assertIn("crates/mycode-tools/src/code_mode/progress.rs", files)
+        self.assertIn("crates/mycode/src/tools/code_mode/progress.rs", files)
         for path, content in files.items():
             self.assertEqual(content, (ROOT / path).read_text(encoding="utf-8"))
 
@@ -72,8 +72,8 @@ class WikiGeneratorTests(unittest.TestCase):
         source = wiki.DOCS["architecture"]
         self.assertEqual(wiki.doc_link("code-mode-engine.md#progress-and-child-identity", source),
                          "#v=code-mode&s=progress-and-child-identity")
-        self.assertEqual(wiki.doc_link("../../crates/mycode-app/src/turn.rs", source),
-                         wiki.REPO + "crates/mycode-app/src/turn.rs")
+        self.assertEqual(wiki.doc_link("../../crates/mycode/src/app/turn.rs", source),
+                         wiki.REPO + "crates/mycode/src/app/turn.rs")
         self.assertEqual(wiki.doc_link("#subagent-orchestration", source),
                          "#v=architecture&s=subagent-orchestration")
         self.assertEqual(wiki.doc_link("#n=agent", source), "#n=agent")

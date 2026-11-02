@@ -7,7 +7,7 @@ use gpui_kit::{
     AnyElement, Context, Div, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
-use mycode_frontend::builtin::{
+use mycode::tools::builtin::{
     AgentRunSnapshot, AgentRunStatus, AgentWorkflowSnapshot, AgentWorkflowStatus,
 };
 

@@ -16,7 +16,7 @@ use crate::i18n::t;
 use crate::ui::model_picker::{ModelPickerTarget, model_display_name, render_model_picker};
 use crate::ui::skin;
 use crate::workspace::Workspace;
-use mycode_frontend::{RoleIsolation, RoleOrigin, SubagentRole};
+use mycode::config::{RoleIsolation, RoleOrigin, SubagentRole};
 
 pub(super) fn render_agents_section(
     workspace: &mut Workspace,
@@ -398,10 +398,10 @@ fn thinking_options(
 
 /// The four built-ins lead in a stable order; custom roles follow.
 fn group_settings_roles(
-    catalog: &mycode_frontend::RoleCatalog,
+    catalog: &mycode::config::RoleCatalog,
 ) -> (
-    Vec<&mycode_frontend::SubagentRole>,
-    Vec<&mycode_frontend::SubagentRole>,
+    Vec<&mycode::config::SubagentRole>,
+    Vec<&mycode::config::SubagentRole>,
 ) {
     const PRIMARY: [&str; 4] = ["scout", "artisan", "sentinel", "skeptic"];
     let primary = PRIMARY
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn settings_roles_match_all_four_builtin_defaults() {
-        let roles = mycode_frontend::builtin_roles();
+        let roles = mycode::config::builtin_roles();
         let names: Vec<_> = roles.roles.iter().map(|role| role.name.as_str()).collect();
         assert_eq!(names, ["scout", "artisan", "sentinel", "skeptic"]);
         let (primary, additional) = super::group_settings_roles(&roles);
@@ -445,19 +445,19 @@ mod tests {
 
     #[test]
     fn discovered_roles_follow_the_builtin_cards() {
-        let mut catalog = mycode_frontend::builtin_roles();
+        let mut catalog = mycode::config::builtin_roles();
         catalog
             .roles
             .iter_mut()
             .find(|role| role.name == "sentinel")
             .unwrap()
-            .origin = mycode_frontend::RoleOrigin::User;
+            .origin = mycode::config::RoleOrigin::User;
         catalog
             .roles
-            .push(sample_role("reviewer", mycode_frontend::RoleOrigin::User));
+            .push(sample_role("reviewer", mycode::config::RoleOrigin::User));
         catalog
             .roles
-            .push(sample_role("steward", mycode_frontend::RoleOrigin::Project));
+            .push(sample_role("steward", mycode::config::RoleOrigin::Project));
         catalog
             .roles
             .sort_by(|left, right| left.name.cmp(&right.name));
@@ -477,7 +477,7 @@ mod tests {
             ["reviewer", "steward"]
         );
         assert!(
-            !mycode_frontend::builtin_roles()
+            !mycode::config::builtin_roles()
                 .names()
                 .iter()
                 .any(|name| name == "steward")
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn shared_writers_are_not_labeled_read_only() {
-        let writer = sample_role("reviewer", mycode_frontend::RoleOrigin::User);
+        let writer = sample_role("reviewer", mycode::config::RoleOrigin::User);
         assert!(
             super::role_metadata(&writer)
                 .contains(crate::i18n::t("Shared workspace", "共享工作区"))
@@ -497,15 +497,12 @@ mod tests {
         assert_eq!(super::role_description(&reader), "role");
     }
 
-    fn sample_role(
-        name: &str,
-        origin: mycode_frontend::RoleOrigin,
-    ) -> mycode_frontend::SubagentRole {
-        mycode_frontend::SubagentRole {
+    fn sample_role(name: &str, origin: mycode::config::RoleOrigin) -> mycode::config::SubagentRole {
+        mycode::config::SubagentRole {
             name: name.to_owned(),
             description: "role".into(),
-            isolation: mycode_frontend::RoleIsolation::Shared,
-            thinking: mycode_frontend::RoleThinking::Default,
+            isolation: mycode::config::RoleIsolation::Shared,
+            thinking: mycode::config::RoleThinking::Default,
             tools: None,
             prompt: "work".into(),
             origin,

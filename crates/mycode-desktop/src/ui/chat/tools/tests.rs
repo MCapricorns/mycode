@@ -171,7 +171,7 @@ fn code_mode_rows_have_their_own_verbs_and_batch_phrase() {
 
 #[test]
 fn code_call_snapshots_preserve_cancelled_and_yielded_states() {
-    use mycode_frontend::InnerCallPhase;
+    use mycode::tools::InnerCallPhase;
     let text = "[code calls]\nagent  artisan (cancelled)\nagent  scout (running)\nread  src/lib.rs";
     let (_, calls) = split_code_calls(text).expect("snapshot");
     assert_eq!(calls.len(), 3);

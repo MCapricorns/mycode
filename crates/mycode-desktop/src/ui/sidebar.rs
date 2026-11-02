@@ -445,7 +445,7 @@ fn render_sidebar_footer(view: MainView, cx: &mut Context<Workspace>) -> impl In
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(format!("v{}", mycode_frontend::current_version())),
+                    .child(format!("v{}", mycode::app::current_version())),
             ),
         )
 }
