@@ -521,6 +521,13 @@ async fn research_runs_dependencies_then_independent_acceptance_and_retains_deli
             .prompt
             .contains("independent acceptance officer")
     );
+    assert!(calls[4].request.prompt.contains("you have no shell tool"));
+    assert!(
+        calls[4]
+            .request
+            .prompt
+            .contains("Mark missing or stale execution-dependent checks as unverified")
+    );
     let w = &f.workflows()[0];
     assert_eq!(w.status, AgentWorkflowStatus::Completed);
     assert_eq!(w.acceptance.as_deref(), Some("PASS"));

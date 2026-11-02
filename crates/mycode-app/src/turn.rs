@@ -29,7 +29,8 @@ use self::compact::{DeferredSummaries, publish_visible_summary};
 use self::control::TurnControl;
 use self::prompt::session_system_prompt;
 pub(crate) use self::prompt::{
-    push_scratch_note, push_workspace_skills, split_scratch_root, workspace_extra_roots,
+    MCP_CALL_GUIDANCE, push_scratch_note, push_workspace_path_guidance, push_workspace_skills,
+    split_scratch_root, workspace_extra_roots,
 };
 
 /// One model turn: resolve the provider, stream the reply into the event

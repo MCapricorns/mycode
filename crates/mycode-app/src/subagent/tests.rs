@@ -37,9 +37,15 @@ fn parent_dispatch_names_enabled_builtin_roles_and_runtime_capabilities() {
     assert!(!text.contains("standalone shared/read-only"));
     assert!(!text.contains("`exec`"));
     assert!(!text.contains("`task`"));
+    assert!(text.contains("Calls to agent are serialized"), "{text}");
     assert!(
-        text.contains("run beside every other call in it, edits and shell commands included"),
-        "agent calls overlap edits in the same response:\n{text}"
+        text.contains("Multiple calls in one script do not run in parallel"),
+        "{text}"
+    );
+    assert!(!text.contains("run beside every other call"), "{text}");
+    assert!(
+        !text.contains("briefs in one response; they run together"),
+        "{text}"
     );
 }
 
@@ -105,6 +111,11 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
     assert!(prompt.contains("<mcp>\nConnected MCP servers"), "{prompt}");
     assert!(prompt.contains("name \"list\""), "{prompt}");
     assert!(prompt.contains("declare readOnlyHint"), "{prompt}");
+    assert!(prompt.contains(crate::turn::MCP_CALL_GUIDANCE), "{prompt}");
+    assert!(
+        !prompt.contains("emit them in the same response"),
+        "{prompt}"
+    );
     assert!(!prompt.contains("whose server set"), "{prompt}");
     assert!(
         prompt.find("AGENTS.md (workspace)") > prompt.find("<environment>"),
@@ -361,12 +372,17 @@ fn scout_stays_read_only_and_does_not_list_a_shell() {
         &scout,
         &registry,
         std::path::Path::new(r"C:\work"),
-        &[],
+        &[std::path::PathBuf::from(r"C:\other")],
         "windows",
         "x86_64",
         &shell,
         &Default::default(),
     );
+    assert!(
+        prompt.contains("absolute path to `read`, `find`, `grep`"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("absolute path to `write`"), "{prompt}");
     assert!(
         !prompt.contains("shell_tool:"),
         "scout has no shell tool:\n{prompt}"
@@ -575,12 +591,17 @@ fn artisan_gets_the_same_tool_guidance_as_the_parent() {
         &artisan,
         &registry,
         std::path::Path::new("/work"),
-        &[],
+        &[std::path::PathBuf::from("/extra")],
         "macos",
         "aarch64",
         &shell,
         &Default::default(),
     );
+    assert!(
+        prompt.contains("absolute path to `call(\"read\""),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("absolute path to `read`"), "{prompt}");
     assert!(prompt.contains("<tool_calling>"), "{prompt}");
     assert!(
         prompt.contains("Change files by `call(\"write\""),
@@ -598,7 +619,7 @@ fn artisan_gets_the_same_tool_guidance_as_the_parent() {
     let directive =
         super::delegation_directive(&builtin_roles(), &mycode_agent::SubagentSettings::default());
     assert!(
-        directive.contains("instead of a long chain of searches"),
+        directive.contains("reuse supplied findings instead of repeating the parent's search"),
         "{directive}"
     );
     assert!(directive.contains("scout"), "{directive}");

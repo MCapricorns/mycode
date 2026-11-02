@@ -184,17 +184,18 @@ impl Tool for AgentTool {
     fn description(&self) -> &str {
         "Delegate one self-contained unit of work to a role listed in the \
          system prompt's <dispatch> section and get back its answer. Only \
-         those roles are enabled. Independent calls in one response run \
-         together, and beside the other calls in that response. The brief \
-         must stand alone: the child cannot see this conversation or ask the \
-         user."
+         those roles are enabled. Calls are serialized and wait for their own result; \
+         call() inside run_code is also synchronous. Use a supported agent_workflow \
+         for its independently scheduled nodes. The brief must stand alone: include \
+         the goal, paths, constraints, supplied evidence and done condition. The child \
+         cannot see this conversation or ask the user."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
             "agent: hand one self-contained brief to a role from <dispatch> \
-             (research or a bounded change) and get its answer. Several \
-             independent calls in one response run together.",
+             (research or a bounded change) and wait for its answer. Calls are serialized; \
+             a CodeMode yield is progress, not completion.",
         )
     }
 
@@ -304,6 +305,12 @@ mod tests {
     fn tool_name_is_agent_with_no_task_alias() {
         let tool = AgentTool::new(Arc::new(EchoHost));
         assert_eq!(tool.name(), "agent");
+        assert!(
+            !Tool::parallel_safe(&tool),
+            "ordinary delegation waits for its result"
+        );
+        assert!(tool.description().contains("Calls are serialized"));
+        assert!(!tool.description().contains("run together"));
         let spec = ToolDyn::spec(&tool);
         assert_eq!(spec.name, "agent");
         let schema = spec.params_schema.to_string();

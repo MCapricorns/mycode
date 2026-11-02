@@ -63,9 +63,9 @@ pub(crate) fn push_scratch_note(system: &mut String, scratch: Option<&std::path:
     if let Some(scratch) = scratch {
         let _ = write!(
             system,
-            "\n\nScratch directory (OS temp): {}\nPut throwaway files (test pages, \
-recordings, fixtures) there with absolute paths instead of the project tree. It is not \
-project code: do not search it.",
+            "\n\nScratch directory (OS temp): {}\nWhen your tools and task permit writing, \
+put temporary artifacts here with absolute paths instead of the project tree. Read supplied \
+artifacts by exact path. This is not project code: do not search it.",
             scratch.display()
         );
     }
@@ -95,8 +95,8 @@ names this OS and the one shell tool; write that shell's syntax.
 verify the affected behavior. For a question or review, answer without editing. Resolve routine \
 details; ask only when a material decision is the user's and evidence cannot settle it.\n\
 - Make the smallest change that fixes the root cause, in the style of the surrounding code. \
-Do not add features, abstractions, or files the task did not ask for. Leave unrelated code \
-and the user's uncommitted edits alone.
+Avoid speculative features and abstractions; add only files needed for the requested outcome. \
+Leave unrelated code and the user's uncommitted edits alone.
 - Reuse supplied findings, completed work, and passing checks that still cover the current files. \
 Search to resolve a specific gap, read the decisive sources, then act. Repeat or broaden checks only \
 for new edits, failures, or concrete uncertainty. Add regression tests that catch the relevant \
@@ -115,10 +115,15 @@ print, commit, or send secrets such as API keys, tokens, or `.env` values.
 continuation, inspect the relevant workspace state and available results, then finish only the \
 remaining work. Do not assume an interrupted call completed or restart stopped work without a \
 request. Use only the continuation and control modes the live tools declare.\n\
+- A new message usually steers the active task. Incorporate corrections and added requirements \
+while retaining unfinished authorized work, unless the user cancels or replaces it.\n\
+- After a tool failure, inspect the error before retrying or changing approach. Do not rerun \
+completed mutations or launch a duplicate task just because a call yielded or its output was clipped.\n\
 - Give a concise progress update before substantial work and when findings, blockers, or the next \
 step change. Explain useful progress without narrating routine tool calls.\n\
 - Report the outcome, changed paths, evidence, checks actually run and their results, and material \
-gaps. Distinguish verified behavior from inference; name failed, skipped, and unrun checks.\n\
+gaps. Distinguish verified behavior from inference; name failed, skipped, and unrun checks. \
+Claim performance gains only with comparable before/after measurements.\n\
 - The AGENTS.md and MYCODE.md sections of this prompt, applicable project instruction \
 files you read later (including .mycode/agents.md and .agents/AGENTS.md), and a SKILL.md \
 you open because a task matches it, are the user's standing instructions. Global rules \
@@ -166,11 +171,8 @@ pub(crate) fn session_system_prompt(
         if !note.ends_with('\n') {
             system_prompt.push('\n');
         }
-        system_prompt.push_str(
-            // The note already says how to reach the servers' tools.
-            "`search_tool` and `tool_search` are reads reached through `call` inside `run_code`; \
-a connecting server is still handshaking, and its tools become callable once it is ready.\n</mcp>",
-        );
+        system_prompt.push_str(MCP_CALL_GUIDANCE);
+        system_prompt.push_str("\n</mcp>");
     }
     let (mut roots, scratch) = split_scratch_root(extra_roots);
     roots.sort();
@@ -179,17 +181,48 @@ a connecting server is still handshaking, and its tools become callable once it 
         for root in &roots {
             let _ = writeln!(system_prompt, "- {}", root.display());
         }
-        let shell_tool = mycode_agent::resolved_shell().kind.tool_name();
-        let _ = write!(
-            system_prompt,
-            "Relative paths stay in the session cwd. For the other folders, pass an \
-absolute path to `call(\"read\", …)`, `call(\"write\", …)`, `call(\"edit\", …)`, `call(\"find\", …)`, \
-and `call(\"grep\", …)` inside `run_code`, or an absolute path inside a `{shell_tool}` script \
-(`mode` `script`). `{shell_tool}` starts in the session cwd.",
-        );
+        push_workspace_path_guidance(&mut system_prompt, registry);
     }
     push_scratch_note(&mut system_prompt, scratch);
     system_prompt
+}
+
+/// Shared MCP guidance for the parent and every filtered child catalog.
+pub(crate) const MCP_CALL_GUIDANCE: &str = "`search_tool` and `tool_search` discover schemas; then call `use_tool` with the exact server \
+identity and arguments returned. Follow the tool_calling section for direct versus run_code \
+calls; call() is synchronous. A connecting server is still handshaking, not an empty catalog. \
+Reuse discovered schemas; refresh when a tool is missing or its schema changes.";
+
+/// Names only file tools available to this run, using their actual call surface.
+pub(crate) fn push_workspace_path_guidance(system: &mut String, registry: &ToolRegistry) {
+    let code_mode = registry.get("run_code").is_some() && registry.is_exposed("run_code");
+    let names: Vec<_> = ["read", "write", "edit", "find", "grep"]
+        .into_iter()
+        .filter(|name| registry.get(name).is_some())
+        .filter_map(|name| {
+            if registry.is_exposed(name) {
+                Some(format!("`{name}`"))
+            } else if code_mode {
+                Some(format!("`call(\"{name}\", …)`"))
+            } else {
+                None
+            }
+        })
+        .collect();
+    system.push_str("Relative paths stay in this run's cwd.");
+    if !names.is_empty() {
+        let _ = write!(
+            system,
+            " For other folders, pass an absolute path to {}.",
+            names.join(", ")
+        );
+    }
+    if let Some(shell) = mycode_agent::shell_tool_name(registry) {
+        let _ = write!(
+            system,
+            " Use an absolute path inside a `{shell}` script (`mode` `script`) for other folders. `{shell}` starts in this run's cwd."
+        );
+    }
 }
 
 /// Appends the catalog of magpie's Library skills. The session and every

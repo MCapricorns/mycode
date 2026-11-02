@@ -41,6 +41,13 @@ retrieve their schemas through the registered discovery tools before calling the
 - A `run_code` script cannot call `run_code` or `wait_code` itself.\n",
         );
     }
+    if code_mode && tools.is_exposed("wait_code") && tools.get("wait_code").is_some() {
+        rules.push_str(
+            "- When run_code yields a cell_id, collect that same cell with wait_code until it terminates. \
+A yield is not a failed or completed tool call. Do not submit the script again: earlier calls may already \
+have changed files or started work. Inspect the terminal result before continuing dependent work.\n",
+        );
+    }
     if ["find", "grep", "read"]
         .iter()
         .all(|name| tools.get(name).is_some())
@@ -65,7 +72,7 @@ retrieve their schemas through the registered discovery tools before calling the
         };
         let _ = writeln!(
             rules,
-            "- Read existing content before changing it. Change files by {names}."
+            "- Read existing content before changing it. Change files by {names}. Use revision tokens from the latest read when required; revision and truncation notices are metadata, not file contents."
         );
     }
     if let Some(shell_tool) = shell_tool_name(tools) {

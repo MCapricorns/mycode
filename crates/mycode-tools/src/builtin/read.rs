@@ -49,14 +49,13 @@ impl Tool for ReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read a file from the local filesystem. Text files come back with each \
-         line prefixed by its 1-based number; use offset/limit to window a \
-         large file, and output is truncated with a notice beyond 2000 lines \
-         or 50 KiB per call. Pictures (PNG, JPEG, GIF, WebP) are presented \
+        "Read a file from the local filesystem. Text is returned without line-number prefixes. \
+         Use 1-based offset and limit to window a large file; output is truncated with \
+         a continuation notice beyond 2000 lines or 50 KiB per call. The final \
+         [revision …] line is an opaque revision token for later writes. Pictures (PNG, JPEG, GIF, WebP) are presented \
          directly to the model instead of as text, so a screenshot saved to \
          disk can be read back and inspected; offset/limit do not apply to \
-         them. Hidden files are readable. \
-         Returns an opaque revision token for later writes."
+         them. Hidden files are readable."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
@@ -162,6 +161,42 @@ mod tests {
         assert!(matches!(error, ToolError::InvalidArgs(_)), "{error}");
         validate_args::<ReadArgs>(&json!({"path": "a.txt", "offset": 1})).expect("offset 1");
         validate_args::<ReadArgs>(&json!({"path": "a.txt"})).expect("omitted offset");
+    }
+
+    #[tokio::test]
+    async fn text_windows_match_the_documented_unprefixed_revision_format() {
+        let base =
+            std::env::temp_dir().join(format!("mycode-read-format-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("sample.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let (mut stream, _rx) = ToolStream::channel();
+        let result = ReadTool
+            .execute(
+                ReadArgs {
+                    path: "sample.txt".into(),
+                    offset: Some(2),
+                    limit: Some(1),
+                },
+                &ToolCtx::new(&base),
+                &mut stream,
+            )
+            .await
+            .unwrap();
+        let ContentBlock::Text(block) = &result.content[0] else {
+            panic!("expected text")
+        };
+        assert!(block.text.starts_with("beta\n"), "{}", block.text);
+        let revision = result.details.as_ref().unwrap()["revision"]
+            .as_str()
+            .unwrap();
+        assert!(block.text.ends_with(&format!("[revision {revision}]")));
+        assert!(
+            ReadTool
+                .description()
+                .contains("without line-number prefixes")
+        );
+        assert!(ReadTool.description().contains("[revision"));
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[tokio::test]
