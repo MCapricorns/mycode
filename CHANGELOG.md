@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.34] - 2026-11-02
+
 ### Changed
 
 - 工作区由八个 package 合并为 `mycode` 运行时与 `mycode-desktop` 界面，移除中间包和链式通配转导出；内部依赖边由 7 条减少到 1 条，外部依赖版本不变。
@@ -551,7 +553,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.33...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.34...HEAD
+[0.12.34]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.34
 [0.12.33]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.33
 [0.12.32]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.32
 [0.12.31]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.31
