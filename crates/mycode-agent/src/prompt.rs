@@ -31,10 +31,10 @@ Tools inside run_code are called from JavaScript as `call(\"name\", { argument: 
 use their argument schemas below. `script` accepts JavaScript only. It runs in embedded \
 QuickJS, with no Node.js, require, fs, fetch, filesystem or network globals. No imports, \
 async/await or Promise job execution are supported.\n\
-- Batch related operations in one script; calls execute synchronously in order. \
+- Batch related operations in one script (up to 64 `call` invocations per cell); calls execute synchronously in order. \
 A `call` returns `{ content, is_error }`; text blocks use `result.content[0].Text`. Dispatch refusals also include `__error__`. \
 Inspect errors before continuing dependent work; \
-use `complete(value)` to return the result and `log(value)` for output and progress.\n\
+use `complete(value)` to return the result, `log(value)` for output and progress, and `budget()` to inspect remaining cell limits.\n\
 - Use listed native names and schemas directly. When remote tools are available, \
 retrieve their schemas through the registered discovery tools before calling them.\n\
 - Scripts can reach only registered tools; they cannot add a shell or permissions.\n\

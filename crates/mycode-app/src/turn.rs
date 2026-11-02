@@ -317,25 +317,13 @@ async fn run_chat_turn_on(
                     model.to_owned(),
                 ),
             );
-            if crate::subagent::any_role_enabled(&role_catalog, &settings.subagents) {
-                registry.register(Arc::new(
-                    mycode_agent::builtin::AgentTool::new(host.clone())
-                        .with_runtime(runtime.clone()),
-                ));
-            }
-            registry.register(Arc::new(mycode_agent::builtin::AgentStatusTool::new(
-                runtime.clone(),
-            )));
-            registry.register(Arc::new(mycode_agent::builtin::AgentStopTool::new(
-                runtime.clone(),
-            )));
-            registry.register(Arc::new(mycode_agent::builtin::AgentMessageTool::new(
-                host.clone(),
-                runtime.clone(),
-            )));
-            registry.register(Arc::new(mycode_agent::builtin::AgentWorkflowTool::new(
-                host, runtime,
-            )));
+            crate::subagent::register_parent_agent_tools(
+                &registry,
+                &role_catalog,
+                &settings.subagents,
+                host,
+                runtime,
+            );
         }
         registry
     });

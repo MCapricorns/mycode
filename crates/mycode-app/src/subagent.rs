@@ -24,7 +24,7 @@ pub(crate) use self::worktree::recover_agent_worktrees;
 use self::worktree::{LeaseGuard, WorktreeLease, handoff_worktree};
 
 /// Subagent system brief: one-shot work, no user channel.
-const SUBAGENT_SYSTEM_PROMPT: &str = "You are an MYCode subagent. Finish the brief with the \
+const SUBAGENT_SYSTEM_PROMPT: &str = "You are a MYCode subagent. Finish the brief with the \
 tools you have. You cannot ask the user; reversible choices in the brief are authorized. \
 Report assumptions that matter, then stop. Return only what the brief asks for. Report what \
 actually happened: name a check that failed or was skipped. The AGENTS.md and MYCODE.md \
@@ -275,14 +275,20 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
     if has("skeptic") {
         dispatch.push("`skeptic` challenges one explicit claim. Supply the claim, relevant evidence and a falsifiable done condition; it is read-only and must not repeat a general review.");
     }
-    dispatch.push("Calls to agent are serialized by the dispatcher, and call() inside run_code is synchronous. Multiple calls in one script do not run in parallel. Use a supported agent_workflow for its independent scheduled nodes; do not invent Promise or background dispatch APIs. Complete prerequisites before dependent calls.");
+    let workflow_ready = workflow_enabled(catalog, settings);
+    dispatch.push(if workflow_ready {
+        "Calls to agent are serialized by the dispatcher, and call() inside run_code is synchronous. Multiple calls in one script do not run in parallel. Use a supported agent_workflow for its independent scheduled nodes; do not invent Promise or background dispatch APIs. Complete prerequisites before dependent calls."
+    } else {
+        "Calls to agent are serialized by the dispatcher, and call() inside run_code is synchronous. Multiple calls in one script do not run in parallel. Do not invent Promise or background dispatch APIs. Complete prerequisites before dependent calls."
+    });
     dispatch.push("Use phase_id for each stable unit of work and exact scope.paths or scope.symbols for writers. Wildcards, duplicate phases and overlapping active writer scopes are refused. Scope coordinates ownership, not a sandbox; queued and stopping writers keep claims until settled.");
-    dispatch.push("Collect every active delegation to its final result. A startup receipt, CodeMode yield or queued/running status is progress, not completion. After a script yields, preserve its original cell_id and use wait_code until that cell terminates; do not resubmit its work. agent and agent_workflow calls wait for their own results; no automatic background answer delivery.");
+    dispatch.push(if workflow_ready {
+        "Collect every active delegation to its final result. A startup receipt, CodeMode yield or queued/running status is progress, not completion. After a script yields, preserve its original cell_id and use wait_code until that cell terminates; do not resubmit its work. agent and agent_workflow calls wait for their own results; no automatic background answer delivery."
+    } else {
+        "Collect every active delegation to its final result. A startup receipt, CodeMode yield or queued/running status is progress, not completion. After a script yields, preserve its original cell_id and use wait_code until that cell terminates; do not resubmit its work. agent calls wait for their own results; no automatic background answer delivery."
+    });
     dispatch.push("agent_status returns stable run ids, results and artifact paths; read clipped reports before relying on them. agent_stop requests cancellation. agent_message steers a live child or starts a new standalone run from explicit summary context after completion. Completed worktree writers reopen the exact retained checkout, preserving dirty, untracked and ignored files; an unavailable checkout fails without replacing it. Full-session continuation is unsupported; stopped runs cannot resume.");
-    if enabled
-        .iter()
-        .any(|role| role.name == "sentinel" && !role.is_write_capable())
-    {
+    if workflow_ready {
         if has("scout") {
             dispatch.push("agent_workflow name=research takes inputs.QUESTION: three independent evidence passes, synthesis, then independent acceptance. Use it for a question that needs those distinct perspectives.");
         }
@@ -322,6 +328,49 @@ pub(crate) fn any_role_enabled(catalog: &RoleCatalog, settings: &SubagentSetting
         .roles
         .iter()
         .any(|role| settings.is_enabled(&role.name))
+}
+
+/// Whether the catalog has an enabled read-only `sentinel` that can run the
+/// independent acceptance gate required by every fixed `agent_workflow`.
+#[must_use]
+pub(crate) fn workflow_enabled(catalog: &RoleCatalog, settings: &SubagentSettings) -> bool {
+    catalog.roles.iter().any(|role| {
+        role.name == "sentinel" && settings.is_enabled(&role.name) && !role.is_write_capable()
+    })
+}
+
+/// Registers the parent-turn delegation and control tools that match the
+/// currently enabled roles: nothing when every role is disabled, and
+/// `agent_workflow` only when its acceptance role (`sentinel`) is enabled
+/// and read-only.
+pub(crate) fn register_parent_agent_tools(
+    registry: &ToolRegistry,
+    catalog: &RoleCatalog,
+    settings: &SubagentSettings,
+    host: Arc<dyn mycode_agent::builtin::AgentHost>,
+    runtime: Arc<mycode_agent::builtin::AgentRuntime>,
+) {
+    if !any_role_enabled(catalog, settings) {
+        return;
+    }
+    registry.register(Arc::new(
+        mycode_agent::builtin::AgentTool::new(host.clone()).with_runtime(runtime.clone()),
+    ));
+    registry.register(Arc::new(mycode_agent::builtin::AgentStatusTool::new(
+        runtime.clone(),
+    )));
+    registry.register(Arc::new(mycode_agent::builtin::AgentStopTool::new(
+        runtime.clone(),
+    )));
+    registry.register(Arc::new(mycode_agent::builtin::AgentMessageTool::new(
+        host.clone(),
+        runtime.clone(),
+    )));
+    if workflow_enabled(catalog, settings) {
+        registry.register(Arc::new(mycode_agent::builtin::AgentWorkflowTool::new(
+            host, runtime,
+        )));
+    }
 }
 
 /// Resolves isolation: an explicit request wins, worktree is refused for

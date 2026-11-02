@@ -69,6 +69,13 @@ fn parent_dispatch_never_names_a_role_switched_off_in_settings() {
     assert!(remaining.contains("`skeptic`"));
     assert!(!remaining.contains("name=research"));
     assert!(!remaining.contains("name=migration"));
+
+    settings.role_mut("sentinel").enabled = false;
+    let without_sentinel = super::delegation_directive(&builtin_roles(), &settings);
+    assert!(without_sentinel.contains("`skeptic`"));
+    assert!(!without_sentinel.contains("sentinel"));
+    assert!(!without_sentinel.contains("agent_workflow"));
+
     for name in builtin_roles().names() {
         settings.role_mut(&name).enabled = false;
     }

@@ -188,8 +188,8 @@ pub(crate) fn session_system_prompt(
 }
 
 /// Shared MCP guidance for the parent and every filtered child catalog.
-pub(crate) const MCP_CALL_GUIDANCE: &str = "`search_tool` and `tool_search` discover schemas; then call `use_tool` with the exact server \
-identity and arguments returned. Follow the tool_calling section for direct versus run_code \
+pub(crate) const MCP_CALL_GUIDANCE: &str = "`search_tool` and `tool_search` discover schemas; then call `use_tool` with the exact `name` \
+and matching `arguments` returned. Follow the tool_calling section for direct versus run_code \
 calls; call() is synchronous. A connecting server is still handshaking, not an empty catalog. \
 Reuse discovered schemas; refresh when a tool is missing or its schema changes.";
 

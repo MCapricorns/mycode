@@ -137,3 +137,50 @@ fn actual_host_steers_only_the_registered_child_inbox_and_redacts_known_credenti
         "result [REDACTED]"
     );
 }
+
+#[test]
+fn parent_agent_tools_follow_enabled_roles_and_workflow_gate() {
+    let f = Fixture::new();
+    let catalog = mycode_agent::builtin_roles();
+    let build = |settings: &SubagentSettings| {
+        let registry = ToolRegistry::new();
+        let host = Arc::new(f.host(AppSettings::default()));
+        let runtime = Arc::new(mycode_agent::builtin::AgentRuntime::new(
+            f.home.root().join("results"),
+        ));
+        super::register_parent_agent_tools(&registry, &catalog, settings, host, runtime);
+        registry.names()
+    };
+
+    let all_on = build(&SubagentSettings::default());
+    for name in [
+        "agent",
+        "agent_status",
+        "agent_stop",
+        "agent_message",
+        "agent_workflow",
+    ] {
+        assert!(
+            all_on.iter().any(|registered| registered == name),
+            "{all_on:?}"
+        );
+    }
+
+    let mut without_sentinel = SubagentSettings::default();
+    without_sentinel.role_mut("sentinel").enabled = false;
+    let names = build(&without_sentinel);
+    assert!(names.iter().any(|registered| registered == "agent"));
+    assert!(names.iter().any(|registered| registered == "agent_status"));
+    assert!(
+        !names
+            .iter()
+            .any(|registered| registered == "agent_workflow"),
+        "{names:?}"
+    );
+
+    let mut all_off = SubagentSettings::default();
+    for name in catalog.names() {
+        all_off.role_mut(&name).enabled = false;
+    }
+    assert!(build(&all_off).is_empty());
+}
