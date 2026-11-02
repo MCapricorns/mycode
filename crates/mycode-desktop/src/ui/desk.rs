@@ -14,7 +14,6 @@ use gpui_kit::component::theme::{Theme, ThemeMode};
 #[derive(Clone, Copy, Debug)]
 pub struct SemanticTokens {
     pub bg: Hsla,
-    pub wash: Hsla,
     pub surface_1: Hsla,
     pub surface_2: Hsla,
     pub surface_3: Hsla,
@@ -191,7 +190,6 @@ fn soften(from: Hsla, toward: Hsla, amount: f32) -> Hsla {
 
 struct Spec {
     bg: u32,
-    wash: u32,
     surface: u32,
     card: u32,
     hover: u32,
@@ -218,7 +216,6 @@ pub fn semantic_tokens(light: bool) -> SemanticTokens {
     let spec = if light { light_spec() } else { dark_spec() };
     SemanticTokens {
         bg: hex(spec.bg),
-        wash: hex(spec.wash),
         surface_1: hex(spec.surface),
         surface_2: hex(spec.card),
         surface_3: hex(spec.hover),
@@ -243,7 +240,6 @@ pub fn semantic_tokens(light: bool) -> SemanticTokens {
 fn dark_spec() -> Spec {
     Spec {
         bg: 0x141316,
-        wash: 0x141316,
         surface: 0x1B1A1E,
         card: 0x242328,
         hover: 0x302E33,
@@ -253,7 +249,7 @@ fn dark_spec() -> Spec {
         reply: 0xE9E3D9,
         thinking: 0xB5B0AC,
         line: 0x302E33,
-        line_strong: 0x514B50,
+        line_strong: 0x777078,
         accent: 0xF46A6C,
         accent_ink: 0x1E1115,
         tint: 0x392326,
@@ -268,7 +264,6 @@ fn dark_spec() -> Spec {
 fn light_spec() -> Spec {
     Spec {
         bg: 0xFAF6EE,
-        wash: 0xFAF6EE,
         surface: 0xF3EDE2,
         card: 0xFFFCF7,
         hover: 0xEAE2D6,
@@ -278,7 +273,7 @@ fn light_spec() -> Spec {
         reply: 0x29262B,
         thinking: 0x666068,
         line: 0xE3DCCF,
-        line_strong: 0xB6ACA3,
+        line_strong: 0x8C8279,
         accent: 0xC72E38,
         accent_ink: 0xFFFCF7,
         tint: 0xF9E4E1,
@@ -299,8 +294,6 @@ pub fn apply(theme: &mut Theme) {
 
 fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
     let bg = tokens.bg;
-    // Keep the neutral canvas dominant; the accent only tints it.
-    let wash = soften(tokens.wash, bg, 0.25);
     let surface = tokens.surface_1;
     let card = tokens.surface_2;
     let hover = tokens.surface_3;
@@ -342,18 +335,19 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
     theme.link = accent;
     theme.link_hover = accent;
     theme.link_active = accent;
-    theme.info = info;
-    theme.info_foreground = ink;
-    theme.success = green;
-    theme.success_foreground = ink;
-    theme.warning = amber;
-    theme.warning_foreground = ink;
-    theme.danger = red;
-    theme.danger_foreground = if theme.mode.is_dark() {
+    let status_ink = if theme.mode.is_dark() {
         bg
     } else {
         hex(0xFFFFFF)
     };
+    theme.info = info;
+    theme.info_foreground = status_ink;
+    theme.success = green;
+    theme.success_foreground = status_ink;
+    theme.warning = amber;
+    theme.warning_foreground = status_ink;
+    theme.danger = red;
+    theme.danger_foreground = status_ink;
     theme.input = tokens.border_strong;
     theme.ring = accent;
 
@@ -370,7 +364,7 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
     theme.title_bar = surface;
     theme.title_bar_border = line;
     // Status bars share the reading surface.
-    theme.status_bar = wash;
+    theme.status_bar = bg;
     theme.status_bar_border = line;
     theme.tab_bar = surface;
     theme.tab_active = card;
@@ -627,6 +621,43 @@ mod tests {
                     "{mode} {kind:?} on the code fill is {ratio:.2}, want >= {floor}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn control_boundaries_and_status_fills_have_accessible_contrast() {
+        for mode in [
+            gpui_kit::component::theme::ThemeMode::Dark,
+            gpui_kit::component::theme::ThemeMode::Light,
+        ] {
+            let mut theme = gpui_kit::component::theme::Theme {
+                mode,
+                ..Default::default()
+            };
+            super::apply(&mut theme);
+            for surface in [theme.background, theme.sidebar, theme.popover] {
+                assert!(
+                    contrast(theme.input, surface) >= 3.,
+                    "{mode:?} input boundary"
+                );
+            }
+            for (fill, ink) in [
+                (theme.info, theme.info_foreground),
+                (theme.success, theme.success_foreground),
+                (theme.warning, theme.warning_foreground),
+                (theme.danger, theme.danger_foreground),
+            ] {
+                assert!(
+                    contrast(ink, fill) >= 4.5,
+                    "{mode:?} filled status contrast"
+                );
+            }
+            assert!(
+                contrast(
+                    theme.foreground,
+                    over(theme.warning.opacity(0.18), theme.popover)
+                ) >= 4.5
+            );
         }
     }
 

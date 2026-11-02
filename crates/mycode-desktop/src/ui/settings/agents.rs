@@ -1,20 +1,22 @@
-//! The Agents settings page: the four built-in roles, then custom roles
-//! found by `discover_roles`. User and project overrides keep their built-in
-//! card position. Concurrency and wall-clock limits are not settings here.
+//! Compact role settings with inline model and reasoning pickers.
+//! Built-in overrides keep their place; custom roles follow the built-ins.
 use gpui_kit::assets::IconName;
-use gpui_kit::component::Icon;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::component::theme::Theme;
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled,
+    TestSupportExt as _, Window, div, px,
 };
 
-use super::widgets::{choice_chips, field_label, settings_card};
+use super::widgets::choice_chips;
 use crate::i18n::t;
 use crate::ui::model_picker::{ModelPickerTarget, model_display_name, render_model_picker};
+use crate::ui::skin;
 use crate::workspace::Workspace;
+use mycode_frontend::{RoleIsolation, RoleOrigin, SubagentRole};
 
 pub(super) fn render_agents_section(
     workspace: &mut Workspace,
@@ -24,199 +26,349 @@ pub(super) fn render_agents_section(
     if workspace.vm().settings.is_none() {
         return div().into_any_element();
     }
-    let muted = cx.theme().muted_foreground;
     let catalog = workspace.agent_roles();
     let (primary, additional) = group_settings_roles(&catalog);
-    let mut cards: Vec<AnyElement> = Vec::new();
-    for role in primary {
-        cards.push(role_card(workspace, window, role, cx));
-    }
-    if !additional.is_empty() {
-        cards.push(
+    let wide = f32::from(window.viewport_size().width) >= 1200.;
+    let mut groups = Vec::new();
+    for (id, roles) in [("builtin", primary), ("custom", additional)] {
+        if roles.is_empty() {
+            continue;
+        }
+        let rows: Vec<_> = roles
+            .into_iter()
+            .map(|role| role_row(workspace, window, role, wide, cx))
+            .collect();
+        let theme = cx.theme();
+        groups.push(
             div()
-                .id("agents-additional")
+                .w_full()
+                .min_w_0()
+                .flex_none()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .pt_2()
+                .gap_2()
+                .when(id == "custom", |this| {
+                    this.child(
+                        div()
+                            .text_sm()
+                            .font_weight(skin::WEIGHT_STRONG)
+                            .child(t("Additional roles", "其他角色")),
+                    )
+                })
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                        .child(t("Additional roles", "其他角色")),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .whitespace_normal()
-                        .child(t(
-                            "From your MYCode home agents directory, or this project's .mycode/agents. \
-                             Enable, model, and thinking work the same way.",
-                            "来自 MYCode 主目录下的 agents，或当前项目的 .mycode/agents。启用、模型和思考与上面相同。",
-                        )),
+                        .id(format!("agents-{id}"))
+                        .w_full()
+                        .min_w_0()
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .rounded(skin::radius_control())
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.popover)
+                        .children(rows.into_iter().enumerate().map(|(index, row)| {
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex_none()
+                                .when(index > 0, |this| {
+                                    this.border_t_1().border_color(theme.border)
+                                })
+                                .child(row)
+                        })),
                 )
                 .into_any_element(),
         );
-        for role in additional {
-            cards.push(role_card(workspace, window, role, cx));
-        }
     }
     div()
         .id("agents-section")
+        .w_full()
+        .min_w_0()
+        .flex_none()
         .flex()
         .flex_col()
-        .gap_3()
-        .children(cards)
+        .gap_4()
+        .children(groups)
         .into_any_element()
 }
 
-fn role_card(
+fn role_row(
     workspace: &mut Workspace,
     window: &mut Window,
-    role: &mycode_frontend::SubagentRole,
+    role: &SubagentRole,
+    wide: bool,
     cx: &mut Context<Workspace>,
 ) -> AnyElement {
-    let (enabled, thinking, provider, model) = {
-        let Some(settings) = workspace.vm().settings.as_ref() else {
-            return div().into_any_element();
-        };
-        let entry = settings.subagents.role(&role.name);
-        (
-            entry.is_none_or(|item| item.enabled),
-            entry
-                .and_then(|item| item.thinking.clone())
-                .unwrap_or_else(|| "inherit".to_owned()),
-            entry.and_then(|item| item.provider.clone()),
-            entry.and_then(|item| item.model.clone()),
-        )
-    };
-    let open = workspace
+    let settings = workspace.vm().settings.as_ref().expect("settings loaded");
+    let entry = settings.subagents.role(&role.name);
+    let enabled = entry.is_none_or(|item| item.enabled);
+    let thinking = entry
+        .and_then(|item| item.thinking.clone())
+        .unwrap_or_else(|| "inherit".into());
+    let provider = entry.and_then(|item| item.provider.clone());
+    let model = entry.and_then(|item| item.model.clone());
+    let open_field = workspace
         .vm()
         .subagent_menu
         .as_ref()
-        .is_some_and(|(open_role, field)| open_role == &role.name && field == "model");
-    let picker = open.then(|| {
-        render_model_picker(
-            workspace,
-            window,
-            ModelPickerTarget::Role(role.name.clone()),
-            px(420.),
-            cx,
-        )
-    });
+        .filter(|(name, _)| name == &role.name)
+        .map(|(_, field)| field.clone());
     let route_label = match (provider.as_deref(), model.as_deref()) {
         (Some(provider), Some(model)) => model_display_name(workspace.vm(), provider, model),
         _ => t("Session model", "会话模型").to_owned(),
     };
-    let thinking_options = thinking_options(workspace, provider.as_deref(), model.as_deref());
+    let thinking_label = if thinking == "inherit" {
+        match role.thinking.effort() {
+            Some(level) => format!("{} · {}", t("Default", "默认"), thinking_value_label(level)),
+            None => t("Role default", "角色默认").to_owned(),
+        }
+    } else {
+        thinking_value_label(&thinking)
+    };
+    let expanded = match open_field.as_deref() {
+        Some("model") => Some(render_model_picker(
+            workspace,
+            window,
+            ModelPickerTarget::Role(role.name.clone()),
+            px(320.),
+            cx,
+        )),
+        Some("thinking") => {
+            let options = thinking_options(workspace, provider.as_deref(), model.as_deref());
+            let name = role.name.clone();
+            Some(choice_chips(
+                &format!("agent-think-{name}"),
+                &options,
+                &thinking,
+                move |workspace, level, cx| {
+                    workspace.on_set_subagent_thinking(&name, Some(level.to_owned()), cx);
+                    workspace.on_toggle_subagent_menu(&name, "thinking", false, cx);
+                },
+                cx,
+            ))
+        }
+        _ => None,
+    };
     let theme = cx.theme();
-    let name = role.name.clone();
-    let title = title_case(&role.name);
-    settings_card(
-        &format!("agent-{name}"),
-        &title,
-        Some(&role.description),
-        theme,
-        vec![
+    let field = |kind: &'static str, label: &str| {
+        let name = role.name.clone();
+        let open = open_field.as_deref() == Some(kind);
+        role_field_button(&name, kind, label, open, theme)
+            .on_click(cx.listener(move |workspace, _, _, cx| {
+                workspace.on_toggle_subagent_menu(&name, kind, !open, cx);
+            }))
+            .into_any_element()
+    };
+    let controls = RoleControls {
+        model: field("model", &route_label),
+        thinking: field("thinking", &thinking_label),
+        toggle: Switch::new(format!("agent-enabled-{}", role.name))
+            .checked(enabled)
+            .accessibility_label(format!("{} {}", t("Enable", "启用"), role.name))
+            .on_click({
+                let name = role.name.clone();
+                cx.listener(move |workspace, checked: &bool, _, cx| {
+                    workspace.on_subagent_role_enabled(&name, *checked, cx);
+                })
+            })
+            .into_any_element(),
+    };
+    role_settings_row(role, controls, expanded, wide, theme)
+}
+
+fn role_field_button(name: &str, field: &str, label: &str, open: bool, theme: &Theme) -> Button {
+    let field_label = if field == "model" {
+        t("Model", "模型")
+    } else {
+        t("Thinking", "思考")
+    };
+    let tooltip = gpui_kit::SharedString::from(format!("{field_label}: {label}"));
+    Button::new(format!("agent-{field}-toggle-{name}"))
+        .outline()
+        .small()
+        .w_full()
+        .min_w_0()
+        .h_auto()
+        .min_h(px(32.))
+        .px_2()
+        .py_1()
+        .border_color(if open { theme.primary } else { theme.input })
+        .accessibility_label(format!("{name} {field_label}: {label}"))
+        .tooltip(tooltip)
+        .child(
             div()
-                .id(format!("agent-role-{name}"))
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_sm()
+                .child(label.to_owned()),
+        )
+        .child(
+            Icon::new(if open {
+                IconName::ChevronUp
+            } else {
+                IconName::ChevronDown
+            })
+            .xsmall()
+            .flex_shrink_0(),
+        )
+}
+
+struct RoleControls {
+    model: AnyElement,
+    thinking: AnyElement,
+    toggle: AnyElement,
+}
+
+fn role_settings_row(
+    role: &SubagentRole,
+    controls: RoleControls,
+    expanded: Option<AnyElement>,
+    wide: bool,
+    theme: &Theme,
+) -> AnyElement {
+    let summary = div()
+        .id(format!("agent-summary-{}", role.name))
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
                 .flex()
                 .flex_row()
+                .flex_wrap()
                 .items_center()
-                .justify_between()
-                .gap_3()
+                .gap_2()
                 .child(
                     div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .child(field_label(t("Enabled", "启用")))
-                        .child(capability_chip(role.isolation.as_str(), theme))
-                        .when(
-                            role.origin != mycode_frontend::RoleOrigin::Builtin,
-                            |this| this.child(origin_chip(role.origin, theme)),
-                        ),
+                        .text_sm()
+                        .font_weight(skin::WEIGHT_STRONG)
+                        .child(title_case(&role.name)),
                 )
-                .child(
-                    Switch::new(format!("agent-enabled-{name}"))
-                        .checked(enabled)
-                        .on_click({
-                            let role = name.clone();
-                            cx.listener(move |workspace, checked: &bool, _, cx| {
-                                workspace.on_subagent_role_enabled(&role, *checked, cx);
-                            })
-                        }),
-                )
-                .into_any_element(),
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(field_label(t("Model", "模型")))
                 .child(
                     div()
-                        .id(format!("agent-route-toggle-{name}"))
-                        .h(px(36.))
-                        .px_2()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .rounded(crate::ui::skin::radius_control())
-                        .border_1()
-                        .border_color(crate::ui::skin::glass_border(theme))
-                        .bg(crate::ui::skin::frost(theme))
-                        .cursor_pointer()
-                        .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
-                        .on_click({
-                            let role = name.clone();
-                            cx.listener(move |workspace, _, _, cx| {
-                                let open = workspace.vm().subagent_menu.as_ref().is_some_and(
-                                    |(open_role, field)| open_role == &role && field == "model",
-                                );
-                                workspace.on_toggle_subagent_menu(&role, "model", !open, cx);
-                            })
-                        })
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .truncate()
-                                .text_sm()
-                                .child(route_label),
-                        )
-                        .child(
-                            Icon::new(IconName::ChevronDown)
-                                .xsmall()
-                                .text_color(theme.muted_foreground),
-                        ),
-                )
-                .when_some(picker, |this, picker| this.child(picker))
-                .into_any_element(),
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(role_metadata(role)),
+                ),
+        )
+        .child(
             div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(field_label(t("Thinking", "思考")))
-                .child(choice_chips(
-                    &format!("agent-think-{name}"),
-                    &thinking_options,
-                    &thinking,
-                    {
-                        let role = name;
-                        move |workspace, level, cx| {
-                            workspace.on_set_subagent_thinking(&role, Some(level.to_owned()), cx);
-                        }
-                    },
-                    cx,
-                ))
-                .into_any_element(),
-        ],
-    )
-    .into_any_element()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .whitespace_normal()
+                .child(role_description(role)),
+        )
+        .test_support();
+    let picks = div()
+        .id(format!("agent-controls-{}", role.name))
+        .min_w_0()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap_2()
+        .child(div().flex_1().min_w_0().child(controls.model))
+        .child(div().w(px(144.)).flex_none().child(controls.thinking))
+        .test_support();
+    let toggle = div().flex_none().child(controls.toggle);
+    let row = if wide {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_4()
+            .child(summary)
+            .child(picks.w(px(360.)))
+            .child(toggle)
+    } else {
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .gap_3()
+                    .child(summary)
+                    .child(toggle),
+            )
+            .child(picks.w_full())
+    };
+    div()
+        .id(format!("agent-role-{}", role.name))
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .child(row)
+        .when_some(expanded, |this, picker| this.child(picker))
+        .test_support()
+        .into_any_element()
+}
+
+fn thinking_value_label(level: &str) -> String {
+    match level {
+        "off" | "none" => t("Off", "关闭"),
+        "on" => t("On", "开启"),
+        "minimal" => t("Minimal", "最低"),
+        "low" => t("Low", "低"),
+        "medium" => t("Medium", "中"),
+        "high" => t("High", "高"),
+        "xhigh" => t("Extra high", "更高"),
+        "max" => t("Maximum", "最高"),
+        _ => level,
+    }
+    .to_owned()
+}
+
+fn role_metadata(role: &SubagentRole) -> String {
+    let capability = if !role.is_write_capable() {
+        t("Read-only", "只读")
+    } else if role.isolation == RoleIsolation::Worktree {
+        t("Worktree", "工作树")
+    } else {
+        t("Shared workspace", "共享工作区")
+    };
+    match role.origin {
+        RoleOrigin::Builtin => capability.to_owned(),
+        RoleOrigin::User => format!("{capability} · {}", t("User", "用户")),
+        RoleOrigin::Project => format!("{capability} · {}", t("Project", "项目")),
+    }
+}
+
+fn role_description(role: &SubagentRole) -> String {
+    if role.origin != RoleOrigin::Builtin {
+        return role.description.clone();
+    }
+    match role.name.as_str() {
+        "scout" => t(
+            "Find code, documentation, and evidence.",
+            "检索代码、文档与证据。",
+        ),
+        "artisan" => t(
+            "Implement changes and run relevant checks.",
+            "实施修改并运行相关检查。",
+        ),
+        "sentinel" => t(
+            "Review changes against requirements and evidence.",
+            "对照需求与证据审查改动。",
+        ),
+        "skeptic" => t(
+            "Challenge a specific claim with counterexamples.",
+            "针对明确假设寻找反例。",
+        ),
+        _ => return role.description.clone(),
+    }
+    .to_owned()
 }
 
 fn thinking_options(
@@ -239,56 +391,12 @@ fn thinking_options(
         if level == "default" || options.iter().any(|(id, _)| id == &level) {
             continue;
         }
-        options.push((level.clone(), crate::ui::chat::reasoning_row_label(&level)));
+        options.push((level.clone(), thinking_value_label(&level)));
     }
     options
 }
 
-fn origin_chip(
-    origin: mycode_frontend::RoleOrigin,
-    theme: &gpui_kit::component::theme::Theme,
-) -> AnyElement {
-    let label = match origin {
-        mycode_frontend::RoleOrigin::User => t("User", "用户"),
-        mycode_frontend::RoleOrigin::Project => t("Project", "项目"),
-        mycode_frontend::RoleOrigin::Builtin => t("Built-in", "内置"),
-    };
-    div()
-        .h(px(20.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded_full()
-        .border_1()
-        .border_color(crate::ui::skin::border_strong(theme))
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(label)
-        .into_any_element()
-}
-
-fn capability_chip(isolation: &str, theme: &gpui_kit::component::theme::Theme) -> AnyElement {
-    let label = if isolation == "worktree" {
-        t("Worktree", "工作树")
-    } else {
-        t("Read-only", "只读")
-    };
-    div()
-        .h(px(20.))
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded_full()
-        .border_1()
-        .border_color(crate::ui::skin::border_strong(theme))
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(label)
-        .into_any_element()
-}
-
-/// Scout and Artisan stay the two leading cards, in that order. Every other
-/// discovered role is listed after them. Retired names are not inserted.
+/// The four built-ins lead in a stable order; custom roles follow.
 fn group_settings_roles(
     catalog: &mycode_frontend::RoleCatalog,
 ) -> (
@@ -376,6 +484,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn shared_writers_are_not_labeled_read_only() {
+        let writer = sample_role("reviewer", mycode_frontend::RoleOrigin::User);
+        assert!(
+            super::role_metadata(&writer)
+                .contains(crate::i18n::t("Shared workspace", "共享工作区"))
+        );
+        let mut reader = writer;
+        reader.tools = Some(vec!["read".into()]);
+        assert!(super::role_metadata(&reader).contains(crate::i18n::t("Read-only", "只读")));
+        assert_eq!(super::role_description(&reader), "role");
+    }
+
     fn sample_role(
         name: &str,
         origin: mycode_frontend::RoleOrigin,
@@ -391,3 +512,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, feature = "test-support"))]
+mod layout_tests;

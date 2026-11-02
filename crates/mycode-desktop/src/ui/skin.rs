@@ -57,11 +57,6 @@ pub(super) fn segment_thumb(theme: &Theme) -> Hsla {
     theme.popover
 }
 
-/// A selected segment uses a surface step without adding another elevation.
-pub(super) fn thumb_shadow(_theme: &Theme) -> Vec<BoxShadow> {
-    Vec::new()
-}
-
 pub(super) fn modal_scrim(theme: &Theme) -> Hsla {
     hsla(0., 0., 0., if theme.mode.is_dark() { 0.5 } else { 0.28 })
 }

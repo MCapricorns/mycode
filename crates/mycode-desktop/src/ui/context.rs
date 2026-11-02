@@ -589,7 +589,7 @@ fn cache_collapse_note(text: String, theme: &Theme) -> impl IntoElement {
         .py_1()
         .rounded(super::skin::radius_sm())
         .bg(theme.warning.opacity(0.18))
-        .text_color(theme.warning_foreground)
+        .text_color(theme.foreground)
         .text_xs()
         .whitespace_normal()
         .child(text)

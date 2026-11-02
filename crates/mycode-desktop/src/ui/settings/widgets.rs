@@ -6,13 +6,13 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, Context, Div, InteractiveElement, IntoElement, ParentElement, Stateful,
     StatefulInteractiveElement, Styled, TestSupportExt as _, div, px,
 };
 
 use crate::workspace::Workspace;
 
-/// One settings card: a hairline border, a frosted fill, and a short title.
+/// One settings card: a quiet border, an opaque surface, and a short title.
 pub(super) fn settings_card(
     id: &str,
     title: &str,
@@ -114,6 +114,9 @@ pub(super) fn settings_row(
         .id(format!("row-{id}"))
         .w_full()
         .min_w_0()
+        .h_auto()
+        .flex_none()
+        .test_support()
         .flex()
         .flex_row()
         .items_center()
@@ -122,6 +125,7 @@ pub(super) fn settings_row(
         .child(
             div()
                 .flex()
+                .id(format!("row-{id}-label"))
                 .flex_col()
                 .gap_0p5()
                 .flex_1()
@@ -130,6 +134,8 @@ pub(super) fn settings_row(
                 .when_some(description, |this, description| {
                     this.child(
                         div()
+                            .id(format!("row-{id}-hint"))
+                            .test_support()
                             .text_xs()
                             .text_color(muted)
                             .whitespace_normal()
@@ -139,12 +145,6 @@ pub(super) fn settings_row(
         )
         .child(div().flex_none().child(control))
         .into_any_element()
-}
-
-/// Label over a stacked control (a model route, an input). Same size and
-/// ink as a row label, so every card reads with one label style.
-pub(super) fn field_label(text: &str) -> impl IntoElement {
-    div().text_sm().whitespace_normal().child(text.to_owned())
 }
 
 /// A segmented control: one recessed track with the picked option raised
@@ -158,9 +158,24 @@ pub(super) fn choice_chips<V: AsRef<str>, L: AsRef<str>>(
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let theme = cx.theme();
-    let thumb = crate::ui::skin::segment_thumb(theme);
-    let hover = crate::ui::skin::frost_hover(theme);
-    let ink = theme.foreground;
+    choice_track(id_prefix, theme)
+        .children(options.iter().map(|(value, label)| {
+            let value = value.as_ref().to_owned();
+            let selected = value == current;
+            let pick = on_pick.clone();
+            choice_chip(id_prefix, &value, label.as_ref(), selected, theme).when(
+                !selected,
+                |this| {
+                    this.on_click(cx.listener(move |workspace, _, _, cx| {
+                        pick(workspace, &value, cx);
+                    }))
+                },
+            )
+        }))
+        .into_any_element()
+}
+
+pub(super) fn choice_track(id_prefix: &str, theme: &Theme) -> Stateful<Div> {
     div()
         .id(format!("chips-{id_prefix}"))
         .max_w_full()
@@ -180,38 +195,81 @@ pub(super) fn choice_chips<V: AsRef<str>, L: AsRef<str>>(
         .border_1()
         .border_color(crate::ui::skin::glass_border(theme))
         .bg(crate::ui::skin::segment_track(theme))
-        .children(options.iter().map(|(value, label)| {
-            let value = value.as_ref().to_owned();
-            let selected = value == current;
-            let pick = on_pick.clone();
+}
+
+pub(super) fn choice_chip(
+    id_prefix: &str,
+    value: &str,
+    label: &str,
+    selected: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let hover = theme.secondary_hover;
+    let ink = theme.foreground;
+    div()
+        .id(format!("{id_prefix}-{value}"))
+        .min_h(px(28.))
+        .min_w(px(40.))
+        .px(crate::ui::skin::space(3))
+        .py(px(3.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(crate::ui::skin::radius_control())
+        .border_1()
+        .border_color(if selected {
+            theme.input
+        } else {
+            theme.transparent
+        })
+        .text_sm()
+        .whitespace_nowrap()
+        .when(selected, |this| {
+            this.bg(crate::ui::skin::segment_thumb(theme))
+                .text_color(ink)
+        })
+        .when(!selected, |this| {
+            this.text_color(theme.muted_foreground)
+                .cursor_pointer()
+                .hover(move |this| this.bg(hover).text_color(ink))
+        })
+        .child(label.to_owned())
+}
+
+/// Value control shared by dropdown rows and their layout checks.
+pub(super) fn dropdown_button(id: &str, current: &str, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(format!("dropdown-button-{id}"))
+        .min_h(px(32.))
+        .w(px(200.))
+        .flex_none()
+        .px_2()
+        .py_1()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .rounded(crate::ui::skin::radius_control())
+        .border_1()
+        .border_color(theme.input)
+        .bg(theme.secondary)
+        .cursor_pointer()
+        .hover(|this| this.bg(theme.secondary_hover))
+        .child(
             div()
-                .id(format!("{id_prefix}-{value}"))
-                .h(px(26.))
-                .min_w(px(40.))
-                .px(crate::ui::skin::space(3))
                 .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(8.))
-                .text_sm()
                 .whitespace_nowrap()
-                .when(selected, |this| {
-                    this.bg(thumb)
-                        .text_color(ink)
-                        .shadow(crate::ui::skin::thumb_shadow(theme))
-                })
-                .when(!selected, |this| {
-                    this.text_color(theme.muted_foreground)
-                        .cursor_pointer()
-                        .hover(move |this| this.bg(hover).text_color(ink))
-                        .on_click(cx.listener(move |workspace, _, _, cx| {
-                            pick(workspace, &value, cx);
-                        }))
-                })
-                .child(label.as_ref().to_owned())
-        }))
-        .into_any_element()
+                .text_sm()
+                .child(current.to_owned()),
+        )
+        .child(
+            Icon::new(IconName::ChevronDown)
+                .xsmall()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground),
+        )
 }
 
 /// The data side of a [`dropdown_field`]: what the row shows and which
@@ -252,93 +310,17 @@ pub(super) fn dropdown_field(
         .flex()
         .flex_col()
         .gap_1()
-        .child(
-            // The row is as wide as the card. The label column is `min_w_0`
-            // so a long helper wraps inside the card instead of stretching
-            // the row and pushing the control past the right edge. The row
-            // itself stays `w_full`: a shrinkable row with no width lets the
-            // label measure at width 0 inside the settings scroller, and
-            // `white-space: normal` then stacks one glyph per line.
-            div()
-                .id(format!("dropdown-row-{id}"))
-                .w_full()
-                .min_w_0()
-                .h_auto()
-                .flex_none()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap_4()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_auto()
-                        .flex()
-                        .flex_col()
-                        .gap_0p5()
-                        .child(
-                            div()
-                                .w_full()
-                                .min_w_0()
-                                .text_sm()
-                                .whitespace_normal()
-                                .child(label.to_owned()),
-                        )
-                        .when_some(description, |this, description| {
-                            this.child(
-                                div()
-                                    .id(format!("dropdown-hint-{id}"))
-                                    .w_full()
-                                    .min_w_0()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .whitespace_normal()
-                                    .child(description.to_owned()),
-                            )
-                        }),
-                )
-                .child(
-                    div()
-                        .id(format!("dropdown-button-{id}"))
-                        .h(px(32.))
-                        .w(px(200.))
-                        .max_w(px(200.))
-                        .flex_none()
-                        .flex_shrink_0()
-                        .px_2()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .rounded(crate::ui::skin::radius_control())
-                        .border_1()
-                        .border_color(crate::ui::skin::glass_border(theme))
-                        .bg(crate::ui::skin::frost(theme))
-                        .cursor_pointer()
-                        .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
-                        .on_click(cx.listener(move |workspace, _, _, cx| {
-                            on_toggle(workspace, !open, cx);
-                        }))
-                        .child(
-                            // No `truncate`: overflow hidden on a `flex_1`
-                            // child inside this scroller is what collapses
-                            // the value (and then the row) on real windows.
-                            div()
-                                .flex_none()
-                                .whitespace_nowrap()
-                                .text_sm()
-                                .child(current.to_owned()),
-                        )
-                        .child(
-                            Icon::new(IconName::ChevronDown)
-                                .xsmall()
-                                .text_color(theme.muted_foreground),
-                        ),
-                ),
-        )
+        .child(settings_row(
+            &format!("dropdown-{id}"),
+            label,
+            description,
+            dropdown_button(id, current, theme)
+                .on_click(cx.listener(move |workspace, _, _, cx| {
+                    on_toggle(workspace, !open, cx);
+                }))
+                .into_any_element(),
+            theme,
+        ))
         .when(open, |this| {
             this.child(
                 div()

@@ -165,7 +165,7 @@ fn sessions_section(
                     .flex_shrink_0()
                     .mx_3()
                     .mb_2()
-                    .h(px(SEARCH_H))
+                    .min_h(px(SEARCH_H))
                     .text_sm()
                     .child(Input::new(&input)),
             )

@@ -185,8 +185,8 @@ impl SettingsSection {
                 "magpie 网关、模型与连接",
             ),
             Self::Agents => t(
-                "Scout, Artisan, and roles you add",
-                "Scout、Artisan，以及你添加的角色",
+                "Roles, models, and reasoning effort",
+                "角色、模型与思考强度",
             ),
             Self::Skills => t("Slash commands", "斜杠命令"),
             Self::Mcp => t("Tool servers", "工具服务器"),

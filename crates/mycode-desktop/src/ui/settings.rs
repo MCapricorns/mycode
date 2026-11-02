@@ -14,15 +14,18 @@ mod shortcuts;
 mod skills;
 mod widgets;
 
+#[cfg(all(test, feature = "test-support"))]
+mod layout_tests;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
-use gpui_kit::component::input::Input;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    StatefulInteractiveElement, Styled, TestSupportExt as _, Window, div, px,
 };
 
 use crate::i18n::t;
@@ -48,63 +51,13 @@ pub(super) fn render_settings_view(
         .h_full()
         .flex()
         .flex_col()
-        .child(
-            // The window title already says Settings. This row is only the
-            // back control and the search field.
-            div()
-                .id("settings-header")
-                .h(px(44.))
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .px_4()
-                .gap_3()
-                .border_b_1()
-                .border_color(crate::ui::skin::glass_border(theme))
-                .bg(crate::ui::skin::glass(theme))
-                .child(
-                    div()
-                        .id("settings-back")
-                        .flex_shrink_0()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .h(px(28.))
-                        .px(px(6.))
-                        .rounded(px(8.))
-                        .cursor_pointer()
-                        .text_color(theme.foreground)
-                        .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_show_main_view(MainView::Chat, cx);
-                        }))
-                        .child(Icon::new(IconName::ArrowLeft).with_size(px(16.)))
-                        .child(div().text_sm().child(t("Back to desk", "返回工作台")))
-                        .child(
-                            div()
-                                .px(px(6.))
-                                .h(px(18.))
-                                .flex()
-                                .items_center()
-                                .rounded(px(4.))
-                                .border_1()
-                                .border_color(theme.border)
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child("Esc"),
-                        ),
-                )
-                .child(
-                    div()
-                        .w(px(220.))
-                        .h(px(32.))
-                        .flex_shrink_0()
-                        .text_sm()
-                        .child(Input::new(&search)),
-                ),
-        )
+        .child(settings_header(
+            &search,
+            cx.listener(|workspace, _, _, cx| {
+                workspace.on_show_main_view(MainView::Chat, cx);
+            }),
+            theme,
+        ))
         .child(
             div()
                 .id("settings-body")
@@ -169,10 +122,11 @@ pub(super) fn render_settings_view(
                                         ),
                                 )
                                 .when(!settings_ready, |this| {
-                                    this.child(div().text_sm().opacity(0.6).child(t(
-                                        "Loading settings\u{2026}",
-                                        "正在加载设置\u{2026}",
-                                    )))
+                                    this.child(
+                                        div().text_sm().text_color(theme.muted_foreground).child(
+                                            t("Loading settings\u{2026}", "正在加载设置\u{2026}"),
+                                        ),
+                                    )
                                 })
                                 .when(settings_ready, |this| {
                                     this.child(match section {
@@ -206,6 +160,65 @@ pub(super) fn render_settings_view(
                 ),
         )
         .into_any_element()
+}
+
+/// Search and back navigation grow with the interface font size.
+fn settings_header(
+    search: &gpui_kit::Entity<InputState>,
+    on_back: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
+    theme: &Theme,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id("settings-header")
+        .min_h(px(44.))
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .px_4()
+        .py_2()
+        .gap_3()
+        .border_b_1()
+        .border_color(theme.border)
+        .bg(theme.title_bar)
+        .child(
+            div()
+                .id("settings-back")
+                .flex_shrink_0()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .min_h(px(28.))
+                .px(px(6.))
+                .rounded(crate::ui::skin::radius_control())
+                .cursor_pointer()
+                .text_color(theme.foreground)
+                .hover(|this| this.bg(theme.secondary_hover))
+                .on_click(on_back)
+                .child(Icon::new(IconName::ArrowLeft).with_size(px(16.)))
+                .child(div().text_sm().child(t("Back to desk", "返回工作台")))
+                .child(
+                    div()
+                        .px(px(6.))
+                        .rounded(crate::ui::skin::radius_xs())
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Esc"),
+                ),
+        )
+        .child(
+            div()
+                .id("settings-search")
+                .w(px(220.))
+                .flex_none()
+                .text_sm()
+                .child(Input::new(search))
+                .test_support(),
+        )
 }
 
 /// Identity of the settings page that should fade in. Menus are left out so
@@ -469,9 +482,7 @@ fn nav_row(
         .px_2()
         .rounded(crate::ui::skin::radius_control())
         .cursor_pointer()
-        .when(selected, |this| {
-            this.bg(crate::ui::skin::frost_accent(theme))
-        })
+        .when(selected, |this| this.bg(theme.sidebar_accent))
         .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_show_settings_section(candidate, cx);
