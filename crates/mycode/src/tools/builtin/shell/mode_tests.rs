@@ -69,12 +69,18 @@ fn powershell_and_bash_specs_are_mutually_exclusive() {
     assert!(ps_spec.params_schema.to_string().contains("syntax errors"));
     assert!(pwsh_spec.description.contains("PowerShell 7"));
     assert!(pwsh_spec.description.contains("cmdlets"));
-    // Listing and search cmdlets are not advertised: `find` and `grep` own those.
+    // Available dedicated file tools remain preferred over shell cmdlets.
     assert!(!pwsh_spec.description.contains("Get-ChildItem"));
     assert!(
         pwsh_spec
             .description
-            .contains("do not use this tool for those")
+            .contains("When available, use `read`, `grep`, and `find`")
+    );
+    assert!(pwsh_spec.description.contains("instead of this tool"));
+    assert!(
+        pwsh_spec
+            .description
+            .contains("If a dedicated tool is unavailable")
     );
     assert!(!pwsh_spec.description.contains("translated"));
     assert!(bash_spec.description.contains("bash -c"));

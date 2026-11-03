@@ -135,9 +135,7 @@ impl FrontendDriver {
             && submitted
                 .as_ref()
                 .is_none_or(|submitted| self.send_view_matches(session, &submitted.branch));
-        if let Some(held) = self
-            .held_interrupt
-            .take_if(|held| held.session_id == session)
+        if let Some(held) = self.held_interrupts.remove(session)
             && let Some(send) = held.send
         {
             if !text.is_empty() {

@@ -85,18 +85,24 @@ impl CapturedStream {
 /// prefix and its newest bytes around a marker naming the gap; the bool
 /// says whether bytes were dropped.
 pub(crate) fn captured_text(stream: &CapturedStream) -> (String, bool) {
-    let head = decode_captured_text(&stream.retained);
     let (tail, tail_start) = stream.newest();
     if tail.is_empty() {
-        return (head, false);
+        return (decode_captured_text(&stream.retained), false);
     }
     let omitted = tail_start.saturating_sub(stream.retained.len() as u64);
-    let mut text = head;
-    if omitted > 0 {
-        let _ = write!(text, "\n[... {omitted} bytes omitted ...]\n");
+    if omitted == 0 {
+        // The storage boundary is not a text boundary: a UTF-8 sequence or
+        // UTF-16 surrogate pair can straddle it. Decode the contiguous bytes
+        // together instead of discarding or replacing halves of a character.
+        let mut bytes = Vec::with_capacity(stream.retained.len() + tail.len());
+        bytes.extend_from_slice(&stream.retained);
+        bytes.extend_from_slice(tail);
+        return (decode_captured_text(&bytes), false);
     }
+    let mut text = decode_captured_text(&stream.retained);
+    let _ = write!(text, "\n[... {omitted} bytes omitted ...]\n");
     text.push_str(&decode_tail(&stream.retained, tail, tail_start));
-    (text, omitted > 0)
+    (text, true)
 }
 
 /// Decodes bytes cut out of the middle of a stream in the encoding its
@@ -458,6 +464,33 @@ mod tests {
         assert!(!cut);
         assert_eq!(text.len(), bytes.len());
         assert!(text.ends_with("aend"));
+    }
+
+    #[test]
+    fn contiguous_capture_preserves_a_split_utf8_character() {
+        for character in ["é", "界", "🦀"] {
+            let expected = format!(
+                "{}{character}done",
+                "a".repeat(MAX_RETAINED_OUTPUT_BYTES - 1)
+            );
+            let mut stream = CapturedStream::new();
+            feed(&mut stream, expected.as_bytes());
+            let (text, cut) = captured_text(&stream);
+            assert!(!cut);
+            assert_eq!(text, expected);
+        }
+    }
+
+    #[test]
+    fn contiguous_capture_preserves_a_split_utf16_surrogate_pair() {
+        let expected = format!("{}🦀done", "a".repeat((MAX_RETAINED_OUTPUT_BYTES - 4) / 2));
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend(utf16_le(&expected));
+        let mut stream = CapturedStream::new();
+        feed(&mut stream, &bytes);
+        let (text, cut) = captured_text(&stream);
+        assert!(!cut);
+        assert_eq!(text, expected);
     }
 
     #[test]

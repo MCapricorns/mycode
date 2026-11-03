@@ -523,49 +523,23 @@ impl Workspace {
                 if self.accept_open_mention(window, cx) {
                     return;
                 }
-                // Ctrl+Enter on a busy turn stops it and sends right after;
-                // a plain Enter steers it into the running turn (`submit`).
                 let sending = self.vm().sending || self.vm().compacting;
-                // With the send choice open, the next Enter confirms it:
-                // plain Enter steers, Ctrl+Enter interrupts. The draft is
-                // still in the field; both picks read it themselves.
-                if self.send_choice_open {
-                    self.send_choice_open = false;
-                    if *secondary {
-                        self.on_interrupt_send(cx);
-                    } else {
-                        self.on_steer_send(cx);
-                    }
-                    return;
-                }
-                if *secondary && sending {
-                    if !self.attachments.is_empty() {
-                        // A send-now is text only; the chips wait for the
-                        // next normal send instead of riding this one.
-                        self.push_toast(
-                            crate::i18n::t(
-                                "Attachments wait for the next send.",
-                                "附件等下一次发送再带上。",
-                            ),
-                            ToastKind::Info,
-                            cx,
-                        );
-                    }
-                    self.on_interrupt_send(cx);
-                } else if crate::ui::busy_enter_opens_choice(
+                let action = composer_send::enter_action(
                     sending,
+                    self.send_choice_open,
                     &draft,
                     !self.attachments.is_empty(),
-                ) {
-                    // Enter on a busy turn no longer steers at once: the
-                    // choice above the composer asks steer or interrupt
-                    // first, and the draft waits in the field meanwhile.
-                    self.send_choice_open = true;
-                    cx.notify();
-                } else {
-                    // Enter takes the same path as the send arrow so the
-                    // waiting attachments ride this message.
-                    self.on_send(window, cx);
+                    *secondary,
+                );
+                self.send_choice_open = false;
+                match action {
+                    composer_send::EnterAction::Submit => self.on_send(window, cx),
+                    composer_send::EnterAction::Steer => self.on_steer_send(cx),
+                    composer_send::EnterAction::Interrupt => self.on_interrupt_send(cx),
+                    composer_send::EnterAction::OpenChoice => {
+                        self.send_choice_open = true;
+                        cx.notify();
+                    }
                 }
             }
             InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => {}

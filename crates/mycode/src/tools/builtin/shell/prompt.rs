@@ -158,16 +158,17 @@ macro_rules! shared_description {
     () => {
         " Each call is a new process in the session cwd, so `cd` and variable \
 assignments do not persist. Use it for builds, tests, git, package managers, and other \
-programs. `read`, `grep`, and `find` handle listing, reading, and searching, and `edit` \
-and `write` change files; do not use this tool for those, and never use it to talk to the \
-user. Commands must exit on their own: no servers, watchers, or interactive prompts. \
+programs. When available, use `read`, `grep`, and `find` for listing, reading, and searching, \
+and `edit` and `write` to change files instead of this tool. If a dedicated tool is unavailable, \
+use the shell within the task's permissions. Never use it to talk to the user. \
+Commands must exit on their own: no servers, watchers, or interactive prompts. \
 `mode` `program` spawns `program` with a verbatim `args` vector and no shell: a PE, ELF, \
 or Mach-O image runs directly, and a direct shebang wrapper runs its interpreter with the \
 script path and `args`; batch files and a shebang `-c` are rejected. Output beyond 50 KiB \
 keeps its start and end. A non-zero exit is an error result carrying the exit code, not a \
 tool failure. Default timeout: 120 s (`timeout_secs` overrides). There is no permission \
-prompt, and file changes are not undone. For routine file/data transformations, use \
-`read`, `write`, `edit`, and in-process JavaScript when `run_code` is available. \
+prompt, and file changes are not undone. For routine file/data transformations, prefer \
+the available file tools and in-process JavaScript when `run_code` is available. \
 Running the user's Python projects remains supported."
     };
 }

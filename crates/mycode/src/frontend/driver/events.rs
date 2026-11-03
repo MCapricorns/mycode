@@ -150,11 +150,7 @@ impl FrontendDriver {
                 // ends, the cancel goes to that session directly — the
                 // core indexes turn tokens per session, so a background
                 // chat is cancelled without touching the open one.
-                let interrupt = !active
-                    && self
-                        .held_interrupt
-                        .as_ref()
-                        .is_some_and(|held| held.session_id == session_id);
+                let interrupt = !active && self.held_interrupts.contains_key(&session_id);
                 if !self.is_open_session(&session_id) {
                     if interrupt {
                         self.dispatch(BridgeCommand::CancelChat { session_id });
@@ -291,8 +287,10 @@ impl FrontendDriver {
                 head,
             } => {
                 if !self.is_open_session(&session_id) {
+                    self.park_held_interrupt(held, &session_id, out);
                     return;
                 }
+                let cancelled = message == "compaction cancelled";
                 self.act(FrontendAction::CompactFinished { ok, head }, out);
                 self.resync_after_turn(&session_id);
                 let text = match message.as_str() {
@@ -311,17 +309,28 @@ impl FrontendDriver {
                         "已经压缩过了。有新消息时可以再 /compact。",
                     )
                     .to_owned(),
+                    "compaction cancelled" => {
+                        crate::frontend::i18n::t("Compaction cancelled.", "已取消上下文压缩。")
+                            .to_owned()
+                    }
                     other => other.to_owned(),
                 };
                 self.toast(
                     text,
-                    if ok {
+                    if ok || cancelled {
                         ToastKind::Info
                     } else {
                         ToastKind::Error
                     },
                     out,
                 );
+                if let Some(held) = held {
+                    if ok || cancelled {
+                        self.send_held_interrupt(held, out);
+                    } else {
+                        self.restore_held_interrupt(held, out);
+                    }
+                }
                 return;
             }
             BridgeEvent::UpdateCheckFailed { message } => {
@@ -349,17 +358,13 @@ impl FrontendDriver {
     /// Takes the held interrupt this terminal event ends, if any. A held
     /// interrupt for another session stays put.
     fn take_held_interrupt(&mut self, event: &BridgeEvent) -> Option<HeldInterrupt> {
-        let (BridgeEvent::ChatDone { session_id, .. } | BridgeEvent::ChatFailed { session_id, .. }) =
-            event
+        let (BridgeEvent::ChatDone { session_id, .. }
+        | BridgeEvent::ChatFailed { session_id, .. }
+        | BridgeEvent::CompactFinished { session_id, .. }) = event
         else {
             return None;
         };
-        let held = self.held_interrupt.take()?;
-        if &held.session_id != session_id {
-            self.held_interrupt = Some(held);
-            return None;
-        }
-        Some(held)
+        self.held_interrupts.remove(session_id)
     }
 
     /// Keeps a held draft for a chat that left the screen: its composer is

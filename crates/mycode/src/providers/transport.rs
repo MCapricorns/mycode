@@ -39,8 +39,10 @@ pub struct TransportCall {
 /// A live response body stream.
 ///
 /// Items arrive through a small bounded channel: one `Ok` per body chunk,
-/// one final `Err` for a transport failure (idle timeout, connection
-/// error, cancellation) when applicable, then `None` ends the body.
+/// one final `Err` for a transport failure (idle timeout or connection
+/// error), then `None` ends the body. Cancellation sends an error when queue
+/// capacity is available, otherwise it closes without waiting for the consumer;
+/// callers also observe the cancellation token.
 pub type ByteStream = tokio::sync::mpsc::Receiver<Result<Bytes, ProviderError>>;
 
 /// Chunks buffered between the reader task and the consumer. Bounds
@@ -202,38 +204,46 @@ fn stream_response_body(
 ) -> ByteStream {
     let (chunk_tx, chunk_rx) =
         tokio::sync::mpsc::channel::<Result<Bytes, ProviderError>>(BYTE_STREAM_CAPACITY);
-    // Reads the body chunk by chunk on a dedicated task and forwards
-    // each chunk through the bounded channel. Cancellation and a chunk
-    // gap over the idle ceiling surface as one final `Err` item, then
-    // the stream ends; a dropped consumer stops the task and releases
-    // the response. Every delivered chunk starts the idle wait over.
+    // Reserve capacity before reading: a slow consumer must not keep a
+    // response alive after cancellation. Receiver closure also interrupts an
+    // idle body read instead of waiting for the full idle timeout.
     tokio::spawn(async move {
         loop {
+            let permit = tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    // The consumer also owns the cancellation token. If its
+                    // queue is full, close promptly rather than blocking just
+                    // to enqueue the cancellation notification.
+                    let _ = chunk_tx
+                        .try_send(Err(ProviderError::new(ProviderErrorKind::Cancelled)));
+                    return;
+                }
+                permit = chunk_tx.reserve() => match permit {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                },
+            };
             let chunk = tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
-                    let _ = chunk_tx
-                        .send(Err(ProviderError::new(ProviderErrorKind::Cancelled)))
-                        .await;
+                    permit.send(Err(ProviderError::new(ProviderErrorKind::Cancelled)));
                     return;
                 }
+                () = chunk_tx.closed() => return,
                 chunk = tokio::time::timeout(idle, response.chunk()) => chunk,
             };
             match chunk {
                 Ok(Ok(Some(bytes))) => {
-                    if chunk_tx.send(Ok(bytes)).await.is_err() {
-                        return;
-                    }
+                    permit.send(Ok(bytes));
                 }
                 Ok(Ok(None)) => return,
                 Ok(Err(error)) => {
-                    let _ = chunk_tx.send(Err(map_reqwest_error(error))).await;
+                    permit.send(Err(map_reqwest_error(error)));
                     return;
                 }
                 Err(_elapsed) => {
-                    let _ = chunk_tx
-                        .send(Err(ProviderError::new(ProviderErrorKind::Timeout)))
-                        .await;
+                    permit.send(Err(ProviderError::new(ProviderErrorKind::Timeout)));
                     return;
                 }
             }
@@ -484,6 +494,46 @@ mod tests {
         assert_eq!(started.elapsed(), Duration::ZERO);
         assert!(stream.recv().await.is_none(), "error ends the stream");
         drop(writer);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropping_an_idle_consumer_releases_the_response() {
+        let (mut writer, response) = streaming_response();
+        let stream =
+            stream_response_body(response, Duration::from_secs(180), CancellationToken::new());
+        tokio::task::yield_now().await;
+        drop(stream);
+        tokio::task::yield_now().await;
+        assert!(
+            writer.write_all(b"late chunk").await.is_err(),
+            "dropping the consumer must release the body before its idle timeout"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_releases_a_response_with_a_full_output_queue() {
+        let (mut writer, response) = streaming_response();
+        let cancel = CancellationToken::new();
+        let mut stream = stream_response_body(response, Duration::from_secs(180), cancel.clone());
+        for _ in 0..super::BYTE_STREAM_CAPACITY {
+            writer.write_all(b"x").await.expect("write");
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(stream.len(), super::BYTE_STREAM_CAPACITY);
+        // A further chunk used to block forever in `send` when the consumer
+        // stopped draining the queue, even after cancellation.
+        writer.write_all(b"blocked chunk").await.expect("write");
+        tokio::task::yield_now().await;
+        cancel.cancel();
+        tokio::task::yield_now().await;
+        assert!(
+            writer.write_all(b"late chunk").await.is_err(),
+            "cancellation must release the body while the queue is full"
+        );
+        for _ in 0..super::BYTE_STREAM_CAPACITY {
+            assert!(stream.recv().await.expect("buffered chunk").is_ok());
+        }
+        assert!(stream.recv().await.is_none(), "cancelled stream is closed");
     }
 
     #[tokio::test]

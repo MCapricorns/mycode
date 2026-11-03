@@ -7,6 +7,37 @@ use gpui_kit::{Context, Window};
 use super::Workspace;
 use crate::view_model::FrontendAction;
 
+/// Resolve Enter against live turn state. A choice opened during an earlier
+/// turn must not turn an idle Enter into a failed steer, and attachments added
+/// while it was open must still use the ordinary send path.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum EnterAction {
+    Submit,
+    OpenChoice,
+    Steer,
+    Interrupt,
+}
+
+pub(super) fn enter_action(
+    sending: bool,
+    choice_open: bool,
+    draft: &str,
+    has_attachments: bool,
+    secondary: bool,
+) -> EnterAction {
+    if secondary && sending {
+        EnterAction::Interrupt
+    } else if crate::ui::busy_enter_opens_choice(sending, draft, has_attachments) {
+        if choice_open {
+            EnterAction::Steer
+        } else {
+            EnterAction::OpenChoice
+        }
+    } else {
+        EnterAction::Submit
+    }
+}
+
 impl Workspace {
     pub(crate) fn on_send(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         // A model can be switched after the picture was picked; the send is
@@ -55,9 +86,18 @@ impl Workspace {
 
     /// Interrupt-send (Ctrl+Enter on a busy turn, or the send choice's
     /// interrupt row): stops the running turn and sends the draft right
-    /// after it. Attachments never ride it; the Enter path warns about
-    /// them before calling this.
+    /// after it. Attachments stay in the composer for the next normal send.
     pub(crate) fn on_interrupt_send(&mut self, cx: &mut Context<Self>) {
+        if !self.attachments.is_empty() {
+            self.push_toast(
+                crate::i18n::t(
+                    "Attachments wait for the next send.",
+                    "附件等下一次发送再带上。",
+                ),
+                super::toasts::ToastKind::Info,
+                cx,
+            );
+        }
         let draft = self.composer.read(cx).value().to_string();
         self.driver_do(|d, fx| d.interrupt_send(&draft, fx), cx);
     }
@@ -109,5 +149,53 @@ impl Workspace {
     /// Steers the turn never read come back to the composer.
     pub(crate) fn on_cancel_chat(&mut self, cx: &mut Context<Self>) {
         self.driver_do(|d, fx| d.cancel_chat(fx), cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EnterAction, enter_action};
+
+    #[test]
+    fn stale_busy_choice_does_not_intercept_an_idle_send() {
+        for secondary in [false, true] {
+            assert_eq!(
+                enter_action(false, true, "next question", false, secondary),
+                EnterAction::Submit
+            );
+        }
+    }
+
+    #[test]
+    fn attachments_added_to_an_open_choice_use_the_normal_send_path() {
+        assert_eq!(
+            enter_action(true, true, "read this file", true, false),
+            EnterAction::Submit
+        );
+        // The explicit interrupt shortcut still works and warns that attachments wait.
+        assert_eq!(
+            enter_action(true, true, "read this file", true, true),
+            EnterAction::Interrupt
+        );
+    }
+
+    #[test]
+    fn busy_text_enter_opens_then_confirms_the_choice() {
+        assert_eq!(
+            enter_action(true, false, "continue here", false, false),
+            EnterAction::OpenChoice
+        );
+        assert_eq!(
+            enter_action(true, true, "continue here", false, false),
+            EnterAction::Steer
+        );
+        assert_eq!(
+            enter_action(true, true, "continue here", false, true),
+            EnterAction::Interrupt
+        );
+        assert_eq!(
+            enter_action(true, true, "  ", false, false),
+            EnterAction::Submit
+        );
     }
 }

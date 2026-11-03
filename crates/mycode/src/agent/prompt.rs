@@ -87,7 +87,8 @@ have changed files or started work. Inspect the terminal result before continuin
             rules,
             "- Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, \
 git, package managers, and running programs (including the user's Python projects). \
-Never use it to list directories, read files, or search text.\n\
+Never use it to list directories, read files, or search text when the matching dedicated tool is available. \
+If that tool is unavailable, use the shell within the task's permissions.\n\
 - A `{shell_tool}` call waits for its command to exit. Do not start one that waits for \
 input or never exits (a dev server, a watcher, an interactive prompt): it holds the turn \
 until the timeout. Pass non-interactive flags instead.\n\
@@ -337,6 +338,25 @@ mod tests {
         assert!(prompt.contains("\n- read:"));
         assert!(!prompt.contains("run_code"));
         assert!(!prompt.contains("call(\"write\""));
+    }
+
+    #[test]
+    fn shell_only_roles_keep_a_file_access_fallback() {
+        let registry = ToolRegistry::new();
+        let shell = ShellTool::forcing(DetectedShell {
+            kind: ShellKind::Bash,
+            program: PathBuf::from("/bin/bash"),
+        });
+        let description = shell.description().to_owned();
+        registry.register(Arc::new(shell));
+        let prompt = build_system_prompt(&registry);
+        assert!(prompt.contains("\n- bash:"));
+        assert!(!prompt.contains("\n- read:"));
+        assert!(!prompt.contains("\n- find:"));
+        assert!(prompt.contains("when the matching dedicated tool is available"));
+        assert!(prompt.contains("If that tool is unavailable, use the shell"));
+        assert!(description.contains("When available"));
+        assert!(description.contains("If a dedicated tool is unavailable"));
     }
 
     #[test]

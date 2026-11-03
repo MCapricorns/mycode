@@ -278,11 +278,25 @@ fn read_skill_meta(path: &Path, slug: &str) -> Option<(String, String)> {
         .map(str::to_owned)
         .or(name)
         .unwrap_or_else(|| slug.to_owned());
-    Some((title, description.unwrap_or_default()))
+    Some((
+        truncate_skill_metadata(&title, MAX_SKILL_TITLE_CHARS),
+        description.unwrap_or_default(),
+    ))
 }
 
+/// Longest skill title carried into the prompt catalog and settings list.
+const MAX_SKILL_TITLE_CHARS: usize = 120;
 /// Longest skill description carried into the prompt catalog.
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 300;
+
+fn truncate_skill_metadata(value: &str, limit: usize) -> String {
+    let mut chars = value.chars();
+    let mut result: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        result.push('…');
+    }
+    result
+}
 
 /// `name` and `description` from a SKILL.md frontmatter block. The format is
 /// YAML; this reads the plain, quoted, and folded (`>` / `|`) scalar forms
@@ -323,14 +337,7 @@ fn skill_frontmatter(text: &str) -> (Option<String>, Option<String>) {
                 .to_owned()
         };
         let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
-        (!value.is_empty()).then(|| {
-            if value.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
-                let cut: String = value.chars().take(MAX_SKILL_DESCRIPTION_CHARS).collect();
-                format!("{cut}…")
-            } else {
-                value
-            }
-        })
+        (!value.is_empty()).then(|| truncate_skill_metadata(&value, MAX_SKILL_DESCRIPTION_CHARS))
     };
     (field("name"), field("description"))
 }
@@ -399,8 +406,10 @@ pub fn render_skill_catalog(files: &[SkillFile]) -> Option<String> {
     }
     let mut out = String::from(
         "<skills>\nSkills (on demand). Scan this list before you act. When a \
-task matches one, read the matching SKILL.md by path with the `read` tool using the \
-calling convention above and follow it before building or answering. Do not wait for the user to name the skill; a \
+task matches one, read the matching SKILL.md by path with the `read` tool when available, \
+or another available tool permitted to read files. Follow the calling convention above. \
+If no available tool can read it, report that limitation instead of inventing a tool. \
+Follow the skill before building or answering. Do not wait for the user to name the skill; a \
 message that starts with `/slug` asks for that skill. Read a skill once per task, and \
 open the files it references only when a step needs them. Do not paste skill bodies \
 into the prompt.",
@@ -609,6 +618,35 @@ mod tests {
             catalog.contains("/pdf — pdf-tools: Fill and merge PDF forms."),
             "{catalog}"
         );
+    }
+
+    #[test]
+    fn long_skill_titles_stay_bounded_in_discovery_and_cached_catalogs() {
+        let root = temp("long-title");
+        let skills_root = root.0.join("skills");
+        let long_title = "界".repeat(super::MAX_SKILL_TITLE_CHARS * 100);
+        skill(&skills_root, "heading", &long_title);
+        let named = skills_root.join("named");
+        fs::create_dir_all(&named).unwrap();
+        fs::write(
+            named.join("SKILL.md"),
+            format!("---\nname: {long_title}\ndescription: Short description.\n---\n"),
+        )
+        .unwrap();
+
+        let found = discover_skills(Some(&root.0));
+        assert_eq!(found.len(), 2);
+        let expected = format!("{}…", "界".repeat(super::MAX_SKILL_TITLE_CHARS));
+        for skill in &found {
+            assert_eq!(skill.title, expected);
+        }
+        assert_eq!(found[1].description, "Short description.");
+        assert_eq!(discover_skills(Some(&root.0)), found);
+        let catalog = super::render_skill_catalog(&found).unwrap();
+        assert!(!catalog.contains(&long_title));
+        assert!(catalog.contains(&expected));
+        assert!(catalog.contains("/heading"));
+        assert!(catalog.contains("/named"));
     }
 
     /// The metadata cache sits between the directory scan and the prompt:

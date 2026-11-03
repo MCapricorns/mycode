@@ -505,8 +505,10 @@ fn an_interrupt_during_auto_compaction_waits_for_the_summary() {
     driver.on_event(compacting(true), &mut out);
     driver.interrupt_send("change of plan", &mut out);
     {
-        let held = driver.held_interrupt.as_ref().expect("the stop is held");
-        assert_eq!(held.session_id, session);
+        let held = driver
+            .held_interrupts
+            .get(&session)
+            .expect("the stop is held");
         assert_eq!(held.send.as_deref(), Some("change of plan"));
     }
     // The message left the composer while the stop waits.
@@ -517,7 +519,7 @@ fn an_interrupt_during_auto_compaction_waits_for_the_summary() {
     driver.on_event(compacting(false), &mut out);
     assert!(!driver.vm.auto_compacting, "the summary ended");
     assert!(
-        driver.held_interrupt.is_some(),
+        driver.held_interrupts.contains_key(&session),
         "the message waits for the turn to be gone"
     );
     driver.on_event(
@@ -529,7 +531,7 @@ fn an_interrupt_during_auto_compaction_waits_for_the_summary() {
         &mut out,
     );
     assert!(
-        driver.held_interrupt.is_none(),
+        driver.held_interrupts.is_empty(),
         "the stop landed; the held message went out"
     );
     assert!(driver.vm.sending, "the held message started the next turn");

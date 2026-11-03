@@ -266,10 +266,12 @@ fn a_missing_turn_does_not_swallow_the_interrupts_held_message() {
     driver.submit("original prompt", &mut out);
     let _ = driver.held_send.take();
     driver.submitted_turns.get_mut(&session).unwrap().command = None;
-    driver.held_interrupt = Some(super::super::HeldInterrupt {
-        session_id: session.clone(),
-        send: Some("replacement prompt".into()),
-    });
+    driver.held_interrupts.insert(
+        session.clone(),
+        super::super::HeldInterrupt {
+            send: Some("replacement prompt".into()),
+        },
+    );
     driver.vm.composer_draft = "new unsent draft".into();
     driver.on_reply(
         ReplyScope::Session {
@@ -279,7 +281,7 @@ fn a_missing_turn_does_not_swallow_the_interrupts_held_message() {
         BridgeReply::ChatCancelled(Err("no turn is running for this session".into())),
         &mut out,
     );
-    assert!(driver.held_interrupt.is_none());
+    assert!(driver.held_interrupts.is_empty());
     assert!(driver.submitted_turns[&session].command.is_some());
     assert_eq!(driver.vm.composer_draft, "new unsent draft");
     assert!(matches!(
@@ -323,6 +325,201 @@ fn an_unavailable_captured_route_settles_the_committed_send_without_a_fallback()
             if text.contains("unavailable") || text.contains("不可用")
     )));
     assert_eq!(driver.vm.selected_model.as_deref(), Some("other"));
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_interrupt_during_manual_compaction_sends_when_compaction_stops_or_finishes() {
+    for (ok, message) in [(false, "compaction cancelled"), (true, "compacted")] {
+        let (mut driver, root) = scratch_driver("manual-compact-interrupt");
+        let (session, _) = ready_send(&mut driver);
+        let mut out = Vec::new();
+        driver.act(FrontendAction::CompactArmed, &mut out);
+        driver.interrupt_send("replacement prompt", &mut out);
+        assert!(driver.held_interrupts.contains_key(&session));
+        driver.vm.composer_draft = "new unsent draft".into();
+        driver.on_event(
+            BridgeEvent::CompactFinished {
+                session_id: session,
+                ok,
+                message: message.into(),
+                head: user_entry().event_id,
+            },
+            &mut out,
+        );
+        assert!(driver.held_interrupts.is_empty());
+        assert!(!driver.vm.compacting);
+        assert!(driver.vm.sending);
+        assert_eq!(driver.vm.composer_draft, "new unsent draft");
+        assert!(matches!(
+            driver.held_send.as_ref(),
+            Some(BridgeCommand::SendMessage { text, expected_head, .. })
+                if text == "replacement prompt"
+                    && *expected_head == super::super::parse_head(&user_entry().event_id)
+        ));
+        driver.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[test]
+fn a_failed_manual_compaction_returns_the_interrupt_draft() {
+    let (mut driver, root) = scratch_driver("manual-compact-failed-interrupt");
+    let (session, _) = ready_send(&mut driver);
+    let mut out = Vec::new();
+    driver.act(FrontendAction::CompactArmed, &mut out);
+    driver.interrupt_send("replacement prompt", &mut out);
+    driver.vm.composer_draft = "new unsent draft".into();
+    driver.on_event(
+        BridgeEvent::CompactFinished {
+            session_id: session,
+            ok: false,
+            message: "provider unavailable".into(),
+            head: String::new(),
+        },
+        &mut out,
+    );
+    assert!(driver.held_interrupts.is_empty());
+    assert!(!driver.vm.sending);
+    assert!(!driver.vm.compacting);
+    assert_eq!(
+        driver.vm.composer_draft,
+        "replacement prompt\n\nnew unsent draft"
+    );
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_offscreen_manual_compaction_parks_its_interrupt_without_touching_another_chat() {
+    let (mut driver, root) = scratch_driver("manual-compact-offscreen-interrupt");
+    let (session, _) = ready_send(&mut driver);
+    let mut out = Vec::new();
+    driver.act(FrontendAction::CompactArmed, &mut out);
+    driver.interrupt_send("replacement prompt", &mut out);
+    driver.act(
+        FrontendAction::ConversationOpened(conversation("other-session", "other-branch")),
+        &mut out,
+    );
+    driver.vm.composer_draft = "other draft".into();
+    driver.on_event(
+        BridgeEvent::CompactFinished {
+            session_id: session.clone(),
+            ok: false,
+            message: "compaction cancelled".into(),
+            head: String::new(),
+        },
+        &mut out,
+    );
+    assert!(driver.held_interrupts.is_empty());
+    assert_eq!(driver.vm.composer_draft, "other draft");
+    assert_eq!(
+        driver.vm.parked_steers,
+        [(session, vec!["replacement prompt".into()])]
+    );
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn background_returned_steers_do_not_remove_identical_pending_text_in_the_open_chat() {
+    let (mut driver, root) = scratch_driver("steer-identical-offscreen");
+    ready_send(&mut driver);
+    let mut out = Vec::new();
+    driver.act(FrontendAction::SteerSent("continue".into()), &mut out);
+    driver.vm.composer_draft = "draft".into();
+    driver.on_event(
+        BridgeEvent::SteersReturned {
+            session_id: "other-session".into(),
+            texts: vec!["continue".into()],
+        },
+        &mut out,
+    );
+    assert_eq!(driver.vm.pending_steers, ["continue"]);
+    assert_eq!(driver.vm.composer_draft, "draft");
+    assert_eq!(
+        driver.vm.parked_steers,
+        [("other-session".into(), vec!["continue".into()])]
+    );
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn repeated_interrupts_preserve_every_draft_and_an_empty_stop_does_not_erase_them() {
+    let (mut driver, root) = scratch_driver("repeated-interrupt");
+    let (session, _) = ready_send(&mut driver);
+    let mut out = Vec::new();
+    driver.act(FrontendAction::TurnArmed, &mut out);
+    driver.vm.auto_compacting = true;
+    driver.interrupt_send("first correction", &mut out);
+    driver.interrupt_send("second correction", &mut out);
+    driver.interrupt_send("", &mut out);
+    driver.vm.composer_draft = "unsent draft".into();
+    assert_eq!(
+        driver.held_interrupts[&session].send.as_deref(),
+        Some("first correction\n\nsecond correction")
+    );
+    driver.on_event(
+        BridgeEvent::ChatFailed {
+            session_id: session,
+            message: crate::app::CHAT_CANCELLED.into(),
+            head: String::new(),
+        },
+        &mut out,
+    );
+    assert!(driver.held_interrupts.is_empty());
+    assert_eq!(driver.vm.composer_draft, "unsent draft");
+    assert!(matches!(
+        driver.held_send.as_ref(),
+        Some(BridgeCommand::SendMessage { text, .. })
+            if text == "first correction\n\nsecond correction"
+    ));
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn interrupting_another_session_preserves_the_first_sessions_pending_stop_and_draft() {
+    let (mut driver, root) = scratch_driver("interrupt-two-sessions");
+    let (first, _) = ready_send(&mut driver);
+    let mut out = Vec::new();
+    driver.act(FrontendAction::TurnArmed, &mut out);
+    driver.vm.auto_compacting = true;
+    driver.interrupt_send("first correction", &mut out);
+    let (second, _) = ready_send(&mut driver);
+    driver.act(FrontendAction::TurnArmed, &mut out);
+    driver.vm.auto_compacting = true;
+    driver.interrupt_send("second correction", &mut out);
+    assert_eq!(driver.held_interrupts.len(), 2);
+    driver.on_event(
+        BridgeEvent::ChatFailed {
+            session_id: first.clone(),
+            message: crate::app::CHAT_CANCELLED.into(),
+            head: String::new(),
+        },
+        &mut out,
+    );
+    assert_eq!(driver.held_interrupts.len(), 1);
+    assert!(driver.vm.sending, "the visible turn is still stopping");
+    assert_eq!(
+        driver.vm.parked_steers,
+        [(first, vec!["first correction".into()])]
+    );
+    driver.on_event(
+        BridgeEvent::ChatFailed {
+            session_id: second,
+            message: crate::app::CHAT_CANCELLED.into(),
+            head: String::new(),
+        },
+        &mut out,
+    );
+    assert!(driver.held_interrupts.is_empty());
+    assert!(matches!(
+        driver.held_send.as_ref(),
+        Some(BridgeCommand::SendMessage { text, .. }) if text == "second correction"
+    ));
     driver.shutdown();
     let _ = std::fs::remove_dir_all(root);
 }

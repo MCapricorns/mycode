@@ -251,7 +251,22 @@ pub(super) fn read_image_file(path: &Path) -> Result<(&'static str, Vec<u8>), St
             t("image is larger than 3.75 MB", "图片超过 3.75 MB")
         ));
     }
-    let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    // Metadata is only an early rejection: the file can grow or be replaced
+    // before it is opened. Bound the actual read as well, including one byte
+    // to distinguish a full image from an oversized one.
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take((MAX_IMAGE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "{}: {}",
+            path.display(),
+            t("image is larger than 3.75 MB", "图片超过 3.75 MB")
+        ));
+    }
     let mime = mycode::core::image_media_type(&bytes).ok_or_else(|| {
         format!(
             "{}: {}",
@@ -289,7 +304,14 @@ fn read_text_file(path: &Path) -> Result<(String, bool), String> {
         Ok(text) => Ok((text.to_owned(), truncated)),
         // Only the character straddling the cap may be dropped. Any other
         // invalid sequence means the file is not UTF-8 text.
-        Err(error) if truncated && error.valid_up_to() + 4 > cut => {
+        Err(error)
+            if truncated
+                && error.error_len().is_none()
+                // The lookahead must complete the character straddling the
+                // cap. Invalid bytes near the cap are not a partial character.
+                && std::str::from_utf8(&bytes)
+                    .map_or_else(|error| error.valid_up_to() >= cut, |_| true) =>
+        {
             let valid = error.valid_up_to();
             let text = std::str::from_utf8(&bytes[..valid])
                 .expect("the prefix before an invalid sequence is valid");
@@ -300,5 +322,67 @@ fn read_text_file(path: &Path) -> Result<(String, bool), String> {
             path.display(),
             t("not UTF-8 text", "不是 UTF-8 文本")
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestFile(PathBuf);
+
+    impl TestFile {
+        fn new(label: &str, bytes: &[u8]) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "mycode-attachment-{label}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock")
+                    .as_nanos()
+            ));
+            std::fs::write(&path, bytes).expect("write attachment");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn truncated_text_drops_only_a_valid_character_crossing_the_cap() {
+        for character in ["é", "中", "😀"] {
+            for kept_bytes in 1..character.len() {
+                let prefix = "x".repeat(MAX_FILE_BYTES - kept_bytes);
+                let file = TestFile::new("utf8", format!("{prefix}{character}tail").as_bytes());
+                assert_eq!(read_text_file(&file.0).expect("valid text"), (prefix, true));
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_near_the_cap_is_not_silently_discarded() {
+        for suffix in [&[0xff, b'x', b'x'][..], &[0xe4, b'x', b'x'][..]] {
+            let mut bytes = vec![b'x'; MAX_FILE_BYTES - 1];
+            bytes.extend_from_slice(suffix);
+            let file = TestFile::new("invalid", &bytes);
+            assert!(read_text_file(&file.0).is_err());
+        }
+    }
+
+    #[test]
+    fn image_reader_accepts_the_limit_and_rejects_oversized_files() {
+        let mut bytes = vec![0; MAX_IMAGE_BYTES];
+        bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        let file = TestFile::new("image-limit", &bytes);
+        let (mime, read) = read_image_file(&file.0).expect("image at limit");
+        assert_eq!(mime, "image/png");
+        assert_eq!(read.len(), MAX_IMAGE_BYTES);
+        bytes.push(0);
+        std::fs::write(&file.0, &bytes).expect("grow image");
+        assert!(read_image_file(&file.0).is_err());
     }
 }

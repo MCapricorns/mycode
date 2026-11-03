@@ -309,8 +309,6 @@ const UPDATE_RECHECK_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 /// gone. The draft waits here instead of the composer, so a message sent
 /// beside the cancel cannot become the turn that cancel kills.
 pub(crate) struct HeldInterrupt {
-    /// Session whose turn is stopping.
-    session_id: String,
     /// Draft to send once the turn is done. `None` for a bare stop.
     send: Option<String>,
 }
@@ -423,9 +421,9 @@ pub struct FrontendDriver {
     submitted_turns: BTreeMap<String, sends::SubmittedTurn>,
     /// Off-screen failed commits return only to their own conversation.
     failed_send_drafts: BTreeMap<String, sends::FailedSendDraft>,
-    /// The turn being stopped, and the draft that goes out once it is gone;
+    /// Per-session stops and the drafts that go out once each turn is gone;
     /// see [`FrontendDriver::interrupt_send`].
-    held_interrupt: Option<HeldInterrupt>,
+    held_interrupts: BTreeMap<String, HeldInterrupt>,
     /// The open folder's git status and opened diff; see [`git`].
     git: git::GitWatch,
     /// Free-text answers to the pending ask card, aligned with its rows.
@@ -503,7 +501,7 @@ impl FrontendDriver {
             pending_send_attachments: BTreeMap::new(),
             submitted_turns: BTreeMap::new(),
             failed_send_drafts: BTreeMap::new(),
-            held_interrupt: None,
+            held_interrupts: BTreeMap::new(),
             git: git::GitWatch::default(),
             ask_texts: Vec::new(),
             ask_index: 0,

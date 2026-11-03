@@ -53,8 +53,9 @@ fn reject_encoding(raw: &[u8]) -> Result<&str, ToolError> {
 /// Selects the `[start, end)` line window under the [`MAX_LINES`] cap.
 ///
 /// `offset`/`limit` are user-controlled, so all arithmetic saturates: the
-/// returned invariant is `start <= capped_end <= end <= total_lines`, and
-/// `selected` never exceeds [`MAX_LINES`] entries.
+/// returned invariant is `start <= capped_end <= end <= total_lines`. Build
+/// only the displayed prefix, so a large line never causes a file-sized
+/// allocation just to truncate it back to [`MAX_BYTES`].
 fn window_text(
     displayed: &str,
     offset: Option<usize>,
@@ -67,28 +68,28 @@ fn window_text(
         None => total_lines,
     };
     let capped_end = end.min(start.saturating_add(MAX_LINES));
-    let selected: Vec<&str> = displayed
-        .lines()
-        .skip(start)
-        .take(capped_end - start)
-        .collect();
-    let text = selected.join("\n");
-    let (mut text, byte_truncated) = crate::tools::builtin::truncate_bytes(&text, MAX_BYTES);
-    let mut shown = selected.len();
+    let mut text = String::with_capacity(displayed.len().min(MAX_BYTES));
+    let mut shown = 0;
+    let mut byte_truncated = false;
     let mut cut_line = false;
-    if byte_truncated {
-        // Keep whole lines only, so the notice never claims a line the byte
-        // cap cut and the suggested offset resumes exactly where this stops.
-        match text.rfind('\n') {
-            Some(last_break) => {
-                text.truncate(last_break);
-                shown = text.matches('\n').count() + 1;
-            }
-            None => {
+    for line in displayed.lines().skip(start).take(capped_end - start) {
+        let separator = usize::from(shown > 0);
+        if line.len().saturating_add(separator) > MAX_BYTES - text.len() {
+            byte_truncated = true;
+            // Keep whole lines when possible. If the first line alone is
+            // oversized, retain its prefix and explicitly report the cut.
+            if shown == 0 {
+                text.push_str(&line[..line.floor_char_boundary(MAX_BYTES)]);
                 shown = 1;
                 cut_line = true;
             }
+            break;
         }
+        if shown > 0 {
+            text.push('\n');
+        }
+        text.push_str(line);
+        shown += 1;
     }
     let truncated = byte_truncated || capped_end < end;
     if truncated {
@@ -403,6 +404,31 @@ mod tests {
         assert!(truncated);
         assert_eq!(shown, 1);
         assert!(text.ends_with("line 2 alone exceeds 51200 bytes; only its start is shown]"));
+    }
+
+    #[test]
+    fn a_complete_line_at_the_byte_limit_is_not_discarded() {
+        let line = "x".repeat(MAX_BYTES - "first\n".len());
+        let file = format!("first\n{line}\nafter");
+        let (text, total, shown, truncated) = window_text(&file, None, None);
+        assert!(truncated);
+        assert_eq!((total, shown), (3, 2));
+        let (body, notice) = text.rsplit_once('\n').unwrap();
+        assert_eq!(body, format!("first\n{line}"));
+        assert!(notice.ends_with("continue with offset=3]"));
+        assert_eq!(window_text(&file, Some(3), None).0, "after");
+    }
+
+    #[test]
+    fn an_oversized_unicode_line_keeps_a_valid_bounded_prefix() {
+        let line = "界".repeat(MAX_BYTES);
+        let (text, total, shown, truncated) = window_text(&line, None, None);
+        assert!(truncated);
+        assert_eq!((total, shown), (1, 1));
+        let (body, notice) = text.rsplit_once('\n').unwrap();
+        assert_eq!(body.len(), MAX_BYTES / 3 * 3);
+        assert!(body.chars().all(|ch| ch == '界'));
+        assert!(notice.contains("line 1 alone exceeds"));
     }
 
     #[test]

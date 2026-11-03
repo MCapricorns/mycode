@@ -97,12 +97,13 @@ pub(super) fn render_composer(
     let can_send = has_draft || has_attachments;
     let steer_panel = (!workspace.vm().pending_steers.is_empty())
         .then(|| render_pending_steers(&workspace.vm().pending_steers, cx).into_any_element());
-    // The steer-or-interrupt choice for the draft still sitting in the
-    // field. It paints only while the turn runs; a turn that ends with it
-    // open leaves a stale flag the next busy Enter reuses harmlessly,
-    // because both picks re-read the live draft and state.
-    let send_choice =
-        (workspace.send_choice_open && sending).then(|| render_send_choice(cx).into_any_element());
+    // A choice belongs to the current busy text draft. Finishing the turn,
+    // clearing the draft, or adding an attachment invalidates it.
+    workspace.send_choice_open &=
+        busy_enter_opens_choice(sending, &workspace.vm().composer_draft, has_attachments);
+    let send_choice = workspace
+        .send_choice_open
+        .then(|| render_send_choice(cx).into_any_element());
     let compacting = workspace.vm().compacting;
     let has_pending_ask = workspace.vm().pending_ask.is_some();
     if workspace.composer_busy != sending {

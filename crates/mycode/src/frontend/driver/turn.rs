@@ -197,7 +197,7 @@ impl FrontendDriver {
     /// draft it is a plain stop.
     ///
     /// The draft leaves the composer and waits in
-    /// `FrontendDriver::held_interrupt` until the turn is gone: a send
+    /// `FrontendDriver::held_interrupts` until the turn is gone: a send
     /// dispatched beside the cancel can hand that cancel the turn it just
     /// started, which is how a message went out while the model stopped.
     ///
@@ -234,16 +234,29 @@ impl FrontendDriver {
 
     /// Stops the running turn for an interrupt, or once its automatic
     /// compaction ends when it is summarizing now. `send` waits in
-    /// `FrontendDriver::held_interrupt` until the turn is gone.
+    /// `FrontendDriver::held_interrupts` until the turn is gone.
     fn stop_turn_with(&mut self, send: Option<String>, out: &mut Vec<Effect>) {
         let Some(session_id) = self.open_session_id() else {
             return;
         };
-        let held = HeldInterrupt { session_id, send };
         if !self.vm.auto_compacting {
             self.cancel_turn(out);
         }
-        self.held_interrupt = Some(held);
+        let held = self
+            .held_interrupts
+            .entry(session_id)
+            .or_insert(HeldInterrupt { send: None });
+        // Repeated interrupts are still waiting for the same terminal
+        // event. Preserve every accepted draft in order; an empty stop
+        // must not discard text that already left the composer.
+        if let Some(text) = send {
+            if let Some(previous) = held.send.as_mut() {
+                previous.push_str("\n\n");
+                previous.push_str(&text);
+            } else {
+                held.send = Some(text);
+            }
+        }
     }
 
     /// Sends the draft held by an interrupt now that its turn is gone.
@@ -340,7 +353,6 @@ impl FrontendDriver {
         texts: Vec<String>,
         out: &mut Vec<Effect>,
     ) {
-        self.act(FrontendAction::SteersReturned(texts.clone()), out);
         if self.open_session_id().as_deref() != Some(session_id) {
             self.act(
                 FrontendAction::SteersParked {
@@ -351,6 +363,9 @@ impl FrontendDriver {
             );
             return;
         }
+        // The pending strip belongs to the visible session. An unread
+        // background steer can have exactly the same text as one here.
+        self.act(FrontendAction::SteersReturned(texts.clone()), out);
         let texts: Vec<String> = texts
             .into_iter()
             .filter(|text| !text.trim().is_empty())

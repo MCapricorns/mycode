@@ -548,6 +548,13 @@ mod tests {
         );
         let path = home.root().join("settings.json");
         std::fs::write(&path, document).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            // Reproduce the external writer's permissions even when the test
+            // process inherits a restrictive umask (for example 0077).
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
 
         let (settings, repair) = read_app_settings_with_repair(&home).unwrap();
         // The binding survives: without the salvage every plugin write
