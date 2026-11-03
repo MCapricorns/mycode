@@ -1,7 +1,7 @@
-//! Paper, ink, and red accents for the MYCode workspace.
+//! Cozy paper-craft palette and warm pixel-inspired tokens for the MYCode workspace.
 //!
-//! The palette takes Cindy's paper and charcoal surfaces as a reference,
-//! with quieter reading ink and accessible red actions in both modes.
+//! Layered paper surfaces, warm charcoal and cocoa inks, and soft coral-vermilion
+//! stamps keep both appearances approachable and legible without harsh edges.
 //! Every surface is opaque so its contrast is independent of the desktop.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
@@ -239,49 +239,49 @@ pub fn semantic_tokens(light: bool) -> SemanticTokens {
 
 fn dark_spec() -> Spec {
     Spec {
-        bg: 0x141316,
-        surface: 0x1B1A1E,
-        card: 0x242328,
-        hover: 0x302E33,
-        ink: 0xF3EDE2,
-        dim: 0xB5B0AC,
-        faint: 0xA39D99,
-        reply: 0xE9E3D9,
-        thinking: 0xB5B0AC,
-        line: 0x302E33,
-        line_strong: 0x777078,
-        accent: 0xF46A6C,
-        accent_ink: 0x1E1115,
-        tint: 0x392326,
-        green: 0x82C6A4,
-        amber: 0xE8BD77,
-        red: 0xF38B94,
-        info: 0xA9C6E8,
-        violet: 0xB5B0AC,
+        bg: 0x1A181D,
+        surface: 0x221F26,
+        card: 0x2B2730,
+        hover: 0x36313D,
+        ink: 0xF6F0E6,
+        dim: 0xBCB4AC,
+        faint: 0xA69E97,
+        reply: 0xECE5DA,
+        thinking: 0xBCB4AC,
+        line: 0x38333F,
+        line_strong: 0x827A84,
+        accent: 0xF2786D,
+        accent_ink: 0x1E1214,
+        tint: 0x3E2628,
+        green: 0x86CCA8,
+        amber: 0xEBC27D,
+        red: 0xF49097,
+        info: 0xADC9EA,
+        violet: 0xCBB2E8,
     }
 }
 
 fn light_spec() -> Spec {
     Spec {
-        bg: 0xFAF6EE,
-        surface: 0xF3EDE2,
-        card: 0xFFFCF7,
-        hover: 0xEAE2D6,
-        ink: 0x14131B,
-        dim: 0x5D5B66,
-        faint: 0x716A6B,
-        reply: 0x29262B,
-        thinking: 0x666068,
-        line: 0xE3DCCF,
-        line_strong: 0x8C8279,
-        accent: 0xC72E38,
-        accent_ink: 0xFFFCF7,
-        tint: 0xF9E4E1,
-        green: 0x256C50,
-        amber: 0x85560F,
+        bg: 0xFBF7F0,
+        surface: 0xF3ECE0,
+        card: 0xFFFDF9,
+        hover: 0xEAE0D2,
+        ink: 0x1E1B22,
+        dim: 0x5B5662,
+        faint: 0x6F686A,
+        reply: 0x2B2730,
+        thinking: 0x645E68,
+        line: 0xE2D9CA,
+        line_strong: 0x8A7F75,
+        accent: 0xC8373D,
+        accent_ink: 0xFFFDF9,
+        tint: 0xFBE6E3,
+        green: 0x246B4F,
+        amber: 0x84550E,
         red: 0xA62642,
-        info: 0x365E8A,
-        violet: 0x666068,
+        info: 0x355D88,
+        violet: 0x6B4C8C,
     }
 }
 
@@ -539,13 +539,13 @@ mod tests {
     fn semantic_tokens_keep_neutral_canvas_and_distinct_accessible_status_colors() {
         let dark = super::semantic_tokens(false);
         let light = super::semantic_tokens(true);
-        assert_eq!(dark.bg, super::hex(0x141316));
-        assert_eq!(dark.surface_1, super::hex(0x1B1A1E));
-        assert_eq!(dark.surface_2, super::hex(0x242328));
-        assert_eq!(dark.surface_3, super::hex(0x302E33));
-        assert_eq!(light.bg, super::hex(0xFAF6EE));
-        assert_eq!(light.surface_1, super::hex(0xF3EDE2));
-        assert_eq!(light.surface_2, super::hex(0xFFFCF7));
+        assert_eq!(dark.bg, super::hex(0x1A181D));
+        assert_eq!(dark.surface_1, super::hex(0x221F26));
+        assert_eq!(dark.surface_2, super::hex(0x2B2730));
+        assert_eq!(dark.surface_3, super::hex(0x36313D));
+        assert_eq!(light.bg, super::hex(0xFBF7F0));
+        assert_eq!(light.surface_1, super::hex(0xF3ECE0));
+        assert_eq!(light.surface_2, super::hex(0xFFFDF9));
 
         assert_ne!(
             dark.warning, dark.accent,

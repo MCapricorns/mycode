@@ -251,8 +251,12 @@ fn parse_server(
     ) || (endpoint.is_some() && command.is_none());
     if is_http {
         let endpoint = endpoint.ok_or_else(|| format!("server '{id}' is HTTP but has no url"))?;
-        if !crate::config::settings::is_https_url(&endpoint) {
-            return Err(format!("server '{id}' url must be a valid https:// URL"));
+        if !crate::config::settings::is_https_url(&endpoint)
+            && !crate::config::settings::is_local_http_url(&endpoint)
+        {
+            return Err(format!(
+                "server '{id}' url must be a valid https:// URL or a loopback http:// URL"
+            ));
         }
         return Ok(ImportedMcpServer {
             server: McpServerSettings {
@@ -386,7 +390,53 @@ fn sanitize_mcp_id(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_mcp_import;
+    use super::{parse_mcp_import, parse_mcp_library};
+
+    #[test]
+    fn magpie_loopback_hub_is_accepted_by_library_and_import() {
+        for origin in [
+            "http://127.0.0.1:3425",
+            "http://localhost:3425",
+            "http://[::1]:3425",
+        ] {
+            let endpoint = format!("{origin}/mcp/magpie/hub/mycode?key=fixture");
+            let document = serde_json::json!({
+                "mcpServers": { "magpie": { "url": endpoint } }
+            })
+            .to_string();
+            for parse in [parse_mcp_library, parse_mcp_import] {
+                let servers = parse(&document).expect("local magpie hub");
+                assert_eq!(servers.len(), 1);
+                let server = &servers[0].server;
+                assert_eq!(server.id, "magpie");
+                assert!(server.enabled);
+                assert_eq!(server.transport, "http");
+                assert_eq!(server.endpoint.as_deref(), Some(endpoint.as_str()));
+            }
+        }
+    }
+
+    #[test]
+    fn http_mcp_rejects_remote_hosts_and_malformed_loopback_urls() {
+        for endpoint in [
+            "http://mcp.example.com/mcp",
+            "http://192.168.1.5:3425/mcp",
+            "http://localhost.example.com/mcp",
+            "http://127.0.0.1@mcp.example.com/mcp",
+            "http://127.0.0.1:0/mcp",
+            "http://127.0.0.1:99999/mcp",
+            "http://[::1]unexpected:3425/mcp",
+            "http://127.0.0.1/mcp\ninjected",
+        ] {
+            let document = serde_json::json!({
+                "mcpServers": { "magpie": { "url": endpoint } }
+            })
+            .to_string();
+            for parse in [parse_mcp_library, parse_mcp_import] {
+                assert!(parse(&document).is_err(), "{endpoint}");
+            }
+        }
+    }
 
     #[test]
     fn import_rejects_shell_commands_and_malformed_https_urls() {

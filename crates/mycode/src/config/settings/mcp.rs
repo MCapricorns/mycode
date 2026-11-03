@@ -51,8 +51,8 @@ pub(crate) fn is_header_name(key: &str) -> bool {
 /// One configured MCP server binding.
 ///
 /// Stdio servers spawn a local command; HTTP servers speak the MCP
-/// Streamable-HTTP wire against one https endpoint. The optional API key is
-/// stored in the secret store under `mcp-<id>`.
+/// Streamable-HTTP wire against an HTTPS endpoint or a loopback HTTP gateway.
+/// The optional API key is stored in the secret store under `mcp-<id>`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServerSettings {
@@ -73,7 +73,7 @@ pub struct McpServerSettings {
     /// belong in the key vault, not here; this is for switches and paths.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    /// HTTP: full https endpoint URL.
+    /// HTTP: full HTTPS endpoint URL, or HTTP on loopback for local gateways.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
     /// HTTP: credential header style, `bearer` (default) or `x-api-key`.

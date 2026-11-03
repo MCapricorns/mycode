@@ -60,6 +60,7 @@ pub(super) fn settings_card(
         .p(crate::ui::skin::space(6))
         .rounded(crate::ui::skin::radius_card())
         .border_1()
+        .border_b_2()
         .border_color(crate::ui::skin::glass_border(theme))
         .bg(crate::ui::skin::frost_card(theme))
         .test_support()
@@ -218,8 +219,9 @@ pub(super) fn choice_chip(
         .justify_center()
         .rounded(crate::ui::skin::radius_control())
         .border_1()
+        .when(selected, |this| this.border_b_2())
         .border_color(if selected {
-            theme.input
+            theme.border
         } else {
             theme.transparent
         })
@@ -253,7 +255,8 @@ pub(super) fn dropdown_button(id: &str, current: &str, theme: &Theme) -> Statefu
         .gap_2()
         .rounded(crate::ui::skin::radius_control())
         .border_1()
-        .border_color(theme.input)
+        .border_b_2()
+        .border_color(theme.border)
         .bg(theme.secondary)
         .cursor_pointer()
         .hover(|this| this.bg(theme.secondary_hover))

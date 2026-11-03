@@ -301,9 +301,9 @@ fn status_dot(
 ) -> impl IntoElement {
     let color = tool_dot_color(failed, unfinished, turn_running, theme);
     div()
-        .size(px(7.))
+        .size(px(8.))
         .flex_shrink_0()
-        .rounded_full()
+        .rounded(px(3.))
         .bg(color)
         .border_1()
         .border_color(color.opacity(0.35))

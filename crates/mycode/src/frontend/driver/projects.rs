@@ -31,11 +31,12 @@ impl FrontendDriver {
             .is_none_or(|(previous, _)| *previous != kind);
         self.mention_query = Some((kind, fragment));
         if kind == MentionKind::Command {
-            // Reload skills so `/` lists them even before Settings was
-            // opened — once when the menu opens, not on every keystroke:
-            // discovery walks the skill directories on disk. The reducer
-            // rebuilds the menu, including enabled MCP servers.
+            // Reload skills and the MCP Library so `/` lists both even
+            // before Settings was opened — once when the menu opens, not
+            // on every keystroke: discovery walks disk. The reducer
+            // rebuilds the menu from the refreshed catalogs.
             if menu_opened {
+                self.reload_mcp_library(&mut Vec::new());
                 self.refresh_skills(&mut Vec::new());
             }
             return;

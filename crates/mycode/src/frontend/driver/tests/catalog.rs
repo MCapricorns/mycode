@@ -121,6 +121,48 @@ fn poll_until(
 }
 
 #[test]
+fn settings_reload_refreshes_library_without_opening_settings() {
+    let (mut driver, root) = scratch_driver("library-refresh");
+    let mut out = Vec::new();
+    driver.on_reply(
+        ReplyScope::Global,
+        loaded(AppSettings::default(), 0),
+        &mut out,
+    );
+    assert!(driver.vm.skills.is_empty());
+    assert!(driver.vm.mcp_library.is_empty());
+
+    let skill_dir = root.join("skills").join("sample");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(skill_dir.join("SKILL.md"), "# Sample skill\n").unwrap();
+    std::fs::write(
+        root.join("mcp.json"),
+        r#"{"mcpServers":{"magpie":{"url":"http://localhost:3425/mcp/magpie/hub/mycode"}}}"#,
+    )
+    .unwrap();
+    driver.on_reply(
+        ReplyScope::Global,
+        loaded(AppSettings::default(), 0),
+        &mut out,
+    );
+    assert_eq!(driver.vm.skills.len(), 1);
+    assert_eq!(driver.vm.skills[0].slug, "sample");
+    assert_eq!(driver.vm.mcp_library.len(), 1);
+    assert_eq!(driver.vm.mcp_library[0].id, "magpie");
+    assert!(driver.vm.mcp_library_error.is_none());
+
+    std::fs::remove_file(skill_dir.join("SKILL.md")).unwrap();
+    driver.on_reply(
+        ReplyScope::Global,
+        loaded(AppSettings::default(), 0),
+        &mut out,
+    );
+    assert!(driver.vm.skills.is_empty(), "removed skills must disappear");
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn catalog_first_start_refresh_reloads_binding_without_restart() {
     let gateway = GatewayFixture::start();
     let (mut driver, root) = scratch_driver("catalog-first-start");

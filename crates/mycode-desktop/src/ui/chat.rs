@@ -92,9 +92,11 @@ fn attachment_chip(
         .gap(px(5.))
         .min_w_0()
         .max_w(px(240.))
-        .h(px(24.))
-        .px(px(8.))
-        .rounded(px(6.))
+        .h(px(26.))
+        .px(px(9.))
+        .rounded(super::skin::radius_sm())
+        .border_1()
+        .border_color(theme.border.opacity(0.75))
         .bg(theme.secondary)
         .text_xs()
         .child(
@@ -373,11 +375,9 @@ pub(super) fn render_chat(
                             .child(
                                 probe.child(
                                     transcript::transcript_stack()
-                                        // Breathing room under the newest
-                                        // row so the latest reply or
-                                        // thinking trace does not sit flush
-                                        // against the composer.
-                                        .pb(px(40.))
+                                        // Keep the newest row close to the composer
+                                        // with one spacing step between the surfaces.
+                                        .pb(super::skin::space(3))
                                         .when(show_welcome, |this| {
                                             this.child(welcome::render_welcome(workspace, cx))
                                         })
@@ -526,10 +526,11 @@ fn render_tool_run(
         let mut column = div()
             .w_full()
             .min_w_0()
-            .rounded(px(14.))
+            .rounded(px(16.))
             .border_1()
-            .border_color(theme.border.opacity(0.65))
-            .bg(theme.muted.opacity(0.35))
+            .border_b_2()
+            .border_color(theme.border.opacity(0.75))
+            .bg(theme.muted.opacity(0.45))
             .px_3()
             .py_2()
             .flex()
@@ -559,10 +560,11 @@ fn render_tool_run(
     div()
         .w_full()
         .min_w_0()
-        .rounded(px(14.))
+        .rounded(px(16.))
         .border_1()
-        .border_color(theme.border.opacity(0.65))
-        .bg(theme.muted.opacity(0.35))
+        .border_b_2()
+        .border_color(theme.border.opacity(0.75))
+        .bg(theme.muted.opacity(0.45))
         .px_3()
         .py_2()
         .flex()

@@ -285,6 +285,7 @@ fn ask_choice_row(
         .py(px(6.))
         .rounded(skin::radius_sm())
         .border_1()
+        .border_b_2()
         .border_color(border)
         .bg(fill)
         .text_color(theme.foreground)

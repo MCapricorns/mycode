@@ -233,6 +233,7 @@ fn main_pane(
             .mb(px(8.))
             .rounded(skin::radius_card())
             .border_1()
+            .border_b_2()
             .border_color(cx.theme().border)
             .overflow_hidden()
             .flex()
@@ -279,7 +280,7 @@ fn render_toasts(
         .gap_2()
         .children(toasts.iter().map(|toast| {
             let toast_id = toast.id;
-            let (strip, icon) = match toast.kind {
+            let (icon_color, icon) = match toast.kind {
                 ToastKind::Error => (theme.danger, IconName::CircleAlert),
                 ToastKind::Warning => (theme.warning, IconName::TriangleAlert),
                 ToastKind::Info => (theme.info, IconName::Info),
@@ -292,6 +293,7 @@ fn render_toasts(
                 .max_w_full()
                 .rounded(skin::radius_card())
                 .border_1()
+                .border_b_2()
                 .border_color(skin::border_strong(theme))
                 .bg(skin::toast_fill(theme))
                 .shadow(skin::elevation_shadow(theme))
@@ -300,7 +302,6 @@ fn render_toasts(
                 .flex()
                 .flex_row()
                 .items_stretch()
-                .child(div().w(px(4.)).flex_shrink_0().bg(strip))
                 .child(
                     div()
                         .flex_1()
@@ -315,7 +316,7 @@ fn render_toasts(
                             div()
                                 .mt(px(2.))
                                 .flex_shrink_0()
-                                .child(Icon::new(icon).with_size(px(15.)).text_color(strip)),
+                                .child(Icon::new(icon).with_size(px(15.)).text_color(icon_color)),
                         )
                         .child(
                             div()
@@ -354,9 +355,14 @@ pub(super) fn compact_count(count: u64) -> String {
     crate::view_model::compact_count(count)
 }
 
-/// A 7px status lamp.
+/// Soft pixel-stamp status lamp.
 pub(super) fn lamp(color: gpui_kit::Hsla) -> impl IntoElement {
-    div().size(px(7.)).rounded_full().bg(color)
+    div()
+        .size(px(8.))
+        .rounded(px(3.))
+        .bg(color)
+        .border_1()
+        .border_color(color.opacity(0.35))
 }
 
 pub(super) fn icon_button(
@@ -414,8 +420,8 @@ pub(super) fn hover_delete_button(
         .flex()
         .items_center()
         .justify_center()
-        .size(px(20.))
-        .rounded(px(2.))
+        .size(px(22.))
+        .rounded(skin::radius_xs())
         .flex_shrink_0()
         .opacity(0.0)
         .group_hover(group, |this| this.opacity(1.0))

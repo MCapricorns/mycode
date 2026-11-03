@@ -236,9 +236,17 @@ impl FrontendDriver {
                         out,
                     );
                 }
-                // magpie's Library servers come from its own file; the
-                // settings document never carries them.
+                // Library files are independent of settings.json. Refresh
+                // both catalogs on startup and when the binding reloads.
                 self.reload_mcp_library(out);
+                self.refresh_skills(out);
+                if self.vm.view == crate::frontend::view_model::MainView::Settings
+                    && self.vm.settings_section
+                        == crate::frontend::view_model::SettingsSection::Agents
+                {
+                    self.invalidate_agent_roles();
+                    self.ensure_agent_roles();
+                }
                 self.prompt_magpie_install(out);
                 self.toast_applied_update(out);
             }

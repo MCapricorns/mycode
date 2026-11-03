@@ -17,7 +17,6 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
-use gpui_kit::component::progress::ProgressCircle;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -239,15 +238,6 @@ pub(super) fn render_composer(
                 .flex()
                 .flex_col()
                 .gap_2()
-                .when_some(context_meter(workspace), |column, meter| {
-                    column.child(
-                        div()
-                            .id("composer-context")
-                            .flex()
-                            .justify_end()
-                            .child(composer_meter_chip(meter, theme)),
-                    )
-                })
                 .when_some(steer_panel, |this, steers| this.child(steers))
                 .when_some(compact_card, |this, card| this.child(card))
                 .when_some(ask_card, |this, card| this.child(card))
@@ -262,10 +252,11 @@ pub(super) fn render_composer(
                         .px(skin::space(3))
                         .py(skin::space(2))
                         .w_full()
-                        .min_h(px(56.))
-                        .rounded(px(8.))
+                        .min_h(px(58.))
+                        .rounded(px(14.))
                         .border_1()
-                        .border_color(skin::border_strong(theme))
+                        .border_b_2()
+                        .border_color(skin::border_subtle(theme))
                         .bg(skin::popover(theme))
                         // Dropping a picture or a code file attaches it to
                         // the next prompt; folders still bind the project.
@@ -331,15 +322,24 @@ pub(super) fn render_composer(
                                 ))
                                 .child(model_chip)
                                 .when_some(thinking_chip, |this, chip| this.child(chip))
-                                .child(div().flex_1().min_w(px(8.)))
-                                .child(composer_palette_hint(cx))
-                                // While a turn runs the arrow stays: it
-                                // steers the draft in; the stop sits beside
-                                // it.
-                                .when(sending && has_draft, |this| {
-                                    this.child(composer_steer_button(cx))
-                                })
-                                .child(composer_round_button(sending, can_send, cx)),
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .flex_shrink_0()
+                                        .ml_auto()
+                                        .gap(px(6.))
+                                        .child(composer_palette_hint(cx))
+                                        .when_some(context_meter(workspace), |row, meter| {
+                                            row.child(composer_meter_chip(meter, theme))
+                                        })
+                                        // Keep the shortcut, meter and actions together when
+                                        // the toolbar wraps in a narrow chat pane.
+                                        .when(sending && has_draft, |this| {
+                                            this.child(composer_steer_button(cx))
+                                        })
+                                        .child(composer_round_button(sending, can_send, cx)),
+                                ),
                         ),
                 ),
         )
@@ -483,10 +483,20 @@ fn composer_pill_chip(
         .gap(px(5.))
         .min_w_0()
         .max_w(chip.max_w)
-        .px(px(9.))
+        .px(px(10.))
         .h(px(26.))
-        .rounded(px(6.))
-        .when(chip.open, |this| this.bg(theme.secondary_hover))
+        .rounded(skin::radius_sm())
+        .border_1()
+        .border_color(if chip.open {
+            theme.primary.opacity(0.55)
+        } else {
+            theme.border.opacity(0.75)
+        })
+        .bg(if chip.open {
+            theme.secondary_hover
+        } else {
+            theme.sidebar.opacity(0.55)
+        })
         .text_xs()
         .cursor_pointer()
         .text_color(ink)
@@ -513,9 +523,12 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .px(px(7.))
-        .h(px(24.))
-        .rounded(px(6.))
+        .px(px(8.))
+        .h(px(26.))
+        .rounded(skin::radius_sm())
+        .border_1()
+        .border_color(theme.border.opacity(0.65))
+        .bg(theme.sidebar.opacity(0.45))
         .text_xs()
         .text_color(theme.muted_foreground)
         .cursor_pointer()
@@ -740,9 +753,12 @@ fn composer_meter_chip(
         .gap(skin::space(1))
         .min_w_0()
         .max_w(px(220.))
-        .px(skin::space(2))
+        .px(px(9.))
         .h(px(26.))
-        .rounded(px(6.))
+        .rounded(skin::radius_sm())
+        .border_1()
+        .border_color(theme.border.opacity(0.65))
+        .bg(theme.sidebar.opacity(0.45))
         .text_xs()
         // The resting label is the window ratio alone; the cache figures
         // and the turn's in/out ride the hover tooltip instead of crowding
@@ -752,7 +768,7 @@ fn composer_meter_chip(
             this.tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
         })
         .when_some(meter.parts.remaining_percent, |row, percent| {
-            row.child(cache_ring(percent, theme))
+            row.child(context_pips(percent, theme))
         })
         .when(!meter.parts.ratio.is_empty(), |row| {
             row.child(
@@ -770,27 +786,51 @@ fn used_percent(remaining_percent: u64) -> u64 {
     100 - remaining_percent.min(100)
 }
 
-/// A 16px ring whose arc is the share of the model's context window in use.
-///
-/// The ring fills as the latest prompt grows, so it matches the `used /
-/// window` ratio beside it; a free-budget ring read backwards and looked
-/// nearly full at 20% used. The cache-hit figure stays on the hover detail.
-fn cache_ring(
+/// Number of pixel pips in the context gauge.
+const CONTEXT_PIP_COUNT: u64 = 5;
+
+/// How many pixel pips light up for `remaining_percent` of the context window.
+#[must_use]
+fn lit_context_pips(remaining_percent: u64) -> usize {
+    let used = used_percent(remaining_percent);
+    if used == 0 {
+        0
+    } else {
+        ((used * CONTEXT_PIP_COUNT).div_ceil(100) as usize).clamp(1, CONTEXT_PIP_COUNT as usize)
+    }
+}
+
+/// Soft pixel-block context gauge: five rounded pips that light up as the
+/// prompt grows, replacing the circular progress ring placeholder.
+fn context_pips(
     remaining_percent: u64,
     theme: &gpui_kit::component::theme::Theme,
 ) -> impl IntoElement {
+    let lit = lit_context_pips(remaining_percent);
+    let active_color = if lit >= CONTEXT_PIP_COUNT as usize {
+        theme.warning
+    } else {
+        theme.primary
+    };
+    let empty_color = theme.border;
     div()
-        .id("composer-cache-ring")
+        .id("composer-context-pips")
         .flex_shrink_0()
-        .size(skin::space(4))
-        .child(
-            // The kit sizes the ring in rems; fill the fixed slot so the L
-            // and XL interface scales do not push it into the label.
-            ProgressCircle::new("composer-cache-ring-progress")
-                .value(used_percent(remaining_percent) as f32)
-                .color(theme.primary)
-                .size_full(),
-        )
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(2.))
+        .children((0..CONTEXT_PIP_COUNT as usize).map(move |index| {
+            div()
+                .w(px(4.))
+                .h(px(10.))
+                .rounded(px(2.))
+                .bg(if index < lit {
+                    active_color
+                } else {
+                    empty_color
+                })
+        }))
 }
 
 /// The chip keeps the prompt/window ratio on screen; `detail` carries the
