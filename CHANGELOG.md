@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.42] - 2026-11-03
+
 ### Added
 
 - 增加 Ubuntu 24.04 x64 的 CI 编译、测试、桌面布局与 Clippy 检查，并补齐 Linux 测试窗口控制；Linux 仅用于开发和视觉验证，不发布安装包。
@@ -669,7 +671,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.41...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.42...HEAD
+[0.12.42]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.42
 [0.12.41]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.41
 [0.12.40]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.40
 [0.12.39]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.39
