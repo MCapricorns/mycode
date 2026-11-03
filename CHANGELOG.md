@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.38] - 2026-11-03
+
 ### Fixed
 
 - 发送菜单按当前回合和附件状态重新判断 Enter 操作，避免回合结束后残留选项吞掉发送；打断发送的附件提示覆盖快捷键与菜单入口。
@@ -598,7 +600,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.37...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.38...HEAD
+[0.12.38]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.38
 [0.12.37]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.37
 [0.12.36]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.36
 [0.12.35]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.35
