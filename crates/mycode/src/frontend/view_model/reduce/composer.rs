@@ -5,7 +5,6 @@
 use super::super::chat::{
     COMPOSER_COMMANDS, ComposerMention, MentionGroup, MentionItem, MentionKind,
 };
-use super::super::projects::has_open_folder;
 use super::super::settings::SkillEntry;
 use super::super::state::WorkspaceState;
 
@@ -14,10 +13,8 @@ use super::super::state::WorkspaceState;
 pub enum ComposerSubmit {
     /// An open session can take the text.
     Send,
-    /// No session yet, and a folder is open. Create one, then send `text`.
+    /// No session yet. Create one, then send `text`.
     StartTask(String),
-    /// A new task needs an open folder.
-    NeedFolder,
     /// Nothing to send.
     Ignore,
 }
@@ -32,11 +29,7 @@ pub fn composer_submit(state: &WorkspaceState, draft: &str) -> ComposerSubmit {
     if draft.trim().is_empty() {
         return ComposerSubmit::Ignore;
     }
-    if has_open_folder(state) {
-        ComposerSubmit::StartTask(draft.to_owned())
-    } else {
-        ComposerSubmit::NeedFolder
-    }
+    ComposerSubmit::StartTask(draft.to_owned())
 }
 
 /// How many slash rows the menu keeps. Commands and matching skills stay;

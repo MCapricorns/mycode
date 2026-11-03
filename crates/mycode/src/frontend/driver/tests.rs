@@ -848,15 +848,19 @@ fn attachments_alone_start_a_task_from_the_welcome_desk() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// With no folder open the welcome desk cannot start a task, so the
-/// attachments stay with the user.
+/// With no folder open the welcome desk still starts a default chatbox
+/// session and takes the attachments along.
 #[test]
-fn a_welcome_submit_without_a_folder_returns_attachments() {
+fn a_welcome_submit_without_a_folder_starts_a_default_session() {
     let (mut driver, root) = scratch_driver("attach-nofolder");
     let mut out = Vec::new();
     let returned = driver.submit_with("", code_attachment(), &mut out);
-    assert!(returned.is_some_and(|attachments| !attachments.is_empty()));
-    assert!(driver.vm.pending_welcome_send.is_none());
+    assert!(returned.is_none());
+    assert_eq!(
+        driver.vm.pending_welcome_send.as_deref(),
+        Some("[file] main.rs")
+    );
+    assert!(!driver.welcome_attachments.is_empty());
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }

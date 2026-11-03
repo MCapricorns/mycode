@@ -420,17 +420,6 @@ impl FrontendDriver {
                 }
                 None
             }
-            crate::frontend::view_model::ComposerSubmit::NeedFolder => {
-                self.toast(
-                    crate::frontend::i18n::t(
-                        "Open a folder to get started.",
-                        "打开一个目录即可开始。",
-                    ),
-                    ToastKind::Info,
-                    out,
-                );
-                Some(attachments)
-            }
             crate::frontend::view_model::ComposerSubmit::Send
             | crate::frontend::view_model::ComposerSubmit::Ignore => Some(attachments),
         }

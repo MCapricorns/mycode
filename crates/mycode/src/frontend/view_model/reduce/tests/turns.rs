@@ -325,17 +325,20 @@ fn welcome_enter_holds_the_draft_until_the_new_session_opens() {
 }
 
 #[test]
-fn welcome_enter_without_a_folder_does_not_start_a_task() {
+fn welcome_enter_without_a_folder_starts_a_default_task() {
     let mut state = WorkspaceState {
         composer_draft: "hello".to_owned(),
         ..WorkspaceState::default()
     };
-    assert_eq!(composer_submit(&state, "hello"), ComposerSubmit::NeedFolder);
+    assert_eq!(
+        composer_submit(&state, "hello"),
+        ComposerSubmit::StartTask("hello".to_owned())
+    );
     reduce(
         &mut state,
         FrontendAction::WelcomeSendHeld("hello".to_owned()),
     );
-    assert!(state.pending_welcome_send.is_none());
+    assert_eq!(state.pending_welcome_send.as_deref(), Some("hello"));
     assert_eq!(state.composer_draft, "hello");
     let open = WorkspaceState {
         project_dir: Some("/tmp/app".to_owned()),

@@ -125,18 +125,7 @@ impl FrontendDriver {
     /// The command palette accepts the same tokens as the `/` menu.
     pub fn run_slash_command(&mut self, insert: &str, out: &mut Vec<Effect>) {
         if insert == "/new" {
-            if !crate::frontend::view_model::has_open_folder(&self.vm) {
-                self.toast(
-                    crate::frontend::i18n::t(
-                        "Open a folder to get started.",
-                        "打开一个目录即可开始。",
-                    ),
-                    ToastKind::Info,
-                    out,
-                );
-            } else {
-                self.new_session(out);
-            }
+            self.new_session(out);
         } else if insert == "/settings" {
             self.show_main_view(MainView::Settings, out);
         } else if insert == "/compact" {

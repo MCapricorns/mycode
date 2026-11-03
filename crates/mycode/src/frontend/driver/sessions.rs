@@ -54,14 +54,10 @@ impl FrontendDriver {
         self.set_thinking_collapsed(!self.vm.thinking_collapsed, out);
     }
 
-    /// Starts a fresh task (the New-task affordance). `false` when no folder
-    /// is open — the only case that drops a held welcome draft.
+    /// Starts a fresh conversation (the New-conversation affordance). When no
+    /// project folder is selected, the session runs in the default scratch
+    /// workspace so the window can be used as a chatbox immediately.
     pub fn new_session(&mut self, out: &mut Vec<Effect>) -> bool {
-        // A session needs a folder. The empty desk and sidebar hide this
-        // action until one is open; the slash command uses the same gate.
-        if !crate::frontend::view_model::has_open_folder(&self.vm) {
-            return false;
-        }
         // The welcome desk stays up while the open chat has no messages.
         // New task is already that chat. Another CreateSession lists a
         // second empty row.
@@ -73,9 +69,7 @@ impl FrontendDriver {
         self.pending_open = None;
         // New sessions inherit the active project so the sidebar grouping
         // and the tool working directory follow the project switcher.
-        if self.vm.project_dir.is_some() {
-            self.pending_project = self.vm.project_dir.clone();
-        }
+        self.pending_project = self.vm.project_dir.clone();
         self.dispatch(BridgeCommand::CreateSession {
             project: self.pending_project.clone(),
         });
