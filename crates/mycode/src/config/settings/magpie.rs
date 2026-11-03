@@ -142,6 +142,22 @@ mod tests {
     }
 
     #[test]
+    fn invalid_gateway_urls_are_rejected_before_they_are_persisted() {
+        for base_url in [
+            "http://[::1]unexpected:3425/v1",
+            "http://127.0.0.1:99999/v1",
+            "http://127.0.0.1:0/v1",
+            "https://gateway.example:99999/v1",
+            "https://[broken/v1",
+            "https://gateway.example/with space",
+        ] {
+            let mut magpie = active();
+            magpie.base_url = base_url.to_owned();
+            assert!(settings(magpie).validate_magpie().is_err(), "{base_url}");
+        }
+    }
+
+    #[test]
     fn an_enabled_binding_needs_an_address_key_and_model() {
         let mut magpie = active();
         magpie.api_key.clear();

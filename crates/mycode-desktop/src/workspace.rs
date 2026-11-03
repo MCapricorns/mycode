@@ -333,6 +333,10 @@ impl Workspace {
             let mut not_before = Instant::now();
             'outer: while wake_rx.recv().await.is_some() {
                 loop {
+                    // One driver poll drains every queued reply/event. Coalesce
+                    // their wake signals before polling so a streamed burst
+                    // cannot leave thousands of redundant UI updates behind.
+                    while wake_rx.try_recv().is_ok() {}
                     if this
                         .update(cx, |workspace, cx| workspace.drain_driver(&mut buffer, cx))
                         .is_err()
@@ -429,6 +433,7 @@ impl Workspace {
                 }
                 Effect::AskReset => {
                     self.ask_inputs.clear();
+                    self.ask_text_cleared.clear();
                 }
                 Effect::AppearanceTheme(theme) => {
                     self.capture_appearance_scroll();

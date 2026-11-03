@@ -61,8 +61,6 @@ pub(super) fn render_update_dialog(
         ),
         _ => "",
     };
-    let checking = matches!(vm.update, UpdateState::Checking);
-    let downloading = matches!(vm.update, UpdateState::Downloading { .. });
     type DialogAction = Box<dyn Fn(&mut Workspace, &mut Context<Workspace>)>;
     let primary = match &vm.update {
         UpdateState::Available { .. } => Some((
@@ -171,15 +169,11 @@ pub(super) fn render_update_dialog(
                                 .child(t("Later", "稍后")),
                         )
                         .when_some(primary, |this, (icon, label, action)| {
-                            let busy = checking || downloading;
                             this.child(
                                 super::skin::glass_button("update-dialog-primary", true, theme)
-                                    .when(busy, |this| this.opacity(0.5).cursor_default())
-                                    .when(!busy, |this| {
-                                        this.on_click(cx.listener(move |workspace, _, _, cx| {
-                                            action(workspace, cx);
-                                        }))
-                                    })
+                                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                                        action(workspace, cx);
+                                    }))
                                     .child(Icon::new(icon).with_size(px(14.)))
                                     .child(label),
                             )

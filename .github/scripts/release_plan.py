@@ -144,7 +144,7 @@ def choose_release(
             return ReleaseChoice(
                 False, workspace, tag, False, "already tagged release bump"
             )
-        if existing is None:
+        if current not in stable:
             return ReleaseChoice(True, workspace, tag, False, "publish prepared bump")
 
     candidate = current
@@ -504,6 +504,14 @@ def _expect_choice() -> None:
     )
     _expect(prepared.publish and not prepared.bump and prepared.version == "0.7.3", str(prepared))
 
+    reserved = choose_release(
+        "0.7.3",
+        {"v0.7.3": None},
+        BUMP_SUBJECT.format(version="0.7.3"),
+        "a" * 40,
+    )
+    _expect(reserved.publish and reserved.bump and reserved.version == "0.7.4", str(reserved))
+
     already = choose_release(
         "0.7.3",
         {"v0.7.3": "a" * 40},
@@ -747,7 +755,6 @@ def _yaml_job(workflow: str, name: str) -> str:
 
 def _expect_workflow_contract() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    lowered = workflow.lower()
     _expect(".assets[].name" not in workflow, "asset name check remains")
     _expect("release_plan.py" in workflow, "planner is not wired into ci.yml")
     _expect(

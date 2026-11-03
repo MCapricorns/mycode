@@ -464,6 +464,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_empty_http_success_is_a_protocol_error_for_every_adapter() {
+        for kind in [
+            "openai-completions",
+            "openai-responses",
+            "anthropic-messages",
+        ] {
+            let transport = scripted(vec![Ok(b"")]);
+            let cancel = CancellationToken::new();
+            let (sender, mut stream) = crate::core::EventStream::channel(cancel.clone());
+            drive(
+                transport,
+                call("https://empty.example.test/v1/chat/completions"),
+                false,
+                || crate::providers::reducer_for(kind),
+                sender,
+                cancel,
+            )
+            .await;
+            assert!(
+                matches!(
+                    stream.next().await,
+                    Some(StreamEvent::Error(error)) if error.kind() == ProviderErrorKind::Protocol
+                ),
+                "{kind}"
+            );
+            assert!(stream.next().await.is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn a_network_drop_is_retried_until_the_stream_opens() {
         let transport = scripted(vec![
             Err(ProviderError::new(ProviderErrorKind::Unavailable)),

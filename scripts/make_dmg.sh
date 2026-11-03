@@ -2,7 +2,7 @@
 # Packs the built mycode-desktop binary into MYCode.app and a UDZO .dmg.
 #
 # macOS only: needs codesign, hdiutil, and shasum. The macOS job in ci.yml
-# and release.yml calls this after `cargo build --release`; it also works
+# calls this after `cargo build --release`; it also works
 # locally on a Mac the same way:
 #
 #   scripts/make_dmg.sh \
@@ -57,7 +57,21 @@ if [[ ! -f "${icon}" ]]; then
 fi
 
 work="$(mktemp -d)"
-trap 'rm -rf "${work}"' EXIT
+mountpoint="${work}/mount"
+mounted=false
+cleanup() {
+  local status=$?
+  if [[ "${mounted}" == true ]]; then
+    if ! hdiutil detach "${mountpoint}" >/dev/null; then
+      # Never recursively delete a directory while our image is mounted there.
+      echo "could not detach ${mountpoint}; keeping ${work}" >&2
+      return 1
+    fi
+  fi
+  rm -rf "${work}"
+  return "${status}"
+}
+trap cleanup EXIT
 
 stage="${work}/stage"
 app="${stage}/MYCode.app"
@@ -114,9 +128,12 @@ mkdir -p "$(dirname "${output}")"
 size_mb="$(du -sm "${stage}" | awk '{print $1}')"
 scratch="${work}/scratch.dmg"
 hdiutil create -size "$(( size_mb * 2 + 128 ))m" -fs HFS+ -volname "MYCode" -ov "${scratch}"
-hdiutil attach -readwrite -noverify "${scratch}" >/dev/null
-ditto "${stage}" "/Volumes/MYCode"
-hdiutil detach "/Volumes/MYCode" >/dev/null
+mkdir -p "${mountpoint}"
+hdiutil attach -readwrite -noverify -mountpoint "${mountpoint}" "${scratch}" >/dev/null
+mounted=true
+ditto "${stage}" "${mountpoint}"
+hdiutil detach "${mountpoint}" >/dev/null
+mounted=false
 hdiutil convert "${scratch}" -format UDZO -imagekey zlib-level=9 -ov -o "${output}"
 
 hash="$(shasum -a 256 "${output}" | awk '{print $1}')"

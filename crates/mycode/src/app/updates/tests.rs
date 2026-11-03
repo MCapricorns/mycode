@@ -547,3 +547,30 @@ fn unsupported_platforms_have_no_asset() {
     assert_eq!(asset_suffix_for("windows", "x86"), "");
     assert_eq!(asset_suffix_for("freebsd", "x86_64"), "");
 }
+
+#[test]
+fn persisting_a_new_payload_resets_the_previous_retry_budget() {
+    let root = scratch("pending-budget");
+    let home = crate::config::HomeLayout::from_root(root.join("home")).unwrap();
+    let pending_dir = super::pending_dir(&home);
+    std::fs::create_dir_all(&pending_dir).unwrap();
+    let (_, _, _, attempts) = super::pending_paths(&pending_dir, super::ASSET_FAMILY);
+    std::fs::write(&attempts, super::MAX_PENDING_ATTEMPTS.to_string()).unwrap();
+    let stage = root.join("stage");
+    std::fs::create_dir(&stage).unwrap();
+    let binary = stage.join("next");
+    std::fs::write(&binary, b"fresh update").unwrap();
+    let prepared = super::PreparedUpdate {
+        version: "999.0.0".to_owned(),
+        new_binary: binary,
+        stage_dir: stage,
+        binary_sha256: super::sha256_hex(b"fresh update"),
+    };
+    let persisted = super::persist_pending_update(&home, &prepared).unwrap();
+    assert_eq!(std::fs::read_to_string(attempts).unwrap(), "0");
+    assert_eq!(
+        std::fs::read(persisted.new_binary).unwrap(),
+        b"fresh update"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

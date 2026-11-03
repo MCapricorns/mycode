@@ -136,7 +136,7 @@ mod tests {
         let mut state = warm();
         reduce(&mut state, snapshot(10_000, 9_200, 3_000, Some(900)));
         let turn = state.live_turn.as_ref().expect("live turn");
-        assert_eq!(turn_cache_hit(turn), Some(30));
+        assert_eq!(turn_cache_hit(turn), Some(23));
         assert_eq!(state.context_cache, 9_200);
         assert!(state.cache_alert.is_none());
     }

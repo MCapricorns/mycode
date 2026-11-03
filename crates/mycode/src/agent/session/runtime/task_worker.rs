@@ -22,16 +22,6 @@ pub(crate) struct TaskActorClient<A: PackTaskActor> {
     live: Arc<Mutex<HashMap<TaskActorOperationId, TaskCloseSignal>>>,
 }
 
-impl<A: PackTaskActor> Clone for TaskActorClient<A> {
-    fn clone(&self) -> Self {
-        Self {
-            sender: self.sender.clone(),
-            worker: self.worker.clone(),
-            live: Arc::clone(&self.live),
-        }
-    }
-}
-
 enum Command<A: PackTaskActor> {
     Invoke {
         invocation: InvokeCommand<A::Request>,

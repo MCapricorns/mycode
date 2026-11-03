@@ -206,6 +206,67 @@ def preview(images):
     return png_bytes(rows, width, height)
 
 
+def artifact_content(name, data):
+    """Compare generated pixels/metadata, independent of zlib's byte stream."""
+    if name.endswith(".png"):
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("invalid PNG signature")
+        chunks, compressed, offset = [], bytearray(), 8
+        while offset < len(data):
+            length = struct.unpack_from(">I", data, offset)[0]
+            end = offset + length + 12
+            if end > len(data):
+                raise ValueError("truncated PNG chunk")
+            tag = data[offset + 4:offset + 8]
+            payload = data[offset + 8:end - 4]
+            crc = struct.unpack_from(">I", data, end - 4)[0]
+            if zlib.crc32(tag + payload) & 0xFFFFFFFF != crc:
+                raise ValueError("invalid PNG checksum")
+            if tag == b"IDAT":
+                compressed.extend(payload)
+            else:
+                chunks.append((tag, payload))
+            offset = end
+        return chunks, zlib.decompress(compressed)
+    if name.endswith(".icns"):
+        if data[:4] != b"icns" or struct.unpack_from(">I", data, 4)[0] != len(data):
+            raise ValueError("invalid ICNS header")
+        chunks, offset = [], 8
+        while offset < len(data):
+            tag = data[offset:offset + 4]
+            length = struct.unpack_from(">I", data, offset + 4)[0]
+            if length < 8 or offset + length > len(data):
+                raise ValueError("invalid ICNS chunk")
+            chunks.append((tag, artifact_content("entry.png", data[offset + 8:offset + length])))
+            offset += length
+        return chunks
+    if name.endswith(".ico"):
+        count = struct.unpack_from("<H", data, 4)[0]
+        chunks, end = [], 6 + 16 * count
+        for index in range(count):
+            start = 6 + 16 * index
+            metadata = data[start:start + 8]
+            length, offset = struct.unpack_from("<II", data, start + 8)
+            if offset != end or offset + length > len(data):
+                raise ValueError("invalid ICO entry")
+            payload = data[offset:offset + length]
+            if payload.startswith(b"\x89PNG"):
+                payload = artifact_content("entry.png", payload)
+            chunks.append((metadata, payload))
+            end = offset + length
+        if end != len(data):
+            raise ValueError("trailing ICO bytes")
+        return data[:6], chunks
+    raise ValueError(f"unknown icon artifact: {name}")
+
+
+def artifact_matches(name, actual, expected):
+    try:
+        return artifact_content(name, actual) == artifact_content(name, expected)
+    except (ValueError, struct.error, zlib.error):
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail if artifacts are stale")
@@ -225,7 +286,7 @@ def main():
     for name, data in artifacts.items():
         path = assets / name
         if args.check:
-            matches = path.is_file() and path.read_bytes() == data
+            matches = path.is_file() and artifact_matches(name, path.read_bytes(), data)
             print(f"{'ok' if matches else 'STALE'} {path} ({len(data)} bytes)")
             stale |= not matches
         else:

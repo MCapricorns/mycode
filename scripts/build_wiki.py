@@ -175,16 +175,20 @@ def render_doc(source: Path) -> dict:
                 table.append("<tr>" + "".join(f"<{tag}>{inline(cell, source)}</{tag}>" for cell in cells) + "</tr>")
             output.append("".join(table) + "</table></div>")
             continue
-        if line.startswith("- "):
+        ordered = re.match(r"^([0-9]+)\. (.*)$", line)
+        if line.startswith("- ") or ordered:
+            pattern = r"^[0-9]+\. (.*)$" if ordered else r"^- (.*)$"
+            tag = "ol" if ordered else "ul"
+            start = f' start="{int(ordered[1])}"' if ordered and int(ordered[1]) != 1 else ""
             items = []
-            while i < len(lines) and lines[i].startswith("- "):
-                items.append("<li>" + inline(lines[i][2:], source) + "</li>")
+            while i < len(lines) and (item := re.match(pattern, lines[i])):
+                items.append("<li>" + inline(item[1], source) + "</li>")
                 i += 1
-            output.append("<ul>" + "".join(items) + "</ul>")
+            output.append(f"<{tag}{start}>" + "".join(items) + f"</{tag}>")
             continue
         paragraph = [line]
         i += 1
-        while i < len(lines) and lines[i].strip() and not lines[i].startswith(("#", "```", "|", "- ", '<a id="')):
+        while i < len(lines) and lines[i].strip() and not lines[i].startswith(("#", "```", "|", "- ", '<a id="')) and not re.match(r"^[0-9]+\. ", lines[i]):
             paragraph.append(lines[i])
             i += 1
         output.append("<p>" + inline(" ".join(paragraph), source) + "</p>")

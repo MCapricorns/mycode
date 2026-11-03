@@ -472,6 +472,8 @@ impl FrameReducer for ResponsesReducer {
                     let reason = response["incomplete_details"]["reason"].as_str();
                     if matches!(reason, Some("max_output_tokens" | "max_tokens" | "length")) {
                         self.length_limited = true;
+                    } else {
+                        self.begin_interrupt(reason.unwrap_or("response was incomplete"));
                     }
                 }
                 return vec![self.assemble()];
@@ -494,7 +496,13 @@ impl FrameReducer for ResponsesReducer {
                 "responses stream ended after terminal",
             );
         }
-        if !self.completed && self.has_partial() {
+        if !self.completed {
+            if !self.has_partial() {
+                self.terminal_sent = true;
+                return crate::providers::driver::protocol_error(
+                    "responses stream ended before response.completed",
+                );
+            }
             self.begin_interrupt("the stream ended before response.completed");
         }
         self.assemble()
@@ -517,6 +525,30 @@ mod tests {
 
     use super::ResponsesReducer;
     use crate::providers::driver::FrameReducer;
+
+    #[test]
+    fn an_incomplete_response_never_dispatches_its_partial_tool_calls() {
+        for reason in ["content_filter", "unknown_reason", ""] {
+            let mut reducer = ResponsesReducer::new();
+            reducer.feed(
+                r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"read"}}"#,
+            );
+            reducer.feed(
+                r#"{"type":"response.function_call_arguments.delta","delta":"{\"path\":\"a.rs\"}"}"#,
+            );
+            let events = reducer.feed(
+                &serde_json::json!({
+                    "type": "response.incomplete",
+                    "response": {"incomplete_details": {"reason": reason}},
+                })
+                .to_string(),
+            );
+            let [crate::core::StreamEvent::Done { message }] = events.as_slice() else {
+                panic!("expected an interrupted message");
+            };
+            assert_eq!(message.stop_reason, StopReason::Error, "{reason}");
+        }
+    }
 
     #[test]
     fn codex_bodies_are_never_stored_server_side() {

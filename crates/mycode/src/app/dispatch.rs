@@ -586,14 +586,18 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
         BridgeCommand::DeleteSession { session_id } => {
             // Stop the session's live work first, then evict the actor's
             // cached ledger: a turn that survives the delete would append
-            // into a session the index no longer names. The eviction is
-            // best-effort — a dead actor cannot resurrect anything either —
-            // so the durable delete always runs.
+            // into a session the index no longer names. Wait for eviction
+            // to succeed before deleting disk; a failed acknowledgement may
+            // leave storage work or reservations in flight.
             cancel_session_work(state, &session_id);
-            state.forget_token_scale(&session_id);
-            if let Some(id) = crate::agent::session::SessionId::parse(&session_id) {
-                let _ = state.service.forget(&id).await;
+            if let Some(id) = crate::agent::session::SessionId::parse(&session_id)
+                && let Err(error) = state.service.forget(&id).await
+            {
+                // The actor must discard reservations before disk is removed;
+                // otherwise an in-flight append could recreate the session.
+                return BridgeReply::SessionDeleted(Err(render_error(error)));
             }
+            state.forget_token_scale(&session_id);
             let home = state.home.clone();
             let forgotten = session_id.clone();
             let deleted = blocking(move || {

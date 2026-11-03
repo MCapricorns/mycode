@@ -118,6 +118,9 @@ pub(crate) enum ReplyScope {
     },
     /// A manual refresh owns its toast; a concurrent lazy read does not.
     CatalogRefresh,
+    /// A proxy probe belongs to the value that was tested, even if another
+    /// probe starts after editing the field while this request is in flight.
+    ProxyTest(String),
     Open(String),
     /// A send owns its lifecycle even after its conversation leaves the screen.
     Send,
@@ -174,6 +177,7 @@ impl ReplyScope {
     pub(crate) fn for_command(command: &BridgeCommand) -> Self {
         match command {
             BridgeCommand::OpenSession(session) => Self::Open(session.to_string()),
+            BridgeCommand::TestProxy { proxy } => Self::ProxyTest(proxy.clone()),
             BridgeCommand::SendMessage { .. } => Self::Send,
             BridgeCommand::ChatTurn {
                 session, branch, ..
@@ -226,6 +230,10 @@ impl ReplyScope {
             | Self::Send
             | Self::SentTurn { .. } => true,
             Self::Open(session) => pending_open == Some(session.as_str()),
+            Self::ProxyTest(proxy) => vm
+                .settings
+                .as_ref()
+                .is_some_and(|settings| &settings.proxy == proxy),
             Self::Session { session, branch } => vm.active.as_ref().is_some_and(|active| {
                 &active.session_id == session
                     && branch

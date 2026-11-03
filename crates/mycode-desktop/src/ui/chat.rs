@@ -657,7 +657,7 @@ fn collect_transcript_blocks(entries: &[ConversationEntry]) -> Vec<TranscriptBlo
                 EntryKind::ToolResult => {
                     next_results.insert(call, entry);
                 }
-                EntryKind::ToolCall => matched[index] = next_results.get(call).copied(),
+                EntryKind::ToolCall => matched[index] = next_results.remove(call),
                 _ => {}
             }
         }
@@ -836,6 +836,21 @@ mod nesting_tests {
                 None
             ]
         );
+    }
+
+    #[test]
+    fn an_unfinished_call_cannot_borrow_a_reused_ids_later_result() {
+        let entries = vec![
+            call("reused", "interrupted"),
+            call("reused", "retried"),
+            result("reused", "retry result"),
+        ];
+        let blocks = collect_transcript_blocks(&entries);
+        let TranscriptBlock::Tools(tools) = &blocks[0] else {
+            panic!("expected a tool run");
+        };
+        assert!(tools[0].result.is_none());
+        assert_eq!(tools[1].result.unwrap().text.as_ref(), "retry result");
     }
 
     #[test]

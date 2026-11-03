@@ -95,19 +95,7 @@ impl StdioChannel {
         if let Some(stderr) = child.stderr.take() {
             let tail = stderr_tail.clone();
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let line: String = line.chars().take(STDERR_LINE_CHARS).collect();
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    if let Ok(mut tail) = tail.lock() {
-                        if tail.len() == STDERR_TAIL_LINES {
-                            tail.pop_front();
-                        }
-                        tail.push_back(line);
-                    }
-                }
+                collect_stderr(BufReader::new(stderr), &tail).await;
             });
         }
         Ok(Self {
@@ -280,8 +268,13 @@ impl JsonRpcChannel for StdioChannel {
             if line.len() > MAX_MESSAGE_BYTES {
                 return Err(McpError::Oversized);
             }
-            self.write_line(&line).await?;
-            match tokio::time::timeout(self.timeout, self.wait_for(id)).await {
+            // The deadline includes backpressure on stdin: a server that
+            // stops reading must not hang the turn before reply waiting starts.
+            let exchange = async {
+                self.write_line(&line).await?;
+                self.wait_for(id).await
+            };
+            match tokio::time::timeout(self.timeout, exchange).await {
                 Ok(outcome) => outcome,
                 Err(_) => Err(McpError::Timeout),
             }
@@ -298,7 +291,9 @@ impl JsonRpcChannel for StdioChannel {
             "method": method,
             }))
             .map_err(|error| McpError::protocol(error.to_string()))?;
-            self.write_line(&line).await
+            tokio::time::timeout(self.timeout, self.write_line(&line))
+                .await
+                .map_err(|_| McpError::Timeout)?
         })
     }
 
@@ -309,13 +304,40 @@ impl JsonRpcChannel for StdioChannel {
     }
 }
 
+/// Drain diagnostic lines without buffering an unbounded line from the child.
+/// Four UTF-8 bytes per character preserve the displayed prefix for valid text.
+async fn collect_stderr<R>(mut reader: R, tail: &StdMutex<VecDeque<String>>)
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    let mut raw = Vec::new();
+    while let Ok(LineRead::Line | LineRead::Oversized) =
+        read_bounded_line(&mut reader, &mut raw, STDERR_LINE_CHARS * 4).await
+    {
+        let line: String = String::from_utf8_lossy(&raw)
+            .trim_end_matches(['\r', '\n'])
+            .chars()
+            .take(STDERR_LINE_CHARS)
+            .collect();
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(mut tail) = tail.lock() {
+            if tail.len() == STDERR_TAIL_LINES {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+    }
+}
+
 /// Outcome of one [`read_bounded_line`].
 #[derive(Debug, PartialEq, Eq)]
 enum LineRead {
     /// `line` holds one line (its newline included when present).
     Line,
     /// The line was longer than the limit. It was consumed through its
-    /// newline but not kept, so the next read starts on a fresh line.
+    /// newline with only its prefix kept, so the next read starts on a fresh line.
     Oversized,
     /// The stream ended before any byte of a new line.
     Eof,
@@ -351,8 +373,8 @@ where
         let used = newline.map_or(available.len(), |index| index + 1);
         if !oversized {
             if line.len() + used > limit {
+                line.extend_from_slice(&available[..limit - line.len()]);
                 oversized = true;
-                line.clear();
             } else {
                 line.extend_from_slice(&available[..used]);
             }
@@ -561,6 +583,42 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn stderr_retains_bounded_prefixes_and_drains_invalid_utf8() {
+        use super::{STDERR_LINE_CHARS, collect_stderr};
+        use std::collections::VecDeque;
+        use std::sync::Mutex;
+
+        let mut input = "界".repeat(STDERR_LINE_CHARS * 10).into_bytes();
+        input.extend_from_slice(b"\ninvalid: \xff\nafter\n");
+        let tail = Mutex::new(VecDeque::new());
+        collect_stderr(
+            tokio::io::BufReader::with_capacity(7, input.as_slice()),
+            &tail,
+        )
+        .await;
+        let tail = tail.lock().unwrap();
+        assert_eq!(tail.len(), 3);
+        assert_eq!(tail[0], "界".repeat(STDERR_LINE_CHARS));
+        assert!(tail[1].starts_with("invalid:"));
+        assert_eq!(tail[2], "after");
+    }
+
+    #[tokio::test]
+    async fn stderr_keeps_only_the_latest_nonempty_lines() {
+        use super::{STDERR_TAIL_LINES, collect_stderr};
+        use std::collections::VecDeque;
+        use std::sync::Mutex;
+
+        let input = (0..30).map(|n| format!("{n}\n\n")).collect::<String>();
+        let tail = Mutex::new(VecDeque::new());
+        collect_stderr(input.as_bytes(), &tail).await;
+        let tail = tail.lock().unwrap();
+        assert_eq!(tail.len(), STDERR_TAIL_LINES);
+        assert_eq!(tail.front().unwrap(), "18");
+        assert_eq!(tail.back().unwrap(), "29");
+    }
+
     #[test]
     fn stdio_env_keeps_path_and_drops_secrets() {
         let process = vec![
@@ -584,6 +642,32 @@ mod tests {
                 .iter()
                 .any(|(key, value)| key == "TOKEN" && value == "ok")
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn request_deadline_includes_blocked_stdin() {
+        use crate::app::mcp_client::{JsonRpcChannel, McpError};
+
+        let channel = StdioChannel::spawn(
+            "/bin/sh",
+            &["-c".to_owned(), "exec sleep 30".to_owned()],
+            &[],
+            Duration::from_millis(50),
+        )
+        .await
+        .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            channel.request(
+                1,
+                "tools/call",
+                serde_json::json!({"text": "x".repeat(512 * 1024)}),
+            ),
+        )
+        .await;
+        channel.shutdown().await;
+        assert_eq!(result.unwrap(), Err(McpError::Timeout));
     }
 
     #[cfg(unix)]

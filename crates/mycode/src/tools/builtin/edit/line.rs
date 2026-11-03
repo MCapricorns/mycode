@@ -57,12 +57,36 @@ pub(super) fn planned_for_expected_text(
     if expected.is_empty() {
         return None;
     }
-    let mut found = body.match_indices(expected);
-    let (start, _) = found.next()?;
-    if found.next().is_some() {
-        return None;
+    let bytes = body.as_bytes();
+    let boundary = |index: usize| {
+        index == 0
+            || bytes[index - 1] == b'\n'
+            || (bytes[index - 1] == b'\r' && bytes.get(index) != Some(&b'\n'))
+    };
+    let finder = memchr::memmem::Finder::new(expected.as_bytes());
+    let mut cursor = 0;
+    let mut found = None;
+    while let Some(offset) = finder.find(&bytes[cursor..]) {
+        let start = cursor + offset;
+        cursor = start + 1;
+        let mut end = start + expected.len();
+        if !boundary(start) {
+            continue;
+        }
+        if !boundary(end) && end != bytes.len() {
+            let terminator = line_terminator_len(bytes, end);
+            if terminator == 0 || bytes.get(end - 1) == Some(&b'\r') {
+                continue;
+            }
+            end += terminator;
+        }
+        // Search overlapping occurrences too: two intersecting line blocks
+        // are ambiguous and must not silently choose the first one.
+        if found.replace((start, end)).is_some() {
+            return None;
+        }
     }
-    let end = start + expected.len();
+    let (start, end) = found?;
     let terminator = trailing_terminator(&body[start..end]);
     let mut replacement = replacement.to_owned();
     if !replacement.is_empty() && !replacement.ends_with(['\n', '\r']) {
@@ -196,7 +220,30 @@ fn hash_eq(expected: &str, actual_hex: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::line_range_planned;
+    use super::{line_range_planned, planned_for_expected_text};
+
+    #[test]
+    fn moved_line_ranges_keep_whole_line_semantics() {
+        for newline in ["\n", "\r\n", "\r"] {
+            let body = format!("one{newline}two{newline}three{newline}");
+            for replacement in [String::new(), format!("TWO{newline}"), "TWO".into()] {
+                let relocated = planned_for_expected_text(&body, "two", &replacement, 0)
+                    .expect("unique complete line");
+                let direct =
+                    line_range_planned(&body, 2, 2, Some("two"), None, &replacement, 0).unwrap();
+                assert_eq!(relocated.start, direct.start);
+                assert_eq!(relocated.end, direct.end);
+                assert_eq!(relocated.replacement, direct.replacement);
+            }
+        }
+    }
+
+    #[test]
+    fn moved_line_ranges_reject_partial_lines_and_overlapping_blocks() {
+        assert!(planned_for_expected_text("prefix target suffix\n", "target", "x", 0).is_none());
+        assert!(planned_for_expected_text("a\na\na\n", "a\na", "x", 0).is_none());
+        assert!(planned_for_expected_text("a\r\nb\r\n", "a\r", "x", 0).is_none());
+    }
 
     fn replace(body: &str, start: usize, end: usize, expected: &str, with: &str) -> String {
         let planned = line_range_planned(body, start, end, Some(expected), None, with, 0)

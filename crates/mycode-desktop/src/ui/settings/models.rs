@@ -33,12 +33,12 @@ pub(crate) fn render_models_section(
     let Some(settings) = vm.settings.as_ref() else {
         return div().into_any_element();
     };
-    let magpie = settings.magpie.clone();
+    let magpie = &settings.magpie;
     let models = vm
         .catalog
         .as_ref()
         .and_then(|catalog| catalog.provider(mycode::config::MAGPIE_PROVIDER_ID))
-        .map(|provider| provider.models.clone())
+        .map(|provider| provider.models.as_slice())
         .unwrap_or_default();
     let connected = magpie.is_active();
     let listed = !models.is_empty();
@@ -86,7 +86,11 @@ pub(crate) fn render_models_section(
         mycode::config::MAGPIE_PROVIDER_ID,
         &magpie.model,
     );
-    let rows: Vec<AnyElement> = models
+    // The catalog can be large; do not build every row and resolve its
+    // display name on each redraw while the dropdown is collapsed.
+    let models_open = workspace.magpie_models_open;
+    let visible_models = if models_open { models } else { &[] };
+    let rows: Vec<AnyElement> = visible_models
         .iter()
         .map(|model| {
             let selected = model.id == selected_id;
@@ -161,7 +165,6 @@ pub(crate) fn render_models_section(
     // gateway model: the row names the model magpie picked and expands to the
     // full list, matching the default-model dropdown the Models page used
     // before the gateway.
-    let models_open = workspace.magpie_models_open;
     let toggle = div()
         .id("magpie-model-toggle")
         .w_full()
@@ -202,7 +205,7 @@ pub(crate) fn render_models_section(
         )
         .into_any_element();
 
-    let has_rows = !rows.is_empty();
+    let has_rows = !models.is_empty();
     let list = models_open.then(|| div().flex().flex_col().children(rows).into_any_element());
 
     div()

@@ -118,12 +118,10 @@ pub fn cache_percent(cache: u64, input: u64) -> Option<u64> {
     if cache == 0 {
         return None;
     }
-    let base = if cache > input {
-        input.saturating_add(cache)
-    } else {
-        input
-    };
-    (base > 0).then_some((cache.min(base) * 100) / base)
+    let cache = u128::from(cache);
+    let input = u128::from(input);
+    let base = if cache > input { input + cache } else { input };
+    Some((cache.min(base) * 100 / base) as u64)
 }
 
 /// Share of the context window still free, as a whole percent.
@@ -136,7 +134,8 @@ pub fn context_remaining_percent(used: u64, window: u64) -> Option<u64> {
     if window == 0 {
         return None;
     }
-    Some(100_u64.saturating_sub(used.saturating_mul(100) / window))
+    let used_percent = u128::from(used.min(window)) * 100 / u128::from(window);
+    Some(100 - used_percent as u64)
 }
 
 /// Lowest hit percent treated as a warm prompt cache.
@@ -150,7 +149,10 @@ const CACHE_COLLAPSE_DROP: u64 = 30;
 /// read, so a model that never reports cache does not show a fake `0%`.
 #[must_use]
 pub fn turn_cache_hit(turn: &TurnStats) -> Option<u64> {
-    cache_percent(turn.cache.unwrap_or(0), turn.input)
+    let cache = u128::from(turn.cache.filter(|cache| *cache > 0)?);
+    // TurnUsage normalizes every provider to fresh input plus cache reads.
+    // Unlike a prompt's context size, `input` never includes the cache.
+    Some((cache * 100 / (u128::from(turn.input) + cache)) as u64)
 }
 
 /// Why a prompt prefix was rewritten. `Both` is more than one rewrite
@@ -345,9 +347,9 @@ mod tests {
             requests: 1,
             elapsed_ms: 1,
         };
-        assert_eq!(turn_cache_hit(&openai), Some(30));
-        // Anthropic bills cache reads outside input. The share is against
-        // the sum, same as one prompt.
+        assert_eq!(turn_cache_hit(&openai), Some(23));
+        // Both providers report fresh input here; include cache reads in
+        // the denominator even when the cache is smaller than fresh input.
         let anthropic = TurnStats {
             model: "m".to_owned(),
             input: 150,
@@ -363,6 +365,31 @@ mod tests {
             ..openai
         };
         assert_eq!(turn_cache_hit(&uncached), None);
+    }
+
+    #[test]
+    fn token_percentages_handle_large_counts_without_overflow() {
+        assert_eq!(cache_percent(u64::MAX, u64::MAX), Some(100));
+        assert_eq!(cache_percent(u64::MAX, u64::MAX - 1), Some(50));
+        assert_eq!(context_remaining_percent(u64::MAX, u64::MAX), Some(0));
+        assert_eq!(context_remaining_percent(u64::MAX / 2, u64::MAX), Some(51));
+        let turn = TurnStats {
+            model: "m".into(),
+            input: u64::MAX,
+            output: 0,
+            cache: Some(u64::MAX),
+            requests: 1,
+            elapsed_ms: 0,
+        };
+        assert_eq!(turn_cache_hit(&turn), Some(50));
+        assert_eq!(
+            turn_cache_hit(&TurnStats {
+                input: 100,
+                cache: Some(50),
+                ..turn
+            }),
+            Some(33)
+        );
     }
 
     #[test]

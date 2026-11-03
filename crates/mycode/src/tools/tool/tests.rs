@@ -250,6 +250,32 @@ fn a_stringified_argument_object_is_unwrapped() {
     assert_eq!(untouched, json!("not json"));
 }
 
+#[test]
+fn stringified_arguments_fold_camel_case_before_alias_repair() {
+    let args = normalize_tool_args(json!(
+        r#"{"filePath":"a.rs","oldString":"a","newString":"b","operations":[{"maxDistance":2}]}"#
+    ));
+    assert_eq!(
+        args,
+        json!({
+            "path": "a.rs", "old_string": "a", "new_string": "b",
+            "operations": [{"max_distance": 2}]
+        })
+    );
+}
+
+#[test]
+fn explicit_snake_case_values_win_regardless_of_object_order() {
+    for text in [
+        r#"{"oldString":"alias","old_string":"explicit"}"#,
+        r#"{"old_string":"explicit","oldString":"alias"}"#,
+    ] {
+        let args = normalize_tool_args(serde_json::from_str(text).unwrap());
+        assert_eq!(args["old_string"], "explicit");
+        assert_eq!(args["oldString"], "alias");
+    }
+}
+
 #[tokio::test]
 async fn execute_dyn_validates_against_overridden_params_schema() {
     use schemars::JsonSchema;

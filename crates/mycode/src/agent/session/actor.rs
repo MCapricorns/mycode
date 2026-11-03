@@ -45,10 +45,10 @@ fn reject_bad_read_limit(limit: u16) -> Result<(), SessionError> {
 }
 
 /// Resident ledgers kept at once. Above the cap the least-recently-loaded
-/// quiescent session is evicted; [`recovery`] reloads it on demand. A
-/// desktop keeps one conversation open at a time plus turns finishing in
-/// background sessions, so a single-digit cap leaves the hot set resident
-/// while months of opened sessions stop accumulating.
+/// quiescent session without pending operations is evicted; [`recovery`]
+/// reloads it on demand. A desktop keeps one conversation open at a time
+/// plus turns finishing in background sessions, so a single-digit cap leaves
+/// the hot set resident while months of opened sessions stop accumulating.
 pub(crate) const MAX_RESIDENT_SESSIONS: usize = 8;
 
 /// Infrastructure-level actor failures; domain failures travel inside
@@ -102,14 +102,23 @@ pub(crate) struct SessionOperation {
 }
 
 struct SessionOpInner {
+    _residency: Option<Arc<()>>,
     admission: Option<TaskOperationAdmission>,
     stage: Stage,
 }
 
 impl SessionOperation {
-    fn new(admission: Option<TaskOperationAdmission>, stage: Stage) -> Self {
+    fn new(
+        admission: Option<TaskOperationAdmission>,
+        stage: Stage,
+        residency: Option<Arc<()>>,
+    ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(SessionOpInner { admission, stage })),
+            inner: Arc::new(Mutex::new(SessionOpInner {
+                admission,
+                stage,
+                _residency: residency,
+            })),
         }
     }
 }
@@ -189,6 +198,24 @@ enum Action {
     },
 }
 
+impl Action {
+    fn session(&self) -> &SessionId {
+        match self {
+            Self::Create { session, .. }
+            | Self::Heads { session }
+            | Self::Evict { session }
+            | Self::ReserveEvent { session, .. }
+            | Self::Append { session, .. }
+            | Self::Read { session, .. }
+            | Self::ReserveBranch { session, .. }
+            | Self::BranchCommit { session, .. }
+            | Self::LoadEvent { session, .. }
+            | Self::ReadPayloads { session, .. }
+            | Self::ReadWindow { session, .. } => session,
+        }
+    }
+}
+
 /// Why a session index could not be loaded.
 #[derive(Debug)]
 pub(super) enum PlanError {
@@ -244,7 +271,11 @@ impl SessionCore {
             let victim = self
                 .sessions
                 .iter()
-                .filter(|(session, ledger)| *session != current && ledger.is_quiescent())
+                .filter(|(session, ledger)| {
+                    *session != current
+                        && ledger.is_quiescent()
+                        && Arc::strong_count(&ledger.residency) == 1
+                })
                 .min_by_key(|(session, _)| {
                     self.resident_touch
                         .get(*session)
@@ -253,9 +284,9 @@ impl SessionCore {
                 })
                 .map(|(session, _)| session.clone());
             let Some(victim) = victim else {
-                // Every other ledger holds a live reservation; retry after
-                // the next load rather than dropping payload bytes or the
-                // session this load needs to serve.
+                // Every other ledger holds a live reservation or pending
+                // operation; retry after the next load rather than dropping
+                // payload bytes or a session an operation needs to serve.
                 return;
             };
             self.sessions.remove(&victim);
@@ -283,7 +314,7 @@ impl SessionCore {
             admission: Option<TaskOperationAdmission>,
             error: SessionError,
         ) -> Result<SessionOperation, SessionTaskError> {
-            Ok(SessionOperation::new(admission, Stage::Failed(error)))
+            Ok(SessionOperation::new(admission, Stage::Failed(error), None))
         }
         let admission = Some(self.mint_admission()?);
         let stage = match request {
@@ -506,7 +537,14 @@ impl SessionCore {
                 )?
             }
         };
-        Ok(SessionOperation::new(admission, stage))
+        let residency = match &stage {
+            Stage::Run(action) => self
+                .sessions
+                .get(action.session())
+                .map(|ledger| Arc::clone(&ledger.residency)),
+            _ => None,
+        };
+        Ok(SessionOperation::new(admission, stage, residency))
     }
 
     /// Routes an action for a known session, loading its offset index first
@@ -711,3 +749,6 @@ fn blocking_session<T: Send + 'static>(
     });
     async move { rx.await.map_err(|_| SessionTaskError::Storage) }
 }
+
+#[cfg(test)]
+mod tests;

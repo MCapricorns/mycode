@@ -38,6 +38,20 @@ async fn bounded_body(mut response: reqwest::Response, limit: usize) -> Result<V
     Ok(body)
 }
 
+/// Keeps the start of an error body even when the server sends more than the
+/// excerpt budget. Successful replies still use the rejecting size bound.
+async fn error_excerpt(mut response: reqwest::Response) -> Vec<u8> {
+    let mut excerpt = Vec::new();
+    while excerpt.len() < ERROR_EXCERPT_BYTES {
+        let Ok(Some(chunk)) = response.chunk().await else {
+            break;
+        };
+        let keep = chunk.len().min(ERROR_EXCERPT_BYTES - excerpt.len());
+        excerpt.extend_from_slice(&chunk[..keep]);
+    }
+    excerpt
+}
+
 /// Credential header styles accepted for HTTP MCP servers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyHeader {
@@ -150,9 +164,7 @@ impl HttpChannel {
         if !status.is_success() {
             // The body usually names the cause (bad key, unknown session);
             // keep a short excerpt so the settings page can show it.
-            let excerpt = bounded_body(response, ERROR_EXCERPT_BYTES)
-                .await
-                .unwrap_or_default();
+            let excerpt = error_excerpt(response).await;
             let excerpt = String::from_utf8_lossy(&excerpt).into_owned();
             let hint = match status.as_u16() {
                 401 | 403 => " — check the API key stored for this server",
@@ -177,10 +189,10 @@ impl HttpChannel {
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let bytes = bounded_body(response, MAX_MESSAGE_BYTES).await?;
         if content_type.contains("text/event-stream") {
-            return sse_reply(&bytes, id);
+            return streaming_sse_reply(response, id).await;
         }
+        let bytes = bounded_body(response, MAX_MESSAGE_BYTES).await?;
         if bytes.is_empty() {
             return Ok(None);
         }
@@ -188,6 +200,46 @@ impl HttpChannel {
             .map_err(|error| McpError::protocol(format!("response is not JSON: {error}")))?;
         Ok(Some(value))
     }
+}
+
+/// Returns as soon as a complete SSE event answers the request. MCP servers
+/// may keep the HTTP stream open after sending the reply, so waiting for EOF
+/// would turn an already completed request into a timeout.
+async fn streaming_sse_reply(
+    mut response: reqwest::Response,
+    id: Option<u64>,
+) -> Result<Option<Value>, McpError> {
+    let mut bytes = Vec::new();
+    let mut scanned = 0;
+    let mut line_start = 0;
+    let mut event_start = 0;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| McpError::transport(format!("response body failed: {error}")))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > MAX_MESSAGE_BYTES {
+            return Err(McpError::Oversized);
+        }
+        bytes.extend_from_slice(&chunk);
+        for index in scanned..bytes.len() {
+            if bytes[index] != b'\n' {
+                continue;
+            }
+            let empty =
+                index == line_start || (index == line_start + 1 && bytes[line_start] == b'\r');
+            if empty {
+                if let Some(reply) = sse_reply(&bytes[event_start..=index], id)? {
+                    return Ok(Some(reply));
+                }
+                event_start = index + 1;
+            }
+            line_start = index + 1;
+        }
+        scanned = bytes.len();
+    }
+    // Retain support for servers that omit the final blank line before EOF.
+    sse_reply(&bytes[event_start..], id)
 }
 
 /// Extracts the JSON-RPC response from an SSE body.
@@ -338,6 +390,46 @@ mod tests {
             .expect("error");
         assert!(reply["error"].is_object());
         assert!(sse_reply(b"data: [DONE]\n\n", Some(2)).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn oversized_error_body_keeps_its_excerpt() {
+        let response = reqwest::Response::from(http::Response::new(reqwest::Body::from(
+            "authentication failed: ".repeat(100),
+        )));
+        let excerpt = super::error_excerpt(response).await;
+        assert_eq!(excerpt.len(), super::ERROR_EXCERPT_BYTES);
+        assert!(excerpt.starts_with(b"authentication failed: "));
+    }
+
+    #[tokio::test]
+    async fn sse_reply_completes_before_the_server_closes_the_stream() {
+        use futures_util::StreamExt as _;
+
+        let chunks = futures_util::stream::iter([
+            Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                b"data: {\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{}}\r\n\r",
+            )),
+            Ok(bytes::Bytes::from_static(
+                b"\ndata: {\"jsonrpc\":\"2.0\",\"id\":7,\n",
+            )),
+            Ok(bytes::Bytes::from_static(
+                b"data: \"result\":{\"ok\":true}}\n",
+            )),
+            Ok(bytes::Bytes::from_static(b"\n")),
+        ])
+        .chain(futures_util::stream::pending());
+        let response =
+            reqwest::Response::from(http::Response::new(reqwest::Body::wrap_stream(chunks)));
+        let reply = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::streaming_sse_reply(response, Some(7)),
+        )
+        .await
+        .expect("a complete reply must not wait for EOF")
+        .unwrap()
+        .expect("reply");
+        assert_eq!(reply["result"]["ok"], true);
     }
 
     #[test]

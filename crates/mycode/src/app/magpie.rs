@@ -66,13 +66,7 @@ impl Gateway {
         if !status.is_success() {
             return Err(format!("magpie /v1/models answered {status}"));
         }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| format!("magpie /v1/models body: {error}"))?;
-        if bytes.len() > MAX_MODELS_BYTES {
-            return Err("magpie /v1/models is larger than 4 MiB".to_owned());
-        }
+        let bytes = read_models_body(response).await?;
         let provider =
             crate::providers::catalog::magpie::provider_from_models(&bytes, &self.base_url)?;
         Ok(FetchedModels {
@@ -80,6 +74,24 @@ impl Gateway {
             fetched_at: crate::core::unix_now().as_secs(),
         })
     }
+}
+
+/// Applies the model-list bound during transfer, before buffering the whole
+/// response. A gateway with a broken or unexpectedly large catalog must not
+/// grow the desktop's memory without limit.
+async fn read_models_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("magpie /v1/models body: {error}"))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > MAX_MODELS_BYTES {
+            return Err("magpie /v1/models is larger than 4 MiB".to_owned());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// Reads `settings.json` off the core thread.
@@ -132,4 +144,28 @@ pub fn provider_row(
         models,
         magpie.hidden_models.clone(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn model_body_rejects_oversize_without_waiting_for_eof() {
+        use futures_util::StreamExt as _;
+
+        let chunks = futures_util::stream::iter([
+            Ok::<_, std::io::Error>(bytes::Bytes::from(vec![b' '; super::MAX_MODELS_BYTES])),
+            Ok(bytes::Bytes::from_static(b"x")),
+        ])
+        .chain(futures_util::stream::pending());
+        let response =
+            reqwest::Response::from(http::Response::new(reqwest::Body::wrap_stream(chunks)));
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::read_models_body(response),
+        )
+        .await
+        .expect("the bound must be checked before EOF")
+        .expect_err("oversized catalog");
+        assert!(error.contains("larger than 4 MiB"));
+    }
 }

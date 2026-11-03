@@ -33,9 +33,10 @@ pub(super) fn tool_label_target(label: &str) -> &str {
 #[must_use]
 pub(super) fn tool_batch_targets(labels: &[&str]) -> String {
     let mut targets: Vec<&str> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for label in labels {
         let target = tool_label_target(label);
-        if !target.is_empty() && !targets.contains(&target) {
+        if !target.is_empty() && seen.insert(target) {
             targets.push(target);
         }
     }

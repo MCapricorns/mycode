@@ -380,8 +380,14 @@ pub(super) fn unique_component_name(
             Err(Errno::NOENT) => continue,
             Err(err) => return Err(map_errno(err)),
         };
-        let meta = meta_from_stat(&stat)?;
-        if meta.identity == want {
+        // Siblings can be links, sockets or FIFOs without being our target.
+        // This scan proves a name by identity; applying target-kind checks
+        // here would make every regular file beside a symlink unreadable.
+        let identity = FileIdentity {
+            device: unix_device_identity(stat.st_dev)?,
+            inode: checked_u64(stat.st_ino, "inode number")?,
+        };
+        if identity == want {
             if found.is_some() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -701,4 +707,34 @@ fn sync_fd_raw(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Errno> {
 
 pub(super) fn sync_parent(dir: &File) -> io::Result<()> {
     sync_file(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unrelated_symlinks_and_sockets_do_not_reject_regular_files() {
+        let base = std::env::temp_dir().join(format!(
+            "mc-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("target.txt"), "hello").unwrap();
+        std::os::unix::fs::symlink("missing", base.join("link")).unwrap();
+        let socket = std::os::unix::net::UnixListener::bind(base.join("socket")).unwrap();
+        let parent = open_allowed_root(&base).unwrap();
+        let target =
+            open_child(&parent, OsStr::new("target.txt"), ChildOpen::ExistingFile).unwrap();
+        assert_eq!(
+            unique_component_name(&parent, target.meta.identity, &CancellationToken::new())
+                .unwrap(),
+            "target.txt"
+        );
+        // Target opens still reject special files rather than following them.
+        assert!(open_child(&parent, OsStr::new("link"), ChildOpen::ExistingFile).is_err());
+        assert!(open_child(&parent, OsStr::new("socket"), ChildOpen::ExistingFile).is_err());
+        drop(socket);
+        std::fs::remove_dir_all(base).unwrap();
+    }
 }

@@ -78,6 +78,16 @@ class WikiGeneratorTests(unittest.TestCase):
                          "#v=architecture&s=subagent-orchestration")
         self.assertEqual(wiki.doc_link("#n=agent", source), "#n=agent")
 
+    def test_ordered_steps_keep_list_semantics_and_start_number(self):
+        doc = self.render_fixture(
+            '# Steps\n\nBefore\n1. **Send** a message\n2. Run `tools`\n\n'
+            'After\n\n4. Continue\n- Separate bullet\n'
+        )
+        self.assertIn('<p>Before</p>\n<ol><li><strong>Send</strong> a message</li>'
+                      '<li>Run <code>tools</code></li></ol>', doc["html"])
+        self.assertIn('<ol start="4"><li>Continue</li></ol>\n'
+                      '<ul><li>Separate bullet</li></ul>', doc["html"])
+
     def test_reference_tables_and_heading_anchors_are_generated(self):
         doc = wiki.render_doc(wiki.DOCS["code-mode"])
         parsed = DocumentLinks()

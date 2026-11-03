@@ -491,15 +491,7 @@ pub(crate) fn bounded_text(value: &str, max: usize) -> Result<(), ConfigError> {
 }
 
 pub(crate) fn is_https_url(value: &str) -> bool {
-    if bounded_text(value, MAX_URL_BYTES).is_err() {
-        return false;
-    }
-    let Some(rest) = value.strip_prefix("https://") else {
-        return false;
-    };
-    let host = rest.split('/').next().unwrap_or_default();
-    // Graphic ASCII already excludes whitespace, NUL, and other controls.
-    !host.is_empty() && host.bytes().all(|byte| byte.is_ascii_graphic())
+    parse_endpoint_url(value).is_some_and(|url| url.scheme() == "https")
 }
 
 /// Whether `value` is an `http://` URL on this machine.
@@ -507,32 +499,22 @@ pub(crate) fn is_https_url(value: &str) -> bool {
 /// magpie's gateway listens on loopback only, and its agent plugin writes
 /// `http://127.0.0.1:<port>/v1`. Nothing else may use plain http.
 pub(crate) fn is_local_http_url(value: &str) -> bool {
-    if bounded_text(value, MAX_URL_BYTES).is_err() {
-        return false;
+    parse_endpoint_url(value).is_some_and(|url| {
+        url.scheme() == "http"
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+    })
+}
+
+fn parse_endpoint_url(value: &str) -> Option<reqwest::Url> {
+    if value.len() > MAX_URL_BYTES
+        || value
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return None;
     }
-    let Some(rest) = value.strip_prefix("http://") else {
-        return false;
-    };
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches('/');
-    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
-        let Some((host, port)) = rest.split_once(']') else {
-            return false;
-        };
-        (format!("[{host}]"), port.strip_prefix(':'))
-    } else if let Some((host, port)) = authority.rsplit_once(':') {
-        (host.to_owned(), Some(port))
-    } else {
-        (authority.to_owned(), None)
-    };
-    let host_ok = matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]");
-    let port_ok = port.is_none_or(|port| {
-        !port.is_empty() && port.len() <= 5 && port.bytes().all(|byte| byte.is_ascii_digit())
-    });
-    host_ok && port_ok
+    let url = reqwest::Url::parse(value).ok()?;
+    (url.has_host() && url.port() != Some(0)).then_some(url)
 }
 
 /// Whether `value` can name one gateway model (`provider/model`).

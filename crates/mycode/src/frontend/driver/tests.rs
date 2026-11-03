@@ -860,3 +860,66 @@ fn a_welcome_submit_without_a_folder_returns_attachments() {
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_retracted_steer_survives_navigation_and_reopening_from_the_parked_desk() {
+    use crate::app::BridgeReply;
+
+    let (mut driver, root) = scratch_driver("steer-retract-navigation");
+    driver.vm.active = Some(conversation("other", "other-branch"));
+    driver.vm.composer_draft = "other draft".into();
+    driver.vm.pending_steers = vec!["other steer".into()];
+    let mut out = Vec::new();
+    driver.on_reply(
+        ReplyScope::RetractSteer {
+            session: "original".into(),
+            text: "take this back".into(),
+        },
+        BridgeReply::SteerRetracted(Ok(true)),
+        &mut out,
+    );
+    assert_eq!(driver.vm.composer_draft, "other draft");
+    assert_eq!(driver.vm.pending_steers, ["other steer"]);
+    assert_eq!(
+        driver.vm.parked_steers,
+        [("original".into(), vec!["take this back".into()])]
+    );
+
+    driver.park_conversation(&mut out);
+    driver.vm.composer_draft = "welcome draft".into();
+    driver.on_reply(
+        ReplyScope::Global,
+        BridgeReply::Conversation(Ok(conversation("original", "branch"))),
+        &mut out,
+    );
+    assert_eq!(driver.vm.composer_draft, "take this back\n\nwelcome draft");
+    assert!(driver.vm.parked_steers.is_empty());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_proxy_probe_reply_only_applies_to_the_value_that_was_tested() {
+    use crate::app::BridgeCommand;
+    use crate::config::AppSettings;
+    use crate::frontend::view_model::SettingsState;
+
+    let mut vm = WorkspaceState {
+        settings: Some(SettingsState::from_settings(&AppSettings::default(), 1)),
+        ..Default::default()
+    };
+    vm.settings.as_mut().unwrap().proxy = "http://127.0.0.1:8080".into();
+    let old = ReplyScope::for_command(&BridgeCommand::TestProxy {
+        proxy: vm.settings.as_ref().unwrap().proxy.clone(),
+    });
+    assert!(old.applies(&vm, None));
+    // Editing resets the test state, so the user may start a second probe
+    // before the first one returns. Testing alone cannot identify its owner.
+    vm.settings.as_mut().unwrap().proxy = "http://127.0.0.1:9090".into();
+    vm.proxy_test = crate::frontend::view_model::ProxyTestState::Testing;
+    let current = ReplyScope::for_command(&BridgeCommand::TestProxy {
+        proxy: vm.settings.as_ref().unwrap().proxy.clone(),
+    });
+    assert!(!old.applies(&vm, None));
+    assert!(current.applies(&vm, None));
+}

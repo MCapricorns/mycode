@@ -854,7 +854,12 @@ impl FrameReducer for CompletionsReducer {
             );
         }
         self.terminal_sent = true;
-        if self.stop_reason.is_none() && self.has_partial() {
+        if self.stop_reason.is_none() {
+            if !self.has_partial() {
+                return crate::providers::driver::protocol_error(
+                    "completions stream ended before a finish reason",
+                );
+            }
             self.begin_interrupt("the stream ended before a finish reason");
         }
         self.assemble()

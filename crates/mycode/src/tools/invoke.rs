@@ -38,7 +38,7 @@ pub async fn prepare_tool_ctx(
         .with_call_id(call_id)
         .with_extra_roots(extra_roots.to_vec())
         .with_read_roots(read_roots.to_vec());
-    let args = crate::tools::tool::normalize_tool_args(args.clone());
+    let mut args = crate::tools::tool::normalize_tool_args(args.clone());
     if let Some(access) = tool.search_access() {
         let path = args.get("path").and_then(Value::as_str).map(str::to_owned);
         let (root, path) = anchored_search(cwd, extra_roots, path.as_deref());
@@ -49,6 +49,9 @@ pub async fn prepare_tool_ctx(
         ctx.cwd = root;
         ctx = ctx.with_prepared_search(std::sync::Arc::new(prepared));
     } else if let Some(access) = tool.file_access() {
+        // Bind the same path that execute_dyn will use after schema-aware
+        // alias repair (for example `file` or `target_file` -> `path`).
+        crate::tools::tool::repair_args(&mut args, &tool.spec().params_schema);
         let path = args
             .get("path")
             .and_then(Value::as_str)
@@ -117,6 +120,20 @@ mod tests {
         )
         .unwrap();
         path.display().to_string()
+    }
+
+    #[tokio::test]
+    async fn file_aliases_bind_the_same_path_before_execution() {
+        let workspace = temp("path-aliases");
+        fs::write(workspace.0.join("note.txt"), "alias content\n").unwrap();
+        for args in [
+            json!({"file": "note.txt"}),
+            json!({"target_file": "note.txt"}),
+            json!(r#"{"filePath":"note.txt"}"#),
+        ] {
+            let text = run(&workspace.0, &ReadTool, args).await;
+            assert!(text.contains("alias content"), "{text}");
+        }
     }
 
     #[tokio::test]

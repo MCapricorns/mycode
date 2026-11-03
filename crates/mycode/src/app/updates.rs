@@ -613,7 +613,7 @@ pub fn persist_pending_update(
 ) -> Result<PreparedUpdate, String> {
     let dir = pending_dir(home);
     std::fs::create_dir_all(&dir).map_err(|error| format!("pending dir: {error}"))?;
-    let (pending, sha_file, version_file, _) = pending_paths(&dir, ASSET_FAMILY);
+    let (pending, sha_file, version_file, attempts_file) = pending_paths(&dir, ASSET_FAMILY);
     let staging = pending.with_extension("moving");
     std::fs::copy(&prepared.new_binary, &staging)
         .map_err(|error| format!("pending copy: {error}"))?;
@@ -625,6 +625,9 @@ pub fn persist_pending_update(
     std::fs::rename(&staging, &pending).map_err(|error| format!("pending move: {error}"))?;
     std::fs::write(&sha_file, format!("{}\n", prepared.binary_sha256))
         .map_err(|error| format!("pending digest: {error}"))?;
+    // Retry counts belong to the old payload. A freshly verified download
+    // must get its own full startup budget, even when an earlier swap failed.
+    std::fs::write(&attempts_file, "0").map_err(|error| format!("pending attempts: {error}"))?;
     // The version file is written last: it is the marker reconcile needs,
     // so a crash mid-persist leaves an incomplete payload to clean up.
     std::fs::write(&version_file, format!("{}\n", prepared.version))

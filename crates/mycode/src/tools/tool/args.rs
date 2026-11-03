@@ -8,7 +8,7 @@ use serde_json::Value;
 /// aliases so model-emitted tool arguments match the snake_case schemas
 /// without failing validation.
 pub fn normalize_tool_args(args: Value) -> Value {
-    let mut args = unwrap_stringified_object(fold_camel_keys(args));
+    let mut args = fold_camel_keys(unwrap_stringified_object(args));
     let Value::Object(map) = &mut args else {
         return args;
     };
@@ -476,10 +476,16 @@ fn fold_camel_keys(value: Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut out = serde_json::Map::new();
+            // Reserve explicit snake_case spellings before folding aliases.
+            // JSON objects preserve input order, so checking only `out` would
+            // let an earlier camelCase alias silently replace the real field.
+            let explicit: std::collections::HashSet<_> = map.keys().cloned().collect();
             for (key, child) in map {
                 let snake = camel_to_snake(&key);
                 let folded = fold_camel_keys(child);
-                if !out.contains_key(&snake) {
+                if snake != key && explicit.contains(&snake) {
+                    out.insert(key, folded);
+                } else if !out.contains_key(&snake) {
                     out.insert(snake, folded);
                 } else if snake != key {
                     // An explicit snake_case field already occupies the slot.

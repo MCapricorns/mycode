@@ -177,10 +177,10 @@ impl XmlToolCallParser {
         let open = self.open.take();
         self.searched = 0;
         let rest = std::mem::take(&mut self.buffer);
-        if rest.is_empty() {
-            Vec::new()
-        } else if let Some(open) = open {
+        if let Some(open) = open {
             vec![XmlPiece::Text(format!("{}{rest}", open.open()))]
+        } else if rest.is_empty() {
+            Vec::new()
         } else {
             vec![XmlPiece::Text(rest)]
         }
@@ -590,6 +590,21 @@ mod tests {
 
     const EXAMPLE_CALL: &str =
         r#"<tool_call>{"name":"run_code","arguments":{"script":"complete('demo')"}}</tool_call>"#;
+
+    #[test]
+    fn an_unterminated_opening_tag_is_preserved_as_text() {
+        for tag in [super::OPEN_TOOL, super::OPEN_MINIMAX] {
+            for width in [1, 3, tag.len()] {
+                let pieces = streamed(tag, width);
+                assert_eq!(visible(&pieces), tag);
+                assert!(
+                    pieces
+                        .iter()
+                        .all(|piece| matches!(piece, XmlPiece::Text(_)))
+                );
+            }
+        }
+    }
 
     #[test]
     fn markdown_examples_are_literal_across_stream_boundaries() {

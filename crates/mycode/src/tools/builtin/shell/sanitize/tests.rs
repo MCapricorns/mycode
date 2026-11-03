@@ -74,3 +74,17 @@ fn clixml_entities_decode_once() {
     let blob = "#< CLIXML\n<Objs><S S=\"Error\">a &amp;lt;b&amp;gt; &quot;c&quot;</S></Objs>";
     assert_eq!(sanitize_captured_shell_text(blob), "a &lt;b&gt; \"c\"");
 }
+
+#[test]
+fn clixml_surrogate_pairs_preserve_non_bmp_text() {
+    let blob = "#< CLIXML\n<Objs><S S=\"Error\">missing _xD83E__xDD80_.rs</S></Objs>";
+    assert_eq!(sanitize_captured_shell_text(blob), "missing 🦀.rs");
+    assert_eq!(
+        sanitize_captured_shell_text("_xD800__x0041__xDC00__xD83D__xDE00_"),
+        "A😀"
+    );
+    assert_eq!(
+        sanitize_captured_shell_text("_x005F_xD83D__xDE00_"),
+        "_xD83D_"
+    );
+}

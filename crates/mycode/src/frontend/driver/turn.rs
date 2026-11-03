@@ -451,8 +451,8 @@ impl FrontendDriver {
     }
 
     /// Steers a chat did not read while another chat was on screen come back
-    /// to the composer now that it opens. A switch just cleared the field,
-    /// so the parked text lands there alone.
+    /// to the composer now that it opens, preserving a welcome-screen draft
+    /// if the chat was opened from the parked desk.
     pub(crate) fn unpark_steers(&mut self, session_id: &str, out: &mut Vec<Effect>) {
         let Some(index) = self
             .vm
@@ -463,13 +463,17 @@ impl FrontendDriver {
             return;
         };
         let (_, texts) = self.vm.parked_steers.remove(index);
-        let text = texts
+        let mut text = texts
             .into_iter()
             .filter(|text| !text.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
         if text.is_empty() {
             return;
+        }
+        if !self.vm.composer_draft.trim().is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&self.vm.composer_draft);
         }
         out.push(Effect::ComposerSet {
             text: text.clone(),
@@ -625,7 +629,7 @@ impl FrontendDriver {
         }
         self.act(FrontendAction::TurnArmed, out);
         if clear_composer {
-            self.vm.composer_draft.clear();
+            self.act(FrontendAction::ComposerChanged(String::new()), out);
             out.push(Effect::ComposerSet {
                 text: String::new(),
                 focus: false,

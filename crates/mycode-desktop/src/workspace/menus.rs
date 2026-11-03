@@ -252,7 +252,7 @@ impl Workspace {
         {
             // Enter is left to on_composer_event: accepting the mention here
             // and again there ran a command on the raw draft.
-            let index = moved(
+            let Some(index) = mention_move(
                 self.mention_highlight(),
                 self.vm()
                     .mention
@@ -260,13 +260,37 @@ impl Workspace {
                     .expect("visible mention")
                     .items
                     .len(),
-                key == "down",
-            );
+                key,
+            ) else {
+                return false;
+            };
             self.menu_navigation.mention = Some(index);
             self.menu_navigation.mention_scroll.scroll_to_item(index);
             cx.notify();
             return true;
         }
         false
+    }
+}
+
+/// Only arrow keys navigate mentions. Enter must reach the textarea's submit
+/// handler, which accepts the current mention without sending the draft.
+fn mention_move(current: usize, len: usize, key: &str) -> Option<usize> {
+    match key {
+        "up" => Some(moved(current, len, false)),
+        "down" => Some(moved(current, len, true)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mention_move;
+
+    #[test]
+    fn mention_arrows_move_but_enter_reaches_the_composer() {
+        assert_eq!(mention_move(1, 3, "up"), Some(0));
+        assert_eq!(mention_move(1, 3, "down"), Some(2));
+        assert_eq!(mention_move(1, 3, "enter"), None);
     }
 }

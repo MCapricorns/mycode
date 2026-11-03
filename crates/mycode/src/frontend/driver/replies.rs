@@ -54,11 +54,19 @@ impl FrontendDriver {
                 // the core says it was already read (`Ok(false)`), the
                 // commit event owns the strip; when the turn is gone
                 // (`Err`), its terminal event already cleared it.
-                if matches!(reply, BridgeReply::SteerRetracted(Ok(true)))
-                    && self.open_session_id().as_deref() == Some(session.as_str())
-                {
-                    self.act(FrontendAction::SteerRetracted(text.clone()), out);
-                    self.restore_above_draft(text, out);
+                if matches!(reply, BridgeReply::SteerRetracted(Ok(true))) {
+                    if self.open_session_id().as_deref() == Some(session.as_str()) {
+                        self.act(FrontendAction::SteerRetracted(text.clone()), out);
+                        self.restore_above_draft(text, out);
+                    } else {
+                        self.act(
+                            FrontendAction::SteersParked {
+                                session_id: session,
+                                texts: vec![text],
+                            },
+                            out,
+                        );
+                    }
                 }
                 return;
             }
@@ -148,10 +156,11 @@ impl FrontendDriver {
                         focus: false,
                     });
                     self.mention_query = None;
-                    // Steers this chat did not read while another one was on
-                    // screen come back now that its composer is here.
-                    self.unpark_steers(&session_id, out);
                 }
+                // Also restore after the desk was parked (no active session).
+                // The parked queue is consumed once, so same-session reloads
+                // cannot duplicate returned text.
+                self.unpark_steers(&session_id, out);
                 self.restore_failed_send(&session_id, out);
                 self.follow_session_project(&session_id, out);
                 self.dispatch(BridgeCommand::ListResources {

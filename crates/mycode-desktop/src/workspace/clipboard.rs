@@ -99,8 +99,21 @@ fn picture_at(text: &str) -> Result<Option<ClipboardPicture>, String> {
     if trimmed.is_empty() || trimmed.contains(['\n', '\r']) {
         return Ok(None);
     }
-    let path = local_path(trimmed);
+    let Some(path) = local_path(trimmed) else {
+        return Ok(None);
+    };
     if !path.is_file() {
+        return Ok(None);
+    }
+    // Existing source/document paths are ordinary composer text. Probe only
+    // the signature before the bounded image read, so even a large text file
+    // is not consumed as an oversized or unsupported picture.
+    use std::io::Read as _;
+    let mut signature = Vec::with_capacity(12);
+    std::fs::File::open(&path)
+        .and_then(|file| file.take(12).read_to_end(&mut signature))
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if mycode::core::image_media_type(&signature).is_none() {
         return Ok(None);
     }
     let (mime, bytes) = super::attachments::read_image_file(&path)?;
@@ -121,15 +134,36 @@ fn reencoded_as_png(bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// The local path a pasted path or `file://` URL names.
-fn local_path(text: &str) -> PathBuf {
+fn local_path(text: &str) -> Option<PathBuf> {
     let trimmed = text.trim().trim_matches(['"', '\'']);
-    match trimmed.strip_prefix("file://") {
-        Some(rest) => {
-            let rest = rest.strip_prefix("localhost").unwrap_or(rest);
-            PathBuf::from(file_url_path(rest))
-        }
-        None => PathBuf::from(trimmed),
+    let Some(rest) = trimmed.strip_prefix("file://") else {
+        return Some(PathBuf::from(trimmed));
+    };
+    let (host, path) = rest.split_once('/')?;
+    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+        return None;
     }
+    // URL paths encode spaces, Unicode and literal percent signs. Decode
+    // bytes before UTF-8 validation so a multibyte filename stays intact.
+    let mut decoded = Vec::with_capacity(path.len() + 1);
+    decoded.push(b'/');
+    let mut bytes = path.bytes();
+    while let Some(byte) = bytes.next() {
+        let byte = if byte == b'%' {
+            let high = char::from(bytes.next()?).to_digit(16)?;
+            let low = char::from(bytes.next()?).to_digit(16)?;
+            (high * 16 + low) as u8
+        } else {
+            byte
+        };
+        if byte == 0 {
+            return None;
+        }
+        decoded.push(byte);
+    }
+    Some(PathBuf::from(file_url_path(
+        &String::from_utf8(decoded).ok()?,
+    )))
 }
 
 /// A Windows drive URL spells the path `/C:/x`; the leading slash is not part
@@ -205,12 +239,51 @@ mod tests {
     fn a_windows_drive_url_keeps_its_letter() {
         assert_eq!(
             local_path("file:///C:/x/a.png"),
-            PathBuf::from("C:/x/a.png")
+            Some(PathBuf::from("C:/x/a.png"))
         );
         assert_eq!(
             local_path("file://localhost/C:/x/a.png"),
-            PathBuf::from("C:/x/a.png")
+            Some(PathBuf::from("C:/x/a.png"))
         );
+    }
+
+    #[test]
+    fn pasted_source_paths_stay_text_even_when_the_file_is_large() {
+        let path = write_png("source");
+        std::fs::write(&path, vec![b'x'; mycode::core::MAX_IMAGE_BYTES + 1]).expect("source file");
+        assert!(
+            picture_at(&path.display().to_string())
+                .expect("read")
+                .is_none()
+        );
+        std::fs::remove_file(path).expect("cleanup");
+    }
+
+    #[test]
+    fn file_urls_decode_escaped_names_and_reject_foreign_hosts() {
+        assert_eq!(
+            local_path("file:///C:/My%20Files/%E4%B8%AD%25.png"),
+            Some(PathBuf::from("C:/My Files/中%.png"))
+        );
+        for invalid in [
+            "file://localhost-other/C:/x.png",
+            "file://server/C:/x.png",
+            "file:///C:/bad%2.png",
+            "file:///C:/bad%00.png",
+            "file:///C:/bad%FF.png",
+        ] {
+            assert_eq!(local_path(invalid), None, "{invalid}");
+        }
+        let path = write_png("with space");
+        let url = format!(
+            "file:///{}",
+            path.display()
+                .to_string()
+                .replace('\\', "/")
+                .replace(' ', "%20")
+        );
+        assert!(picture_at(&url).expect("read escaped URL").is_some());
+        std::fs::remove_file(path).expect("cleanup");
     }
 
     /// A 2x2 32-bit BI_RGB bitmap, the shape a screenshot tool publishes.

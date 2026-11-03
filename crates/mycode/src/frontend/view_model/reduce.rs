@@ -322,8 +322,8 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                 conversation.head = head;
                 push_entry_once(conversation, entry);
             }
-            state.composer_draft.clear();
-            state.mention = None;
+            // Submission already cleared the sent draft. Persistence can
+            // finish after the user starts writing their next message.
             state.turn_alert = None;
         }
         FrontendAction::TurnArmed => {

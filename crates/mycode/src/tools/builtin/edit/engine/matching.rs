@@ -1,7 +1,7 @@
 //! Literal, whitespace-tolerant, and regex match finding for one edit plan.
 
 use super::*;
-pub(super) fn relaxed_literal_matches(body: &str, pattern: &str) -> Vec<Found> {
+pub(super) fn relaxed_literal_matches(body: &str, pattern: &str) -> Result<Vec<Found>, ToolError> {
     let include_terminator = pattern.ends_with('\n');
     let mut needle: Vec<String> = pattern.split('\n').map(normalize_line).collect();
     if include_terminator {
@@ -11,7 +11,7 @@ pub(super) fn relaxed_literal_matches(body: &str, pattern: &str) -> Vec<Found> {
         needle.pop();
     }
     if needle.is_empty() || needle.iter().all(String::is_empty) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut lines: Vec<(usize, usize, &str)> = Vec::new();
     let mut offset = 0usize;
@@ -26,7 +26,7 @@ pub(super) fn relaxed_literal_matches(body: &str, pattern: &str) -> Vec<Found> {
         lines.push((start, line.len(), content));
     }
     if lines.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let width = needle.len();
     let mut found = Vec::new();
@@ -42,6 +42,11 @@ pub(super) fn relaxed_literal_matches(body: &str, pattern: &str) -> Vec<Found> {
         if !matches {
             continue;
         }
+        if found.len() >= MAX_MATCHES {
+            return Err(ToolError::InvalidArgs(format!(
+                "edit produced more than {MAX_MATCHES} matches"
+            )));
+        }
         let start = lines[first].0;
         let mut end = lines[last].0 + lines[last].1;
         if !include_terminator {
@@ -54,10 +59,9 @@ pub(super) fn relaxed_literal_matches(body: &str, pattern: &str) -> Vec<Found> {
             pattern_id: 0,
         });
     }
-    // Overlapping windows mean the relaxed match is not a unique block; only
-    // keep non-overlapping candidates so a repeated line cannot fan out.
-    found.dedup_by(|next, previous| next.start < previous.end);
-    found
+    // Preserve overlapping windows for the shared ambiguity check. Dropping
+    // one here would turn an ambiguous edit into an apparently unique match.
+    Ok(found)
 }
 
 pub(super) fn normalize_line(line: &str) -> String {

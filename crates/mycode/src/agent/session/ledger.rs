@@ -92,6 +92,9 @@ impl BranchLedger {
 /// One actor session projection.
 #[derive(Debug, Default)]
 pub(crate) struct SessionLedger {
+    /// Pending actor operations retain a clone until their terminal is dropped,
+    /// preventing cache eviction between invocation and the terminal pull.
+    pub(crate) residency: std::sync::Arc<()>,
     /// The branch the session's writes last went to — the one `open`
     /// reports as current. `None` until a durable pointer resolves.
     pub(crate) current: Option<BranchId>,

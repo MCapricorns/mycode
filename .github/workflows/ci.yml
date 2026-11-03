@@ -140,6 +140,7 @@ jobs:
           python3 .github/scripts/advance_main.py --self-test
           python3 .github/scripts/release_notes.py --self-test
           bash .github/scripts/cargo_release_build.sh --self-test
+          python3 -B -m unittest discover -s scripts/tests -v
 
       - name: Choose a new release tag
         id: plan

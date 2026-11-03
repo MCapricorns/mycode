@@ -40,6 +40,22 @@ fn different_spacing_is_repaired() {
 }
 
 #[test]
+fn overlapping_whitespace_relaxed_blocks_are_rejected() {
+    let text = miss(
+        "  same\n  same\n  same\n",
+        &[literal("same\nsame", "changed")],
+    );
+    assert!(text.contains("overlap"), "{text}");
+}
+
+#[test]
+fn whitespace_relaxed_matches_keep_the_global_match_budget() {
+    let body = "  same\n".repeat(super::MAX_MATCHES + 1);
+    let text = miss(&body, &[literal("same ", "changed")]);
+    assert!(text.contains("more than"), "{text}");
+}
+
+#[test]
 fn different_indentation_is_repaired() {
     let body = "fn f() {\n    let x = 1;\n}\n";
     let (text, _) = apply(body, "\tlet x = 1;", "let y = 2;");

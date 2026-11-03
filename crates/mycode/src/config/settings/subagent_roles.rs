@@ -109,7 +109,7 @@ impl AppSettings {
                 (Some(provider), Some(model)) => {
                     if provider != crate::config::MAGPIE_PROVIDER_ID {
                         return Err(invalid(&format!(
-                            "{field}.provider: \"{provider}\" is not the magpie gateway"
+                            "{field}.provider: must be the magpie gateway"
                         )));
                     }
                     bounded_text(model, MAX_FIELD_BYTES).map_err(|_| {
@@ -140,6 +140,18 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use super::SubagentSettings;
+
+    #[test]
+    fn an_invalid_provider_is_not_echoed_in_configuration_errors() {
+        let mut settings = crate::config::AppSettings::default();
+        let role = settings.subagents.role_mut("scout");
+        role.provider = Some("accidentally-pasted-secret".to_owned());
+        role.model = Some("model".to_owned());
+        let error = settings.validate().expect_err("unknown provider");
+        assert!(error.summary().contains("subagents.roles[0].provider"));
+        assert!(!error.to_string().contains("accidentally-pasted-secret"));
+        assert!(!format!("{error:?}").contains("accidentally-pasted-secret"));
+    }
 
     #[test]
     fn retired_limits_are_document_damage_now() {

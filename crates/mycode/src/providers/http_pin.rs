@@ -624,6 +624,7 @@ fn is_public_ipv4(ip: Ipv4Addr) -> bool {
     if ip.is_private()
         || ip.is_loopback()
         || ip.is_link_local()
+        || ip.is_multicast()
         || ip.is_broadcast()
         || ip.is_unspecified()
         || ip.is_documentation()

@@ -571,3 +571,20 @@ async fn an_ipv6_literal_resolves_without_dns() {
         .unwrap();
     assert_eq!(addrs, [std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)]);
 }
+
+#[test]
+fn multicast_addresses_are_never_public_download_targets() {
+    for address in ["224.0.0.1", "239.255.255.250", "ff02::1"] {
+        let address = address.parse().unwrap();
+        assert!(!super::is_public_ip(address));
+        assert!(
+            super::connection_addresses(
+                super::PinMode::PublicHttps,
+                0,
+                "https://downloads.example/update.zip",
+                &[address],
+            )
+            .is_err()
+        );
+    }
+}

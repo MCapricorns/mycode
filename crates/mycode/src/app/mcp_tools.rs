@@ -194,6 +194,9 @@ impl ToolDyn for DynamicMcpTool {
             let result = tokio::select! {
                 biased;
                 () = ctx.cancel.cancelled() => {
+                    // Dropping an in-flight stdio write/read can leave a partial
+                    // JSON-RPC line. Reconnect next turn instead of reusing it.
+                    self.broken.store(true, Ordering::Relaxed);
                     return Err(ToolError::Execution(format!(
                         "MCP call cancelled{}",
                         crate::tools::tool::INTERRUPTED_NOTE

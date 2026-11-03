@@ -939,3 +939,64 @@ async fn the_drain_reports_a_handshake_failure() {
         [("gh".to_owned(), "handshake timed out".to_owned())]
     );
 }
+
+#[tokio::test]
+async fn cancelled_mcp_call_invalidates_the_shared_connection() {
+    struct PendingChannel(tokio_util::sync::CancellationToken);
+    impl crate::app::mcp_client::JsonRpcChannel for PendingChannel {
+        fn request<'a>(
+            &'a self,
+            _id: u64,
+            _method: &'a str,
+            _params: Value,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Value, crate::app::mcp_client::McpError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                self.0.cancel();
+                std::future::pending().await
+            })
+        }
+        fn notify<'a>(
+            &'a self,
+            _method: &'a str,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<(), crate::app::mcp_client::McpError>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let ctx = crate::tools::ToolCtx::new(std::env::temp_dir());
+    let broken = Arc::new(AtomicBool::new(false));
+    let tool = super::DynamicMcpTool::new(
+        server_info("pending", None),
+        McpTool {
+            name: "lookup".into(),
+            description: None,
+            input_schema: json!({"type": "object"}),
+            read_only: true,
+        },
+        Arc::new(tokio::sync::Mutex::new(
+            crate::app::mcp_client::McpClient::new(Arc::new(PendingChannel(ctx.cancel.clone()))),
+        )),
+        broken.clone(),
+        Arc::new(std::env::temp_dir()),
+    );
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tool.execute_dyn(json!({}), &ctx, &mut crate::tools::ToolStream::closed()),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert!(error.to_string().contains("cancelled"));
+    assert!(broken.load(std::sync::atomic::Ordering::Relaxed));
+}

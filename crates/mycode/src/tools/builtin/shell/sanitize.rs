@@ -60,7 +60,8 @@ fn decode_clixml_text(text: &str) -> String {
 
 /// Decodes every CLIXML `_xHHHH_` escape (4 hex digits) to a Unicode scalar.
 ///
-/// Surrogate code points are dropped. The scan is one pass, so `_x005F_`
+/// UTF-16 surrogate pairs are combined; unpaired surrogates are dropped.
+/// The scan is one pass, so `_x005F_`
 /// (underscore) does not re-open the following text as another escape.
 fn decode_clixml_char_escapes(text: &str) -> String {
     if !text.contains("_x") {
@@ -71,8 +72,16 @@ fn decode_clixml_char_escapes(text: &str) -> String {
     let mut index = 0;
     while index < bytes.len() {
         if is_clixml_char_escape(bytes, index) {
-            let code =
+            let mut code =
                 u32::from_str_radix(&text[index + 2..index + 6], 16).expect("four hex digits");
+            if (0xd800..=0xdbff).contains(&code) && is_clixml_char_escape(bytes, index + 7) {
+                let low =
+                    u32::from_str_radix(&text[index + 9..index + 13], 16).expect("four hex digits");
+                if (0xdc00..=0xdfff).contains(&low) {
+                    code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+                    index += 7;
+                }
+            }
             if let Some(ch) = char::from_u32(code) {
                 out.push(ch);
             }

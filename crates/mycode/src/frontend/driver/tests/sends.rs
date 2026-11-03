@@ -37,6 +37,35 @@ fn user_entry() -> ConversationEntry {
 }
 
 #[test]
+fn a_delayed_send_acknowledgement_preserves_the_next_draft() {
+    let (mut driver, root) = scratch_driver("send-next-draft");
+    let (session, _) = ready_send(&mut driver);
+    let mut out = Vec::new();
+    driver.submit("original @prompt", &mut out);
+    let _ = driver.held_send.take();
+    assert!(driver.vm.composer_draft.is_empty());
+    assert!(driver.vm.mention.is_none());
+    driver.act(
+        FrontendAction::ComposerChanged("next @file".into()),
+        &mut out,
+    );
+    assert!(driver.vm.mention.is_some());
+    driver.on_reply(
+        ReplyScope::Send,
+        BridgeReply::Sent {
+            session,
+            text: "original @prompt".into(),
+            outcome: Ok((user_entry().event_id.clone(), user_entry())),
+        },
+        &mut out,
+    );
+    assert_eq!(driver.vm.composer_draft, "next @file");
+    assert!(driver.vm.mention.is_some());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_send_keeps_its_route_and_starts_after_the_project_is_parked() {
     let (mut driver, root) = scratch_driver("send-parked");
     let (session, branch) = ready_send(&mut driver);

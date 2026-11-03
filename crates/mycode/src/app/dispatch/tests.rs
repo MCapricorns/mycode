@@ -125,3 +125,40 @@ async fn a_second_turn_waits_for_the_first_terminal_even_after_stop() {
     }
     panic!("the session actor kept the temporary home open");
 }
+
+#[tokio::test]
+async fn deletion_preserves_disk_when_actor_eviction_fails() {
+    let root = std::env::temp_dir().join(format!(
+        "mycode-delete-fence-{}-{}",
+        std::process::id(),
+        crate::core::unix_now().as_nanos()
+    ));
+    let home = HomeLayout::from_root(&root).unwrap();
+    let state = CoreState::new(home, Vec::new());
+    let created = state.service.create(None).await.unwrap();
+    let session_id = created.session_id.to_string();
+    let relative = crate::config::locate_session_dir(&state.home, &session_id)
+        .unwrap()
+        .unwrap();
+    let directory = state.home.owned_join(relative).unwrap();
+    let marker = directory.join("keep.txt");
+    std::fs::write(&marker, "preserve this session").unwrap();
+    state.service.clone().shutdown().await;
+
+    let reply = handle(&state, BridgeCommand::DeleteSession { session_id }).await;
+    assert!(matches!(reply, BridgeReply::SessionDeleted(Err(_))));
+    assert!(
+        marker.is_file(),
+        "failed eviction must not delete session data"
+    );
+    let listing = crate::agent::session::inspect_sessions(&state.home).unwrap();
+    assert_eq!(listing.sessions.len(), 1);
+    drop(state);
+    for _ in 0..100 {
+        if std::fs::remove_dir_all(&root).is_ok() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("temporary session store remained open");
+}

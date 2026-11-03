@@ -331,7 +331,7 @@ pub(crate) fn render_diff_panel(
         .unwrap_or(t("Diff", "差异"))
         .to_owned();
     let rows = numbered_diff_rows(workspace.git_diff());
-    let (added, removed) = diff_line_counts(workspace.git_diff());
+    let (added, removed) = diff_line_counts(&rows);
     let viewport_width = f32::from(window.viewport_size().width);
     let (_, (diff_right, diff_width)) = responsive_panel_bounds(
         viewport_width,
@@ -421,7 +421,7 @@ pub(crate) fn render_diff_panel(
                         .text_xs()
                         .font_family(theme.mono_font_family.clone())
                         .children(rows.into_iter().enumerate().map(|(index, row)| {
-                            let (color, bg) = diff_line_paint(row.text, theme);
+                            let (color, bg) = diff_line_paint(row.kind, theme);
                             div()
                                 .id(format!("diff-line-{index}"))
                                 .flex()
@@ -451,6 +451,15 @@ pub(crate) fn render_diff_panel(
 struct NumberedDiffRow<'a> {
     number: String,
     text: &'a str,
+    kind: DiffLineKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiffLineKind {
+    Added,
+    Removed,
+    Hunk,
+    Other,
 }
 
 /// One row per diff line with its gutter number; a diff still loading is a
@@ -460,23 +469,32 @@ fn numbered_diff_rows(diff: &str) -> Vec<NumberedDiffRow<'_>> {
         return vec![NumberedDiffRow {
             number: String::new(),
             text: t("Loading diff…", "正在加载差异…"),
+            kind: DiffLineKind::Other,
         }];
     }
-    let mut old_n = 1u32;
-    let mut new_n = 1u32;
+    let mut old_n = 1u64;
+    let mut new_n = 1u64;
+    let mut in_hunk = false;
     let mut rows = Vec::new();
     for line in diff.lines() {
         if let Some((old, new)) = crate::ui::chat::parse_diff_hunk_header(line) {
-            old_n = old;
-            new_n = new;
+            old_n = u64::from(old);
+            new_n = u64::from(new);
+            in_hunk = true;
             rows.push(NumberedDiffRow {
                 number: String::new(),
                 text: line,
+                kind: DiffLineKind::Hunk,
             });
             continue;
         }
-        let added = line.starts_with('+') && !line.starts_with("+++");
-        let removed = line.starts_with('-') && !line.starts_with("---");
+        if line.starts_with("diff ") {
+            in_hunk = false;
+        }
+        // File headers have no line number. Within a hunk, even `+++` and
+        // `---` are source lines; only the first sign is the diff marker.
+        let added = in_hunk && line.starts_with('+');
+        let removed = in_hunk && line.starts_with('-');
         let number = if added {
             let value = new_n.to_string();
             new_n += 1;
@@ -485,48 +503,52 @@ fn numbered_diff_rows(diff: &str) -> Vec<NumberedDiffRow<'_>> {
             let value = old_n.to_string();
             old_n += 1;
             value
-        } else if line.starts_with("diff ")
-            || line.starts_with("index ")
-            || line.starts_with("+++")
-            || line.starts_with("---")
-        {
-            String::new()
-        } else {
+        } else if in_hunk && line.starts_with(' ') {
             let value = new_n.to_string();
             old_n += 1;
             new_n += 1;
             value
+        } else {
+            // Metadata, including `\ No newline at end of file`, does not
+            // consume either file's line counter.
+            String::new()
         };
-        rows.push(NumberedDiffRow { number, text: line });
+        let kind = if added {
+            DiffLineKind::Added
+        } else if removed {
+            DiffLineKind::Removed
+        } else {
+            DiffLineKind::Other
+        };
+        rows.push(NumberedDiffRow {
+            number,
+            text: line,
+            kind,
+        });
     }
     rows
 }
 
 /// Added and removed line counts, file headers excluded.
-fn diff_line_counts(diff: &str) -> (usize, usize) {
-    diff.lines().fold((0, 0), |(added, removed), line| {
-        if line.starts_with('+') && !line.starts_with("+++") {
-            (added + 1, removed)
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            (added, removed + 1)
-        } else {
-            (added, removed)
-        }
-    })
+fn diff_line_counts(rows: &[NumberedDiffRow<'_>]) -> (usize, usize) {
+    rows.iter()
+        .fold((0, 0), |(added, removed), row| match row.kind {
+            DiffLineKind::Added => (added + 1, removed),
+            DiffLineKind::Removed => (added, removed + 1),
+            _ => (added, removed),
+        })
 }
 
-fn diff_line_paint(line: &str, theme: &Theme) -> (gpui_kit::Hsla, gpui_kit::Hsla) {
-    let added = line.starts_with('+') && !line.starts_with("+++");
-    let removed = line.starts_with('-') && !line.starts_with("---");
-    if added {
+fn diff_line_paint(kind: DiffLineKind, theme: &Theme) -> (gpui_kit::Hsla, gpui_kit::Hsla) {
+    if kind == DiffLineKind::Added {
         let ink = crate::ui::desk::diff_ink(theme, true);
         return (ink, crate::ui::desk::diff_wash(ink));
     }
-    if removed {
+    if kind == DiffLineKind::Removed {
         let ink = crate::ui::desk::diff_ink(theme, false);
         return (ink, crate::ui::desk::diff_wash(ink));
     }
-    if line.starts_with("@@") {
+    if kind == DiffLineKind::Hunk {
         return (theme.primary, theme.transparent);
     }
     (theme.muted_foreground, theme.transparent)
@@ -536,5 +558,58 @@ fn git_file_label(file: &crate::git_status::GitFile) -> String {
     match &file.previous {
         Some(previous) => format!("{previous} -> {}", file.path),
         None => file.path.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DiffLineKind, diff_line_counts, numbered_diff_rows};
+
+    #[test]
+    fn diff_metadata_does_not_consume_source_lines_or_hide_sign_prefixed_source() {
+        let diff = "diff --git a/source b/source\n\
+                    new file mode 100644\n\
+                    --- a/source\n\
+                    +++ b/source\n\
+                    @@ -7,2 +9,2 @@\n\
+                    ---old\n\
+                    \\ No newline at end of file\n\
+                    +++new\n\
+                    \\ No newline at end of file\n \
+                    context\n\
+                    diff --git a/next b/next\n\
+                    --- a/next\n\
+                    +++ b/next\n\
+                    @@ -1 +1 @@\n\
+                    -before\n\
+                    +after\n";
+        let rows = numbered_diff_rows(diff);
+        let numbered: Vec<_> = rows
+            .iter()
+            .filter(|row| !row.number.is_empty())
+            .map(|row| (row.text, row.number.as_str()))
+            .collect();
+        assert_eq!(
+            numbered,
+            [
+                ("---old", "7"),
+                ("+++new", "9"),
+                (" context", "10"),
+                ("-before", "1"),
+                ("+after", "1")
+            ]
+        );
+        assert_eq!(diff_line_counts(&rows), (2, 2));
+        assert!(rows.iter().find(|row| row.text == "+++new").unwrap().kind == DiffLineKind::Added);
+        assert!(
+            rows.iter().find(|row| row.text == "---old").unwrap().kind == DiffLineKind::Removed
+        );
+    }
+
+    #[test]
+    fn diff_line_numbers_can_advance_past_a_large_hunk_start() {
+        let rows = numbered_diff_rows("@@ -4294967295,2 +4294967295,2 @@\n one\n two\n");
+        assert_eq!(rows[1].number, "4294967295");
+        assert_eq!(rows[2].number, "4294967296");
     }
 }

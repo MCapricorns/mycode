@@ -811,10 +811,11 @@ def _expect_shallow_replay() -> None:
             "1",
             "--branch",
             "ci/release-0.9.1-1",
-            str(bare),
+            bare.as_uri(),
             str(shallow),
         )
         _configure(shallow)
+        _expect(_is_shallow(shallow), "fixture clone is not shallow")
         advance_release_main(shallow, built_sha=built)
         tip = _tip(bare)
         _expect(tip != built, "shallow replay rewound main to the built commit")
@@ -843,10 +844,11 @@ def _expect_shallow_fast_forward() -> None:
             "1",
             "--branch",
             "ci/release-0.9.1-1",
-            str(bare),
+            bare.as_uri(),
             str(shallow),
         )
         _configure(shallow)
+        _expect(_is_shallow(shallow), "fixture clone is not shallow")
         advance_release_main(shallow, built_sha=built)
         _expect(_tip(bare) == built, "shallow clone did not fast-forward main")
 

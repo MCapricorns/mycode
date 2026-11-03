@@ -302,3 +302,11 @@ fn unfinished_tool_calls_report_in_progress_only_while_a_turn_runs() {
         "Ran agent"
     );
 }
+
+#[test]
+fn batch_targets_keep_first_seen_order_without_duplicates() {
+    assert_eq!(
+        super::tool_batch_targets(&["read a.rs", "read b.rs", "edit a.rs", "read", "read c.rs"]),
+        "a.rs · b.rs · c.rs"
+    );
+}
