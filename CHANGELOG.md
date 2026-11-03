@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.39] - 2026-11-03
+
 ### Fixed
 
 - MCP HTTP 收到完整 SSE 回复后立即返回，不再等待服务端关闭连接；保留超长错误响应的前缀，限制 stderr 逐行缓存，写入阻塞也受超时约束，取消调用后重新建立连接。
@@ -622,7 +624,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.38...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.39...HEAD
+[0.12.39]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.39
 [0.12.38]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.38
 [0.12.37]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.37
 [0.12.36]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.36
