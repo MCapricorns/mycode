@@ -229,9 +229,8 @@ fn agent_progress(role: &str, phase: &str, detail: &str) -> String {
 /// Parent-prompt dispatch section for the roles that are actually enabled.
 ///
 /// Catalog lines are the short when-to-use descriptions. The bullets are the
-/// decision boundary: dispatch only for independent, bounded work that cuts
-/// cost or improves quality, and run one artisan at a time unless the briefs
-/// touch separate files. Only behavior this process implements is named.
+/// decision boundary: proactively dispatch independent work within the user
+/// request, while keeping small tasks local and writer scopes disjoint.
 #[must_use]
 pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSettings) -> String {
     let enabled: Vec<&SubagentRole> = catalog
@@ -251,16 +250,16 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
     // role switched off in settings is never advertised to the model.
     let has = |name: &str| enabled.iter().any(|role| role.name == name);
     let mut dispatch = vec![
-        "Delegate only work that stands on its own and benefits from a separate context or independent judgment. Keep small edits, one lookup, already-resolved work and the immediate critical path here. Resolve a vague brief before dispatch.",
+        "Proactively use the enabled roles for substantial tasks; do not wait for the user to ask for subagents. The task request authorizes in-scope delegation unless the user says otherwise. At the first useful task split, delegate work that stands on its own: independent investigation, a bounded implementation, or an independent review. State briefly what you are delegating, then call the tool. Keep small edits, one lookup and already-resolved work here. Resolve a vague brief from available context before dispatch; ask only for a missing decision that blocks the task.",
     ];
     if has("scout") {
-        dispatch.push("`scout` retrieves repository facts, API references and external evidence with path:line or URL citations. It cannot run commands, build, test, or edit. Split research only into distinct questions; reuse supplied findings instead of repeating the parent's search.");
+        dispatch.push("Use `scout` early when a substantial task needs repository exploration or evidence gathering. `scout` retrieves repository facts, API references and external evidence with path:line or URL citations. It cannot run commands, build, test, or edit. Split research only into distinct questions; reuse supplied findings instead of repeating the parent's search.");
     }
     if has("artisan") {
-        dispatch.push("`artisan` implements and verifies a bounded change, using its role's configured isolation (built-in default: worktree). Give it paths, constraints and a done condition. Writers with overlapping files run one at a time. It returns an outcome and check evidence, not a diff; the parent inspects and integrates the retained worktree. No automatic commit, merge or PR.");
+        dispatch.push("Use `artisan` when an implementation can be bounded to concrete files and a done condition. `artisan` implements and verifies a bounded change, using its role's configured isolation (built-in default: worktree). Give it paths, constraints and a done condition. Writers with overlapping files run one at a time. It returns an outcome and check evidence, not a diff; the parent inspects and integrates the retained worktree. No automatic commit, merge or PR.");
     }
     if has("sentinel") {
-        dispatch.push("`sentinel` independently reviews a concrete target. Supply the diff or its readable artifact, requirements and current check results. It has no shell: execution-dependent requirements need parent-supplied evidence. Ask for confirmed defects with path:line, trigger, consequence and the smallest fix; no edits.");
+        dispatch.push("Use `sentinel` for an independent review after substantial or risky changes, supplying existing checks rather than repeating them. `sentinel` independently reviews a concrete target. Supply the diff or its readable artifact, requirements and current check results. It has no shell: execution-dependent requirements need parent-supplied evidence. Ask for confirmed defects with path:line, trigger, consequence and the smallest fix; no edits.");
     }
     if has("skeptic") {
         dispatch.push("`skeptic` challenges one explicit claim. Supply the claim, relevant evidence and a falsifiable done condition; it is read-only and must not repeat a general review.");
@@ -280,11 +279,11 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
     dispatch.push("agent_status returns stable run ids, results and artifact paths; read clipped reports before relying on them. agent_stop requests cancellation. agent_message steers a live child or starts a new standalone run from explicit summary context after completion. Completed worktree writers reopen the exact retained checkout, preserving dirty, untracked and ignored files; an unavailable checkout fails without replacing it. Full-session continuation is unsupported; stopped runs cannot resume.");
     if workflow_ready {
         if has("scout") {
-            dispatch.push("agent_workflow name=research takes inputs.QUESTION: three independent evidence passes, synthesis, then independent acceptance. Use it for a question that needs those distinct perspectives.");
+            dispatch.push("Prefer agent_workflow name=research for substantial research or investigation that benefits from multiple evidence passes. Start it without waiting for an explicit workflow request. It takes inputs.QUESTION: three independent evidence passes, synthesis, then independent acceptance. Example: {\"name\":\"research\",\"inputs\":{\"QUESTION\":\"Investigate the reported failure using the supplied paths, symptoms and constraints.\"}}.");
         }
-        dispatch.push("agent_workflow name=code-review takes inputs.TARGET. Provide the concrete diff or readable evidence; its read-only reviewers cannot run Git. Findings in the target can still be a successful review. Only the independent acceptance run's exact terminal WORKFLOW_ACCEPTANCE: PASS establishes workflow success.");
+        dispatch.push("Prefer agent_workflow name=code-review for a substantial code review needing multiple perspectives, without waiting for an explicit workflow request. It takes inputs.TARGET. Provide the concrete diff or readable evidence; its read-only reviewers cannot run Git. Findings in the target can still be a successful review. Only the independent acceptance run's exact terminal WORKFLOW_ACCEPTANCE: PASS establishes workflow success.");
         if has("artisan") {
-            dispatch.push("agent_workflow name=migration takes TARGET, CONTRACT, CORE_CHANGE, ADAPTER_CHANGE, CORE_SCOPE, CORE_TEST_SCOPE, ADAPTER_SCOPE and ADAPTER_TEST_SCOPE in inputs. Writers hand back worktrees. waiting_integration is unfinished: integrate manually, then action=resume (or accept) with the workflow id to run the gate and independent acceptance in the parent cwd. Reworked slices need integration again. Failed dependencies, disabled roles and cancellation block dependent work.");
+            dispatch.push("Prefer agent_workflow name=migration when a migration has a concrete contract and separable core and adapter changes. It takes TARGET, CONTRACT, CORE_CHANGE, ADAPTER_CHANGE, CORE_SCOPE, CORE_TEST_SCOPE, ADAPTER_SCOPE and ADAPTER_TEST_SCOPE in inputs. Writers hand back worktrees. waiting_integration is unfinished: integrate manually, then action=resume (or accept) with the workflow id to run the gate and independent acceptance in the parent cwd. Reworked slices need integration again. Failed dependencies, disabled roles and cancellation block dependent work.");
         }
         dispatch.push("After rejection, action=revise requires id, node_id, feedback and expected_revision. Correct the producer and affected dependents within existing authorization and declared scope, then collect the new independent acceptance result. Preserve prior evidence and the original writer worktree. Revision starts summarized runs; it does not restore a full conversation session. No hidden retries, revival of cancelled workflows or revision before settling completes. Report scope or approval blockers.");
     }

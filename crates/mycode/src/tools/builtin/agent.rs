@@ -195,7 +195,8 @@ impl Tool for AgentTool {
         Some(
             "agent: hand one self-contained brief to a role from <dispatch> \
              (research or a bounded change) and wait for its answer. Calls are serialized; \
-             a CodeMode yield is progress, not completion.",
+             a CodeMode yield is progress, not completion. Proactively delegate substantial \
+             independent work within the user request unless the user says otherwise.",
         )
     }
 

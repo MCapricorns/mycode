@@ -8,6 +8,11 @@ fn parent_dispatch_names_enabled_builtin_roles_and_runtime_capabilities() {
     assert!(text.contains("`scout`"));
     assert!(text.contains("`artisan`"));
     assert!(text.contains("stands on its own"));
+    assert!(text.contains("do not wait for the user to ask for subagents"));
+    assert!(text.contains("unless the user says otherwise"));
+    assert!(text.contains("Prefer agent_workflow name=research"));
+    assert!(text.contains("Prefer agent_workflow name=code-review"));
+    assert!(text.contains("Prefer agent_workflow name=migration"));
     assert!(text.contains("vague"));
     assert!(text.contains("not a diff"));
     assert!(text.contains("one at a time"));

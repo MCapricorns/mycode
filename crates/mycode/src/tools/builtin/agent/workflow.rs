@@ -112,6 +112,11 @@ impl Tool for AgentWorkflowTool {
     fn description(&self) -> &str {
         "Run a fixed research (QUESTION), code-review (TARGET), or migration (TARGET, CONTRACT, CORE_CHANGE, ADAPTER_CHANGE, CORE_SCOPE, CORE_TEST_SCOPE, ADAPTER_SCOPE, ADAPTER_TEST_SCOPE) workflow synchronously. Exact scopes coordinate writers, not sandbox access. Every workflow needs an enabled read-only sentinel for independent acceptance. Migration retains writer worktrees and waits for manual integration; resume/accept with id runs the integrated gate and acceptance in the parent cwd. No automatic apply, merge, commit or cleanup. Explicit revise takes id, node_id, feedback and expected_revision: rerun that producer and downstream nodes in the same workflow, then independent acceptance. Failed workflows can revise; cancelled/settling workflows cannot. Retained writer worktrees are reused without resets; missing worktrees fail safely. At most 16 explicit revisions. status/stop also take id."
     }
+    fn prompt_snippet(&self) -> Option<&str> {
+        Some(
+            "agent_workflow: proactively use research, code-review or migration for substantial tasks matching <dispatch>. Supply the named inputs, collect the result and inspect independent acceptance. A waiting_integration handoff needs parent integration and resume before completion.",
+        )
+    }
     fn prepare_args(&self, mut args: serde_json::Value) -> serde_json::Value {
         // The common tool normalizer folds every object key, including named
         // dictionary inputs. Restore only the fixed reference input names.
