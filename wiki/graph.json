@@ -276,6 +276,7 @@
       ],
       "files": [
         "crates/mycode/src/frontend/driver.rs",
+        "crates/mycode/src/frontend/driver/library.rs",
         "crates/mycode/src/frontend/driver/pump.rs",
         "crates/mycode/src/frontend/driver/replies.rs",
         "crates/mycode/src/frontend/driver/sessions.rs"
@@ -354,6 +355,7 @@
         "crates/mycode/src/app/mcp_client/stdio_channel.rs",
         "crates/mycode/src/app/mcp_tools.rs",
         "crates/mycode/src/app/mcp_client/http_channel.rs",
+        "crates/mycode/src/app/mcp_tools/refresh.rs",
         "crates/mycode/src/app/mcp_tools/results.rs",
         "crates/mycode/src/app/tool_search.rs"
       ]

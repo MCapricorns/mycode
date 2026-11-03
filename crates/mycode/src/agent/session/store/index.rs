@@ -853,7 +853,13 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
     if !table_ready(&conn)? {
         return Ok(Vec::new());
     }
-    let mut sessions = conn
+    // Both tables describe one listing snapshot. Releasing the first
+    // statement without a transaction lets an append land before the branch
+    // query, making their counts disagree and marking a healthy session corrupt.
+    let snapshot = conn
+        .unchecked_transaction()
+        .map_err(|_| StoreError::Storage)?;
+    let mut sessions = snapshot
         .prepare(
             "SELECT id, title, updated_at, root_branch, event_count, corrupt
              FROM sessions
@@ -892,7 +898,7 @@ pub(crate) fn list_sessions(home: &HomeLayout) -> Result<Vec<ListedSession>, Sto
         });
     }
     drop(sessions);
-    let mut branches = conn
+    let mut branches = snapshot
         .prepare(
             "SELECT session_id, branch_id, head, event_count
              FROM branches
@@ -996,3 +1002,59 @@ pub(crate) fn delete_indexed_session(
 mod connection;
 pub(crate) use self::connection::decode_head;
 use self::connection::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_writes_do_not_split_session_and_branch_listing_snapshots() {
+        let root =
+            std::env::temp_dir().join(format!("mycode-index-snapshot-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let home = HomeLayout::from_root(&root).unwrap();
+        let path = database_path(&home).unwrap();
+        let mut conn = open_connection(&path).unwrap();
+        let tx = conn.transaction().unwrap();
+        for number in 0..128 {
+            // Listing validates scalar storage independently of the actor's IDs.
+            let id = format!("session-{number}");
+            tx.execute(
+                "INSERT INTO sessions (id, title, updated_at, root_branch, event_count, corrupt)
+                 VALUES (?1, '', 1, 'branch', 0, 0)",
+                params![id],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO branches (session_id, branch_id, head, event_count, committed_bytes, parent_kind)
+                 VALUES (?1, 'branch', 'empty', 0, 0, 'root')",
+                params![id],
+            ).unwrap();
+        }
+        tx.commit().unwrap();
+        let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let writer_start = start.clone();
+        let writer = std::thread::spawn(move || {
+            writer_start.wait();
+            for count in 1..=500 {
+                let tx = conn.transaction().unwrap();
+                tx.execute("UPDATE sessions SET event_count = ?1", params![count])
+                    .unwrap();
+                tx.execute("UPDATE branches SET event_count = ?1", params![count])
+                    .unwrap();
+                tx.commit().unwrap();
+            }
+        });
+        start.wait();
+        for _ in 0..100 {
+            let listed = list_sessions(&home).unwrap();
+            assert_eq!(listed.len(), 128);
+            for session in listed {
+                assert_eq!(session.branches.len(), 1);
+                assert_eq!(session.event_count, session.branches[0].event_count);
+            }
+        }
+        writer.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

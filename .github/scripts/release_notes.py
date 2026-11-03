@@ -20,16 +20,16 @@ from pathlib import Path
 
 from release_plan import REPO_URL, format_version, parse_ls_remote, parse_stable, validate_notes
 
-PULL_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+)")
+PULL_URL_RE = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)")
 MERGE_PR_RE = re.compile(r"\bMerge pull request #(\d+)\b")
 SQUASH_PR_RE = re.compile(r"\(#(\d+)\)")
 CLOSING_RE = re.compile(
     r"\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+"
-    r"(?:https://github\.com/[^/\s]+/[^/\s]+/issues/|#)(\d+)\b",
+    r"(?:https://github\.com/([^/\s]+/[^/\s]+)/issues/|#)(\d+)\b",
     re.IGNORECASE,
 )
 FULL_CHANGELOG_RE = re.compile(r"(?m)^\*\*Full Changelog\*\*: .+$")
-ISSUE_URL_RE = re.compile(r"/issues/(\d+)\b")
+ISSUE_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/issues/\d+\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -78,19 +78,21 @@ def _unique(numbers: list[int]) -> list[int]:
     return ordered
 
 
-def extract_pr_numbers(text: str) -> list[int]:
+def extract_pr_numbers(text: str, repo: str = "MCapricorns/mycode") -> list[int]:
     """Pull request numbers from GitHub notes, merge commits, and squash subjects."""
 
-    found: list[int] = []
-    for pattern in (PULL_URL_RE, MERGE_PR_RE, SQUASH_PR_RE):
+    found = [int(match.group(2)) for match in PULL_URL_RE.finditer(text)
+             if match.group(1).casefold() == repo.casefold()]
+    for pattern in (MERGE_PR_RE, SQUASH_PR_RE):
         found.extend(int(match.group(1)) for match in pattern.finditer(text))
     return _unique(found)
 
 
-def extract_fixed_issue_numbers(text: str) -> list[int]:
+def extract_fixed_issue_numbers(text: str, repo: str = "MCapricorns/mycode") -> list[int]:
     """Issue numbers closed by a GitHub closing keyword, not conventional-commit subjects."""
 
-    return _unique(int(match.group(1)) for match in CLOSING_RE.finditer(text))
+    return _unique(int(match.group(2)) for match in CLOSING_RE.finditer(text)
+                   if match.group(1) is None or match.group(1).casefold() == repo.casefold())
 
 
 def _one_line(text: str) -> str:
@@ -99,17 +101,16 @@ def _one_line(text: str) -> str:
 
 def render_fixed_issues(issues: list[FixedIssue], already: str) -> str:
     lines: list[str] = []
-    seen: set[int] = set()
-    listed = set(int(match.group(1)) for match in ISSUE_URL_RE.finditer(already))
+    seen: set[str] = set()
+    listed = {match.group(0).casefold() for match in ISSUE_URL_RE.finditer(already)}
     for issue in issues:
-        if issue.number in seen or issue.number in listed:
-            continue
-        if issue.url and issue.url in already:
+        identity = issue.url.casefold()
+        if identity in seen or identity in listed:
             continue
         title = _one_line(issue.title)
         if not title or not issue.url:
             continue
-        seen.add(issue.number)
+        seen.add(identity)
         lines.append(f"* {title} in {issue.url}")
     if not lines:
         return ""
@@ -269,7 +270,8 @@ def fetch_commit_messages(repo: str, previous: str | None, sha: str) -> list[str
     text = _gh(
         [
             "api",
-            f"repos/{repo}/compare/{previous}...{sha}",
+            "--paginate",
+            f"repos/{repo}/compare/{previous}...{sha}?per_page=100",
             "--jq",
             ".commits[].commit.message | @json",
         ]
@@ -395,12 +397,13 @@ def fetch_issues(repo: str, numbers: list[int]) -> list[FixedIssue]:
 
 
 def _dedupe_issues(issues: list[FixedIssue]) -> list[FixedIssue]:
-    seen: set[int] = set()
+    seen: set[str] = set()
     ordered: list[FixedIssue] = []
     for issue in issues:
-        if issue.number in seen:
+        identity = issue.url.casefold()
+        if identity in seen:
             continue
-        seen.add(issue.number)
+        seen.add(identity)
         ordered.append(issue)
     return ordered
 
@@ -426,7 +429,7 @@ def linked_changes(
         if not generated.strip():
             raise
         print(f"compare unavailable: {exc}", file=sys.stderr)
-    pr_numbers = extract_pr_numbers(generated + "\n" + "\n".join(messages))
+    pr_numbers = extract_pr_numbers(generated + "\n" + "\n".join(messages), repo)
     try:
         pulls, closing = fetch_pull_requests(repo, pr_numbers)
     except SystemExit as exc:
@@ -436,8 +439,9 @@ def linked_changes(
         pulls, closing = [], []
     keyword_numbers = [
         number
-        for number in extract_fixed_issue_numbers("\n".join(messages))
-        if number not in {issue.number for issue in closing}
+        for number in extract_fixed_issue_numbers("\n".join(messages), repo)
+        if f"https://github.com/{repo}/issues/{number}".casefold()
+        not in {issue.url.casefold() for issue in closing}
     ]
     try:
         keyword_issues = fetch_issues(repo, keyword_numbers)
@@ -500,6 +504,10 @@ def _expect_extract() -> None:
     _expect(extract_pr_numbers(text) == [86, 85, 84], str(extract_pr_numbers(text)))
     _expect(extract_fixed_issue_numbers(text) == [12, 13], str(extract_fixed_issue_numbers(text)))
     _expect(extract_fixed_issue_numbers("fix(shell): no number") == [], "conventional commit")
+    foreign = "Fixes https://github.com/other/project/issues/42"
+    _expect(extract_fixed_issue_numbers(foreign) == [], "foreign issue attributed to this repo")
+    _expect(extract_fixed_issue_numbers(foreign, "other/project") == [42], "explicit repo")
+    _expect(extract_pr_numbers("https://github.com/other/project/pull/42") == [], "foreign PR")
 
 
 def _expect_compose() -> None:
@@ -530,6 +538,16 @@ def _expect_compose() -> None:
     already = generated + "\n* Window overflows in https://github.com/MCapricorns/mycode/issues/12\n"
     again = compose_release_body(changelog, already, issues[:1])
     _expect("## Fixed issues" not in again, again)
+
+    for unrelated in [
+        "https://github.com/other/project/issues/12",
+        "https://github.com/MCapricorns/mycode/issues/123",
+    ]:
+        block = render_fixed_issues(issues[:1], unrelated)
+        _expect("https://github.com/MCapricorns/mycode/issues/12" in block, block)
+    foreign = FixedIssue(12, "Linked external fix", "https://github.com/other/project/issues/12")
+    _expect(len(_dedupe_issues([issues[0], foreign, issues[0]])) == 2, "cross-repo issue dedupe")
+    _expect(render_fixed_issues([issues[0], foreign], "").count("issues/12") == 2, "cross-repo issue render")
 
     fallback = render_changes(
         [PullRequest(86, "feat(shell): native", "https://github.com/MCapricorns/mycode/pull/86", "MCapricorns")],

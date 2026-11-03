@@ -168,8 +168,11 @@ impl FrontendDriver {
     }
 
     /// Sends one tools probe for the row on screen. `false` when the row is
-    /// gone.
+    /// gone or already being probed.
     fn dispatch_mcp_probe(&mut self, server_id: &str, out: &mut Vec<Effect>) -> bool {
+        if self.vm.mcp_probing.iter().any(|id| id == server_id) {
+            return false;
+        }
         let Some(server) = self
             .vm
             .settings
@@ -180,9 +183,12 @@ impl FrontendDriver {
             return false;
         };
         self.act(FrontendAction::McpProbeStarted(server_id.to_owned()), out);
-        self.dispatch(BridgeCommand::McpListTools {
-            server: Box::new(server),
-        });
+        self.dispatch_scoped(
+            BridgeCommand::McpListTools {
+                server: Box::new(server.clone()),
+            },
+            ReplyScope::McpProbe(Box::new(server)),
+        );
         true
     }
 

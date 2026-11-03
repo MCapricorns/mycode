@@ -16,7 +16,8 @@ use std::io;
 
 use crate::config::ConfigErrorKind;
 use crate::config::secure_fs::owned_file::{
-    locked_update_owned_file, quarantine_owned_file, read_owned_file, read_quarantined_backup,
+    locked_update_owned_file, quarantine_rejected_owned_file, read_owned_file,
+    read_quarantined_backup,
 };
 use crate::config::{ConfigError, HomeLayout};
 
@@ -147,38 +148,45 @@ pub(crate) fn load_or_reset<T>(
     decode: impl FnOnce(&[u8]) -> Result<T, ConfigError>,
     fallback: impl FnOnce() -> T,
     salvage: impl FnOnce(&serde_json::Value) -> Option<T>,
-    publish: impl FnOnce(&T) -> Result<(), ConfigError>,
+    encode: impl FnOnce(&T) -> Result<Vec<u8>, ConfigError>,
 ) -> Result<Loaded<T>, ConfigError> {
-    match read_owned_file(home, relative, max_bytes) {
-        Ok(None) => Ok(Loaded {
-            value: fallback(),
-            repair: None,
-        }),
-        Ok(Some(bytes)) => match decode(bytes.as_slice()) {
-            Ok(value) => Ok(Loaded {
-                value,
-                repair: None,
-            }),
-            Err(error) if is_document_damage(&error) => {
-                reset_from_bytes(home, relative, bytes.as_slice(), fallback, salvage, publish)
-            }
-            Err(error) => Err(error),
-        },
+    let bytes = match read_owned_file(home, relative, max_bytes) {
+        Ok(bytes) => bytes,
         Err(error) if error.kind() == ConfigErrorKind::Oversized => {
-            match read_owned_file(home, relative, QUARANTINE_MAX_BYTES.max(max_bytes)) {
-                Ok(Some(bytes)) => {
-                    reset_from_bytes(home, relative, bytes.as_slice(), fallback, salvage, publish)
-                }
-                Ok(None) => Ok(Loaded {
-                    value: fallback(),
-                    repair: None,
-                }),
-                Err(error) => Err(error),
-            }
+            read_owned_file(home, relative, QUARANTINE_MAX_BYTES.max(max_bytes))?
         }
         Err(error) if is_unusable_file(&error) => {
-            reset_unreadable(home, relative, error, max_bytes, fallback, salvage, publish)
+            return reset_unreadable(home, relative, error, max_bytes, fallback, salvage, encode);
         }
+        Err(error) => return Err(error),
+    };
+    let Some(bytes) = bytes else {
+        return Ok(Loaded {
+            value: fallback(),
+            repair: None,
+        });
+    };
+    // The larger read may observe a newer, healthy save. Decode that snapshot
+    // normally rather than resetting it because the earlier file was large.
+    let decoded = if bytes.len() > max_bytes {
+        Err(ConfigError::new(ConfigErrorKind::Oversized))
+    } else {
+        decode(bytes.as_slice())
+    };
+    match decoded {
+        Ok(value) => Ok(Loaded {
+            value,
+            repair: None,
+        }),
+        Err(error) if is_document_damage(&error) => reset_from_bytes(
+            home,
+            relative,
+            max_bytes,
+            bytes.as_slice(),
+            fallback,
+            salvage,
+            encode,
+        ),
         Err(error) => Err(error),
     }
 }
@@ -200,13 +208,13 @@ fn reset_unreadable<T>(
     max_bytes: usize,
     fallback: impl FnOnce() -> T,
     salvage: impl FnOnce(&serde_json::Value) -> Option<T>,
-    publish: impl FnOnce(&T) -> Result<(), ConfigError>,
+    encode: impl FnOnce(&T) -> Result<Vec<u8>, ConfigError>,
 ) -> Result<Loaded<T>, ConfigError> {
     let mut moved_backup = None;
     let stamp = crate::core::unix_now().as_nanos();
     for attempt in 0..16u128 {
         let candidate = backup_name_with_stamp(relative, stamp.saturating_add(attempt))?;
-        match quarantine_owned_file(home, relative, &candidate) {
+        match quarantine_rejected_owned_file(home, relative, &candidate, &error) {
             Ok(true) => {
                 moved_backup = Some(candidate);
                 break;
@@ -214,6 +222,9 @@ fn reset_unreadable<T>(
             Ok(false) => return Err(error),
             Err(quarantine_err)
                 if quarantine_err.io_kind() == Some(io::ErrorKind::AlreadyExists) => {}
+            Err(quarantine_err) if quarantine_err.kind() == ConfigErrorKind::RevisionConflict => {
+                return Err(quarantine_err);
+            }
             Err(_) => return Err(error),
         }
     }
@@ -230,7 +241,7 @@ fn reset_unreadable<T>(
     } else {
         fallback()
     };
-    publish(&value)?;
+    publish_repair(home, relative, max_bytes, None, encode(&value)?)?;
     Ok(Loaded {
         value,
         repair: Some(DocumentRepair {
@@ -243,21 +254,50 @@ fn reset_unreadable<T>(
 fn reset_from_bytes<T>(
     home: &HomeLayout,
     relative: &'static str,
+    max_bytes: usize,
     bytes: &[u8],
     fallback: impl FnOnce() -> T,
     salvage: impl FnOnce(&serde_json::Value) -> Option<T>,
-    publish: impl FnOnce(&T) -> Result<(), ConfigError>,
+    encode: impl FnOnce(&T) -> Result<Vec<u8>, ConfigError>,
 ) -> Result<Loaded<T>, ConfigError> {
     let repair = quarantine_owned_bytes(home, relative, bytes)?;
     let value = serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
         .and_then(|document| salvage(&document))
         .unwrap_or_else(fallback);
-    publish(&value)?;
+    publish_repair(home, relative, max_bytes, Some(bytes), encode(&value)?)?;
     Ok(Loaded {
         value,
         repair: Some(repair),
     })
+}
+
+/// A repair only replaces the exact snapshot it salvaged. A newer save or
+/// a recreated document after quarantine belongs to its writer, even when
+/// the repair's older snapshot was invalid.
+fn publish_repair(
+    home: &HomeLayout,
+    relative: &'static str,
+    max_bytes: usize,
+    expected: Option<&[u8]>,
+    replacement: Vec<u8>,
+) -> Result<(), ConfigError> {
+    if replacement.len() > max_bytes {
+        return Err(ConfigError::new(ConfigErrorKind::Oversized));
+    }
+    // Corrupt originals may exceed the document's normal read cap. The
+    // replacement still obeys that cap; only comparison gets the larger one.
+    locked_update_owned_file(
+        home,
+        relative,
+        max_bytes.max(QUARANTINE_MAX_BYTES),
+        |current| {
+            if current != expected {
+                return Err(ConfigError::new(ConfigErrorKind::RevisionConflict));
+            }
+            Ok(replacement)
+        },
+    )
 }
 
 /// Decodes `object[name]` as `T`, tolerating a missing member or a wrong
@@ -345,6 +385,83 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&self.0);
             }
         }
+    }
+
+    #[test]
+    fn repair_does_not_overwrite_a_save_that_arrived_during_salvage() {
+        for name in ["settings.json", "secrets.json", "ui.json"] {
+            let (_guard, home) = home("repair-cas");
+            write_private(&home, name, b"{}");
+            let error = super::load_or_reset(
+                &home,
+                name,
+                1024,
+                |_| -> Result<(), crate::config::ConfigError> {
+                    Err(crate::config::ConfigError::authority_rejection())
+                },
+                || (),
+                |_| {
+                    write_private(&home, name, b"{\"newer\":true}");
+                    Some(())
+                },
+                |_| Ok(b"{\"stale\":true}".to_vec()),
+            )
+            .err()
+            .expect("stale repair must fail");
+            assert_eq!(
+                error.kind(),
+                crate::config::ConfigErrorKind::RevisionConflict
+            );
+            assert_eq!(
+                std::fs::read(home.root().join(name)).unwrap(),
+                b"{\"newer\":true}"
+            );
+        }
+    }
+
+    #[test]
+    fn repair_publication_checks_absence_and_keeps_document_size_limit() {
+        let (_guard, home) = home("repair-publication");
+        write_private(&home, "ui.json", b"newer save");
+        let error = super::publish_repair(&home, "ui.json", 1024, None, b"stale".to_vec())
+            .expect_err("a file created after quarantine is not ours to overwrite");
+        assert_eq!(
+            error.kind(),
+            crate::config::ConfigErrorKind::RevisionConflict
+        );
+        assert_eq!(
+            std::fs::read(home.root().join("ui.json")).unwrap(),
+            b"newer save"
+        );
+        let error = super::publish_repair(&home, "ui.json", 4, Some(b"newer save"), vec![b'x'; 5])
+            .expect_err("the quarantine read cap must not raise the publication cap");
+        assert_eq!(error.kind(), crate::config::ConfigErrorKind::Oversized);
+        // An oversized damaged original still fits the quarantine budget.
+        super::publish_repair(&home, "ui.json", 4, Some(b"newer save"), b"{}".to_vec())
+            .expect("compare the original with the quarantine read cap");
+        assert_eq!(std::fs::read(home.root().join("ui.json")).unwrap(), b"{}");
+    }
+
+    #[test]
+    fn a_stale_native_rejection_cannot_quarantine_a_readable_save() {
+        let (_guard, home) = home("quarantine-cas");
+        write_private(&home, "settings.json", b"newer save");
+        let error = super::quarantine_rejected_owned_file(
+            &home,
+            "settings.json",
+            "settings.json.broken-1",
+            &crate::config::ConfigError::new(crate::config::ConfigErrorKind::AccessControl),
+        )
+        .expect_err("recheck the native failure under the write lock");
+        assert_eq!(
+            error.kind(),
+            crate::config::ConfigErrorKind::RevisionConflict
+        );
+        assert_eq!(
+            std::fs::read(home.root().join("settings.json")).unwrap(),
+            b"newer save"
+        );
+        assert!(!home.root().join("settings.json.broken-1").exists());
     }
 
     #[test]
@@ -723,8 +840,12 @@ mod tests {
         let backup = home.root().join("settings.json.broken-1");
         std::fs::write(&source, b"new damage").unwrap();
         std::fs::write(&backup, b"previous damage").unwrap();
-        let error = super::quarantine_owned_file(&home, "settings.json", "settings.json.broken-1")
-            .unwrap_err();
+        let error = crate::config::secure_fs::owned_file::quarantine_owned_file(
+            &home,
+            "settings.json",
+            "settings.json.broken-1",
+        )
+        .unwrap_err();
         assert_eq!(error.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
         assert_eq!(std::fs::read(&source).unwrap(), b"new damage");
         assert_eq!(std::fs::read(&backup).unwrap(), b"previous damage");

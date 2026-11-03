@@ -108,12 +108,14 @@ pub(super) fn render_update_dialog(
         )
         .child(
             super::skin::dialog_panel("update-dialog", theme)
+                .occlude()
                 .relative()
                 .w(px(420.))
                 .flex()
                 .flex_col()
                 .gap_3()
                 .p_5()
+                .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
                     div()
                         .flex()

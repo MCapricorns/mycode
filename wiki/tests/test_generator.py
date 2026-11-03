@@ -63,6 +63,15 @@ class WikiGeneratorTests(unittest.TestCase):
         self.assertNotIn("</", encoded)
         self.assertEqual(json.loads(encoded), value)
 
+    def test_template_tokens_in_source_are_preserved_literally(self):
+        files = {"example.rs": "__GRAPH_JSON__ __FILE_JSON__ __DOC_JSON__"}
+        rendered = wiki.render(wiki.load_graph(), files)
+        import re
+        embedded = re.search(r'<script[^>]*id="file-data"[^>]*>(.*?)</script>',
+                             rendered, re.DOTALL)
+        self.assertIsNotNone(embedded)
+        self.assertEqual(json.loads(embedded[1]), files)
+
     def test_inline_code_and_raw_html_are_escaped(self):
         source = wiki.DOCS["code-mode"]
         rendered = wiki.inline('<script> `a < b` **bold**', source)

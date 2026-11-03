@@ -66,12 +66,13 @@ fn legacy_replace_still_applies_when_operations_are_omitted() {
 
 #[test]
 fn replace_all_and_other_agents_spellings_are_accepted() {
-    let raw = crate::tools::tool::normalize_tool_args(json!({
+    let mut raw = crate::tools::tool::normalize_tool_args(json!({
         "file_path": "src/plane.rs",
         "old_str": "a",
         "new_str": "b",
         "replace_all": true,
     }));
+    crate::tools::tool::repair_args(&mut raw, &crate::tools::tool::args_schema::<EditArgs>());
     assert_eq!(raw["path"], "src/plane.rs");
     assert_eq!(apply_json("a a a", raw).expect("replace all"), "b b b");
 

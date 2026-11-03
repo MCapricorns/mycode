@@ -429,14 +429,15 @@ fn spawn_attempt(
             &raw mut information,
         )
     };
+    // Capture the thread-local Win32 error before closing handles can replace it.
+    let create_error = (created == 0).then(std::io::Error::last_os_error);
     drop(stdin);
     drop(stdout_write);
     drop(stderr_write);
-    if created == 0 {
+    if let Some(error) = create_error {
         return Err(ToolError::Execution(format!(
-            "failed to spawn {}: {}",
+            "failed to spawn {}: {error}",
             pinned.canonical_path.display(),
-            std::io::Error::last_os_error()
         ))
         .into());
     }

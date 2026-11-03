@@ -57,3 +57,45 @@ async fn a_checkpoint_that_does_not_fit_the_ledger_is_ignored() {
     assert!(!user_text(&compacted.messages[0]).contains("STALE-SUMMARY"));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn a_persisted_checkpoint_requires_the_exact_tail_including_images() {
+    use crate::core::{BinaryData, ContentBlock, Message, UserMessage};
+    use std::sync::Arc;
+    let (root, home) = scratch_home();
+    let image = |data: &str| {
+        Arc::new(Message::User(UserMessage {
+            content: vec![ContentBlock::Image(BinaryData {
+                data: data.into(),
+                mime_type: "image/png".into(),
+            })],
+        }))
+    };
+    let ledger = vec![user("older task"), image("aGVsbG8=")];
+    let wrong_tail = super::super::with_summary("summary", &[image("d29ybGQ=")]);
+    let target = super::super::TurnCheckpoint {
+        session_id: "session-a",
+        branch_id: "branch-a",
+        head: "head-1",
+        model: "model-a",
+    };
+    assert!(!super::super::persist_turn_summary(
+        &home,
+        &target,
+        &ledger,
+        &wrong_tail
+    ));
+    assert!(
+        crate::config::read_compaction(&home, "session-a")
+            .unwrap()
+            .is_none()
+    );
+    let correct_tail = super::super::with_summary("summary", &ledger[1..]);
+    assert!(super::super::persist_turn_summary(
+        &home,
+        &target,
+        &ledger,
+        &correct_tail
+    ));
+    let _ = std::fs::remove_dir_all(root);
+}

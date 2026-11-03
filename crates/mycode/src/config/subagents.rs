@@ -361,7 +361,7 @@ fn read_role_dir(dir: &Path) -> Vec<(PathBuf, String)> {
                 continue;
             }
         }
-        match std::fs::read(&path) {
+        match std::fs::File::open(&path).and_then(read_role_bytes) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(text) => files.push((path, text)),
                 Err(_) => {
@@ -374,6 +374,23 @@ fn read_role_dir(dir: &Path) -> Vec<(PathBuf, String)> {
         }
     }
     files
+}
+
+/// Bound the actual read as well as metadata: editors may replace or grow
+/// the file between discovery and opening it.
+fn read_role_bytes(reader: impl std::io::Read) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_ROLE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_ROLE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "role exceeds the byte limit",
+        ));
+    }
+    Ok(bytes)
 }
 
 /// Parses one role file: a `---` delimited `key: value` header, then the
@@ -508,6 +525,15 @@ mod tests {
             prompt: "work".into(),
             origin: RoleOrigin::Builtin,
         }
+    }
+
+    #[test]
+    fn role_reads_are_bounded_even_if_metadata_becomes_stale() {
+        use std::io::Read as _;
+        let mut source = std::io::repeat(b'x').take(u64::MAX);
+        assert!(super::read_role_bytes(&mut source).is_err());
+        assert_eq!(source.limit(), u64::MAX - super::MAX_ROLE_BYTES as u64 - 1);
+        assert_eq!(super::read_role_bytes(b"role".as_slice()).unwrap(), b"role");
     }
 
     #[test]

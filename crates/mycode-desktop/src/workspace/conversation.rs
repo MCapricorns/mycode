@@ -8,6 +8,18 @@ use super::Workspace;
 use super::toasts::ToastKind;
 use crate::i18n::t;
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct DeleteConfirmation {
+    key: String,
+    armed_at: std::time::Instant,
+}
+
+impl DeleteConfirmation {
+    fn matches(&self, key: &str, now: std::time::Instant) -> bool {
+        self.key == key && now.duration_since(self.armed_at) < DELETE_CONFIRM_WINDOW
+    }
+}
+
 impl Workspace {
     /// Copies an assistant reply from its card's copy action. The text
     /// arrives already converted to plain text by the transcript, so the
@@ -46,8 +58,9 @@ impl Workspace {
     /// The session whose trash button is waiting for its second click.
     pub(crate) fn armed_session_delete(&self) -> Option<&str> {
         self.armed_delete
-            .as_deref()
-            .and_then(|key| key.strip_prefix(SESSION_DELETE_PREFIX))
+            .as_ref()
+            .filter(|armed| armed.matches(&armed.key, std::time::Instant::now()))
+            .and_then(|armed| armed.key.strip_prefix(SESSION_DELETE_PREFIX))
     }
 
     /// Two-click confirmation shared by the irreversible row deletes.
@@ -55,16 +68,25 @@ impl Workspace {
     /// Returns `true` on the second click within [`DELETE_CONFIRM_WINDOW`];
     /// the first click only arms `key` and repaints.
     pub(crate) fn confirm_delete(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
-        if self.armed_delete.as_deref() == Some(key) {
+        let now = std::time::Instant::now();
+        if self
+            .armed_delete
+            .as_ref()
+            .is_some_and(|armed| armed.matches(key, now))
+        {
             self.armed_delete = None;
             return true;
         }
-        self.armed_delete = Some(key.to_owned());
-        let armed = key.to_owned();
+        let armed = DeleteConfirmation {
+            key: key.to_owned(),
+            armed_at: now,
+        };
+        self.armed_delete = Some(armed.clone());
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DELETE_CONFIRM_WINDOW).await;
             let _ = this.update(cx, |workspace, cx| {
-                if workspace.armed_delete.as_deref() == Some(armed.as_str()) {
+                // A previous timer for this key must not clear a newer arm.
+                if workspace.armed_delete.as_ref() == Some(&armed) {
                     workspace.armed_delete = None;
                     cx.notify();
                 }
@@ -84,3 +106,35 @@ fn session_delete_key(session_id: &str) -> String {
 
 /// How long an armed session delete waits for the confirming click.
 const DELETE_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn an_expired_confirmation_is_rejected_even_before_its_timer_runs() {
+        let now = Instant::now();
+        let armed = DeleteConfirmation {
+            key: "session:a".into(),
+            armed_at: now,
+        };
+        assert!(armed.matches("session:a", now + Duration::from_secs(2)));
+        assert!(!armed.matches("session:b", now));
+        assert!(!armed.matches("session:a", now + DELETE_CONFIRM_WINDOW));
+    }
+
+    #[test]
+    fn an_old_timer_cannot_expire_a_new_confirmation_for_the_same_row() {
+        let old = DeleteConfirmation {
+            key: "session:a".into(),
+            armed_at: Instant::now(),
+        };
+        let newer = DeleteConfirmation {
+            key: old.key.clone(),
+            armed_at: old.armed_at + Duration::from_secs(2),
+        };
+        assert!(old != newer);
+        assert!(newer.matches(&old.key, old.armed_at + DELETE_CONFIRM_WINDOW));
+    }
+}

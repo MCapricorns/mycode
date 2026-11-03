@@ -327,12 +327,14 @@ impl WindowsStdioProcess {
                 &raw mut information,
             )
         };
+        // Attribute and handle cleanup may change the thread-local Win32 error.
+        let create_error = (created == 0).then(io::Error::last_os_error);
         drop(attributes);
         drop(stdin_child);
         drop(stdout_write);
         drop(stderr_write);
-        if created == 0 {
-            return Err(io::Error::last_os_error());
+        if let Some(error) = create_error {
+            return Err(error);
         }
         // SAFETY: CreateProcessW succeeded. Both handles are uniquely owned.
         let process = unsafe { OwnedHandle::from_raw_handle(information.hProcess) };

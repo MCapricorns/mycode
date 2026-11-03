@@ -32,7 +32,7 @@ impl GatewayFixture {
                 {"id":"p/pinned","context_window":128000},
                 {"id":"z/default","context_window":256000}
             ]}"#;
-            while !stopped.load(Ordering::Relaxed) {
+            'requests: while !stopped.load(Ordering::Relaxed) {
                 let (mut stream, _) = match listener.accept() {
                     Ok(connection) => connection,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -48,17 +48,25 @@ impl GatewayFixture {
                 let mut request = Vec::new();
                 while !request.windows(4).any(|window| window == b"\r\n\r\n") {
                     let mut chunk = [0; 1024];
-                    let count = stream.read(&mut chunk).expect("request");
-                    assert!(count > 0 && request.len() < 16 * 1024, "HTTP headers");
+                    let count = match stream.read(&mut chunk) {
+                        // Shutdown can cancel an automatic refresh after TCP
+                        // connects but before its request has been written.
+                        Ok(0) => continue 'requests,
+                        Ok(count) => count,
+                        Err(error) if disconnected(&error) => continue 'requests,
+                        Err(error) => panic!("request: {error}"),
+                    };
+                    assert!(request.len() + count <= 16 * 1024, "HTTP headers");
                     request.extend_from_slice(&chunk[..count]);
                 }
                 assert!(request.starts_with(b"GET /v1/models HTTP/1.1\r\n"));
-                write!(
+                if let Err(error) = write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
-                )
-                .expect("response");
+                ) {
+                    assert!(disconnected(&error), "response: {error}");
+                }
             }
         });
         Self {
@@ -76,6 +84,17 @@ impl GatewayFixture {
         );
         std::fs::write(root.join("settings.json"), body).expect("synthetic binding");
     }
+}
+
+fn disconnected(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::UnexpectedEof
+    )
 }
 
 impl Drop for GatewayFixture {
@@ -171,6 +190,29 @@ fn poll_until(
 }
 
 #[test]
+fn a_watched_gateway_binding_refreshes_models_without_opening_a_menu() {
+    let (mut driver, root) = scratch_driver("watched-gateway");
+    let mut out = Vec::new();
+    driver.on_reply(
+        ReplyScope::Global,
+        loaded(AppSettings::default(), 0),
+        &mut out,
+    );
+    driver.watch_library();
+    let gateway = GatewayFixture::start();
+    gateway.write_binding(&root, "p/pinned");
+    poll_until(&mut driver, &mut out, |driver| {
+        driver.vm.catalog.as_ref().is_some_and(|catalog| {
+            catalog
+                .provider("magpie")
+                .is_some_and(|provider| provider.models.iter().any(|model| model.id == "p/pinned"))
+        })
+    });
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn settings_reload_refreshes_library_without_opening_settings() {
     let (mut driver, root) = scratch_driver("library-refresh");
     let mut out = Vec::new();
@@ -208,6 +250,88 @@ fn settings_reload_refreshes_library_without_opening_settings() {
         &mut out,
     );
     assert!(driver.vm.skills.is_empty(), "removed skills must disappear");
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn library_changes_refresh_skills_and_servers_without_navigation() {
+    let (mut driver, root) = scratch_driver("library-live");
+    let mut out = Vec::new();
+    driver.watch_library();
+    assert!(driver.library_watcher.is_some());
+    driver.on_reply(
+        ReplyScope::Global,
+        loaded(AppSettings::default(), 0),
+        &mut out,
+    );
+    let skill = root.join("skills/sample");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "# Live skill\n").unwrap();
+    std::fs::write(
+        root.join("mcp.json"),
+        r#"{"mcpServers":{"live":{"url":"http://localhost:3425/mcp"}}}"#,
+    )
+    .unwrap();
+    poll_until(&mut driver, &mut out, |driver| {
+        driver.vm.skills.iter().any(|skill| skill.slug == "sample")
+            && driver
+                .vm
+                .mcp_library
+                .iter()
+                .any(|server| server.id == "live")
+    });
+    // The first refresh attaches a recursive watch to the newly created skills root.
+    std::fs::write(skill.join("SKILL.md"), "# Updated skill\n").unwrap();
+    poll_until(&mut driver, &mut out, |driver| {
+        driver
+            .vm
+            .skills
+            .iter()
+            .any(|skill| skill.title == "Updated skill")
+    });
+    std::fs::remove_dir_all(&skill).unwrap();
+    std::fs::remove_file(root.join("mcp.json")).unwrap();
+    poll_until(&mut driver, &mut out, |driver| {
+        driver.vm.skills.is_empty() && driver.vm.mcp_library.is_empty()
+    });
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_library_refresh_invalidates_changed_server_tools_and_old_probes() {
+    let (mut driver, root) = scratch_driver("library-probe-invalidation");
+    let mut out = Vec::new();
+    driver.on_reply(
+        ReplyScope::Global,
+        loaded(AppSettings::default(), 0),
+        &mut out,
+    );
+    std::fs::write(root.join("mcp.json"), r#"{"mcpServers":{"docs":{"url":"http://localhost:3425/old"},"keep":{"url":"http://localhost:3425/keep"}}}"#).unwrap();
+    driver.reload_mcp_library(&mut out);
+    let old = driver
+        .vm
+        .mcp_library
+        .iter()
+        .find(|server| server.id == "docs")
+        .unwrap()
+        .clone();
+    let scope = ReplyScope::McpProbe(Box::new(old));
+    assert!(scope.applies(&driver.vm, None));
+    driver.vm.mcp_tools = vec![
+        ("docs".into(), vec!["old_tool".into()]),
+        ("keep".into(), vec!["kept_tool".into()]),
+    ];
+    driver.vm.mcp_probing = vec!["docs".into()];
+    std::fs::write(root.join("mcp.json"), r#"{"mcpServers":{"docs":{"url":"http://localhost:3425/new"},"keep":{"url":"http://localhost:3425/keep"}}}"#).unwrap();
+    driver.reload_mcp_library(&mut out);
+    assert!(!scope.applies(&driver.vm, None));
+    assert!(driver.vm.mcp_probing.is_empty());
+    assert_eq!(
+        driver.vm.mcp_tools,
+        vec![("keep".to_owned(), vec!["kept_tool".to_owned()])]
+    );
     driver.shutdown();
     let _ = std::fs::remove_dir_all(root);
 }

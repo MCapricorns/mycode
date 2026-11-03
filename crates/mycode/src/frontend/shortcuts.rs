@@ -95,8 +95,8 @@ pub fn shortcuts() -> Vec<Shortcut> {
             "Enter".to_owned(),
             t("Send", "发送"),
             Some(t(
-                "While a task runs, it steers that task instead",
-                "任务运行中则改为引导当前任务",
+                "While a task runs, opens send options; Enter again steers it",
+                "任务运行中打开发送选项；再次按回车引导当前任务",
             )),
         ),
         compose(

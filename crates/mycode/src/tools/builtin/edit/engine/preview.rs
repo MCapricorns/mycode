@@ -21,8 +21,8 @@ fn line_diff_preview(old: &str, new: &str) -> String {
     const MAX_SIDE_LINES: usize = 80;
     const MAX_EMITTED: usize = 40;
     const PREVIEW_LINE_BYTES: usize = 200;
-    let old_lines = split_preview_lines(old);
-    let new_lines = split_preview_lines(new);
+    let old_lines = split_preview_lines(old, MAX_SIDE_LINES + 1);
+    let new_lines = split_preview_lines(new, MAX_SIDE_LINES + 1);
     if old_lines.len() > MAX_SIDE_LINES || new_lines.len() > MAX_SIDE_LINES {
         return truncated_sides(&old_lines, &new_lines, PREVIEW_LINE_BYTES, MAX_EMITTED);
     }
@@ -40,18 +40,13 @@ fn line_diff_preview(old: &str, new: &str) -> String {
     out
 }
 
-fn split_preview_lines(text: &str) -> Vec<&str> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let mut lines: Vec<&str> = text
-        .split('\n')
+fn split_preview_lines(text: &str, limit: usize) -> Vec<&str> {
+    // Retain only enough lines to choose the bounded fallback. Collecting
+    // every line first let a tiny preview allocate megabytes of pointers.
+    text.split_terminator('\n')
+        .take(limit)
         .map(|line| line.trim_end_matches('\r'))
-        .collect();
-    if lines.last() == Some(&"") {
-        lines.pop();
-    }
-    lines
+        .collect()
 }
 
 fn changed_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(char, &'a str)> {

@@ -22,8 +22,6 @@ const SCHEMA_REF_DEPTH: usize = 32;
 const MAX_EXPANDED_NODES: usize = 16_384;
 const MAX_EXPANDED_BYTES: usize = 1024 * 1024;
 
-type Definitions<'a> = std::collections::BTreeMap<&'a str, &'a serde_json::Value>;
-
 struct ExpansionBudget {
     nodes: usize,
     bytes: usize,
@@ -62,7 +60,8 @@ impl ExpansionBudget {
 /// deeper than `SCHEMA_REF_DEPTH`, becomes `{type: object}` so a real cycle
 /// cannot recurse. A cumulative node/byte budget also bounds branching
 /// expansion. If it is exhausted, the original schema and its references
-/// remain intact: validation keeps its constraints, and a provider that does
+/// remain intact. Unresolvable references are retained in the same way:
+/// validation keeps its constraints, and a provider that does
 /// not support refs can reject the schema instead of exhausting the process.
 pub fn inline_schema_refs(schema: &mut serde_json::Value) {
     // Builtin specs arrive already inlined; providers call this per request,
@@ -70,14 +69,12 @@ pub fn inline_schema_refs(schema: &mut serde_json::Value) {
     if !has_schema_refs(schema) {
         return;
     }
-    let mut defs = Definitions::new();
-    collect_defs(schema, &mut defs);
     let mut stack = Vec::new();
     let mut budget = ExpansionBudget {
         nodes: MAX_EXPANDED_NODES,
         bytes: MAX_EXPANDED_BYTES,
     };
-    if let Some(expanded) = expand(schema, &defs, &mut stack, &mut budget) {
+    if let Some(expanded) = expand(schema, schema, &mut stack, &mut budget) {
         *schema = expanded;
     }
 }
@@ -95,37 +92,9 @@ fn has_schema_refs(value: &serde_json::Value) -> bool {
     }
 }
 
-fn collect_defs<'a>(value: &'a serde_json::Value, defs: &mut Definitions<'a>) {
-    match value {
-        serde_json::Value::Array(items) => {
-            for item in items {
-                collect_defs(item, defs);
-            }
-        }
-        serde_json::Value::Object(object) => {
-            for key in ["$defs", "definitions"] {
-                let Some(serde_json::Value::Object(bucket)) = object.get(key) else {
-                    continue;
-                };
-                for (name, schema) in bucket {
-                    defs.entry(name.as_str()).or_insert(schema);
-                    collect_defs(schema, defs);
-                }
-            }
-            for (key, child) in object {
-                if key == "$defs" || key == "definitions" {
-                    continue;
-                }
-                collect_defs(child, defs);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn expand(
     node: &serde_json::Value,
-    defs: &Definitions<'_>,
+    root: &serde_json::Value,
     stack: &mut Vec<String>,
     budget: &mut ExpansionBudget,
 ) -> Option<serde_json::Value> {
@@ -134,27 +103,45 @@ fn expand(
         return match node {
             serde_json::Value::Array(items) => items
                 .iter()
-                .map(|item| expand(item, defs, stack, budget))
+                .map(|item| expand(item, root, stack, budget))
                 .collect::<Option<Vec<_>>>()
                 .map(serde_json::Value::Array),
             other => Some(other.clone()),
         };
     };
-    if let Some(reference) = object.get("$ref").and_then(serde_json::Value::as_str) {
+    if let Some(reference) = object.get("$ref") {
+        // A malformed reference is invalid schema, not an absent constraint.
+        // Leave it for the provider/validator rather than silently accepting it.
+        let reference = reference.as_str()?;
         if stack.iter().any(|seen| seen == reference) || stack.len() >= SCHEMA_REF_DEPTH {
             budget.bytes(32)?;
             let mut terminated = serde_json::json!({"type": "object"});
             keep_description(object, &mut terminated, budget)?;
             return Some(terminated);
         }
-        if let Some(target) = resolve_ref(reference, defs) {
-            stack.push(reference.to_owned());
-            let expanded = expand(target, defs, stack, budget);
-            stack.pop();
-            let mut expanded = expanded?;
-            keep_description(object, &mut expanded, budget)?;
-            return Some(expanded);
+        // Resolve against the actual root, not a flattened map of definition
+        // names: nested buckets can contain the same name. Unknown/external
+        // references keep the entire original schema and its definitions.
+        let target = root.pointer(reference.strip_prefix('#')?)?;
+        stack.push(reference.to_owned());
+        let expanded = expand(target, root, stack, budget);
+        stack.pop();
+        let mut expanded = expanded?;
+        keep_description(object, &mut expanded, budget)?;
+        let mut siblings = object.clone();
+        siblings.remove("$ref");
+        siblings.remove("description");
+        siblings.remove("$defs");
+        siblings.remove("definitions");
+        if !siblings.is_empty() {
+            let siblings = expand(&serde_json::Value::Object(siblings), root, stack, budget)?;
+            // Sibling constraints apply in addition to the referenced schema.
+            // Combining with allOf also preserves overlapping required/enum
+            // constraints instead of overwriting either side.
+            budget.bytes(32)?;
+            expanded = serde_json::json!({"allOf": [expanded, siblings]});
         }
+        return Some(expanded);
     }
     let mut out = serde_json::Map::new();
     for (key, value) in object {
@@ -162,20 +149,42 @@ fn expand(
             continue;
         }
         budget.key(key)?;
-        let expanded = match value {
-            // Property names are not schema keywords.
-            serde_json::Value::Object(properties)
-                if key == "properties" || key == "patternProperties" =>
-            {
+        let expanded = match key.as_str() {
+            // Values in these maps are schemas; their keys are user names.
+            "properties" | "patternProperties" | "dependentSchemas" | "dependencies" => {
+                let properties = value.as_object()?;
                 budget.node(value)?;
                 let mut expanded = serde_json::Map::new();
                 for (name, schema) in properties {
                     budget.key(name)?;
-                    expanded.insert(name.clone(), expand(schema, defs, stack, budget)?);
+                    let schema = if schema.is_array() && key == "dependencies" {
+                        clone_literal(schema, budget)?
+                    } else {
+                        expand(schema, root, stack, budget)?
+                    };
+                    expanded.insert(name.clone(), schema);
                 }
                 serde_json::Value::Object(expanded)
             }
-            _ => expand(value, defs, stack, budget)?,
+            "items"
+            | "prefixItems"
+            | "additionalItems"
+            | "contains"
+            | "additionalProperties"
+            | "unevaluatedItems"
+            | "unevaluatedProperties"
+            | "propertyNames"
+            | "allOf"
+            | "anyOf"
+            | "oneOf"
+            | "not"
+            | "if"
+            | "then"
+            | "else"
+            | "contentSchema" => expand(value, root, stack, budget)?,
+            // const, enum, default, examples and extension values are data.
+            // A literal {"$ref": ...} in them must never be expanded/dropped.
+            _ => clone_literal(value, budget)?,
         };
         out.insert(key.clone(), expanded);
     }
@@ -198,47 +207,12 @@ fn keep_description(
     Some(())
 }
 
-fn resolve_ref<'a>(reference: &str, defs: &Definitions<'a>) -> Option<&'a serde_json::Value> {
-    let pointer = reference.strip_prefix("#/")?;
-    let mut parts = pointer.split('/');
-    let bucket = parts.next()?;
-    if bucket != "$defs" && bucket != "definitions" {
-        return None;
-    }
-    let name = unescape_pointer(parts.next()?);
-    let mut current = *defs.get(name.as_str())?;
-    for part in parts {
-        let part = unescape_pointer(part);
-        current = match current {
-            serde_json::Value::Object(map) => map.get(&part)?,
-            serde_json::Value::Array(items) => items.get(part.parse::<usize>().ok()?)?,
-            _ => return None,
-        };
-    }
-    Some(current)
-}
-
-fn unescape_pointer(part: &str) -> String {
-    let mut decoded = String::with_capacity(part.len());
-    let mut chars = part.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '~' {
-            match chars.peek() {
-                Some('0') => {
-                    decoded.push('~');
-                    chars.next();
-                }
-                Some('1') => {
-                    decoded.push('/');
-                    chars.next();
-                }
-                _ => decoded.push('~'),
-            }
-        } else {
-            decoded.push(ch);
-        }
-    }
-    decoded
+fn clone_literal(
+    value: &serde_json::Value,
+    budget: &mut ExpansionBudget,
+) -> Option<serde_json::Value> {
+    budget.bytes(crate::core::encoded_json_len(value)?)?;
+    Some(value.clone())
 }
 
 #[cfg(test)]
@@ -248,6 +222,60 @@ mod tests {
 
     fn text_of(value: &serde_json::Value) -> String {
         value.to_string()
+    }
+
+    #[test]
+    fn unresolved_references_leave_the_original_schema_intact() {
+        for reference in [
+            json!("#/$defs/Missing"),
+            json!("https://example.com/schema.json"),
+            json!(42),
+        ] {
+            let original = json!({
+                "$defs": {"Known": {"type": "string"}},
+                "properties": {"value": {"$ref": reference}}
+            });
+            let mut schema = original.clone();
+            inline_schema_refs(&mut schema);
+            assert_eq!(schema, original);
+        }
+    }
+
+    #[test]
+    fn references_resolve_the_exact_root_pointer_and_preserve_siblings() {
+        let mut schema = json!({
+            "$defs": {
+                "Other": {"$defs": {"Name": {"type": "number"}}},
+                "Name": {"type": "string", "minLength": 2}
+            },
+            "properties": {
+                "name": {"$ref": "#/$defs/Name", "maxLength": 4},
+                "nested": {"$ref": "#/$defs/Other/$defs/Name"}
+            }
+        });
+        inline_schema_refs(&mut schema);
+        let validator = jsonschema::validator_for(&schema).expect("valid expanded schema");
+        assert!(validator.is_valid(&json!({"name": "good", "nested": 1})));
+        assert!(!validator.is_valid(&json!({"name": "too long"})));
+        assert!(!validator.is_valid(&json!({"name": "x"})));
+        assert!(!validator.is_valid(&json!({"nested": "wrong"})));
+    }
+
+    #[test]
+    fn schema_like_literal_values_and_property_names_survive_expansion() {
+        let literal = json!({"$ref": "literal", "$defs": {"a": 1}});
+        let mut schema = json!({
+            "$defs": {"Value": {"const": literal, "default": literal}},
+            "properties": {
+                "$ref": {"$ref": "#/$defs/Value"},
+                "other": {"enum": [literal], "examples": [literal]}
+            }
+        });
+        inline_schema_refs(&mut schema);
+        assert_eq!(schema["properties"]["$ref"]["const"], literal);
+        assert_eq!(schema["properties"]["$ref"]["default"], literal);
+        assert_eq!(schema["properties"]["other"]["enum"][0], literal);
+        assert_eq!(schema["properties"]["other"]["examples"][0], literal);
     }
 
     #[test]

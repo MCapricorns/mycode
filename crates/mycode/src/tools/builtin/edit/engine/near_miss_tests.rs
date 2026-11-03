@@ -150,3 +150,10 @@ fn a_near_miss_inside_a_batch_keeps_the_operation_index() {
     assert!(text.contains("operation 2 of 2"), "{text}");
     assert!(!text.contains("operation 1 of 2"), "{text}");
 }
+
+#[test]
+fn whitespace_relaxed_scan_recovers_a_partially_repeated_prefix() {
+    let body = "  alpha\n  beta\n  alpha\n  beta\n  alpha\n  gamma\n";
+    let (text, _) = apply(body, "alpha\nbeta\nalpha\ngamma", "changed");
+    assert_eq!(text, "  alpha\n  beta\nchanged\n");
+}

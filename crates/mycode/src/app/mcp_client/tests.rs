@@ -21,7 +21,7 @@ impl JsonRpcChannel for Pages {
         params: Value,
     ) -> Pin<Box<dyn Future<Output = Result<Value, McpError>> + Send + 'a>> {
         Box::pin(async move {
-            assert_eq!(method, "tools/list");
+            assert!(matches!(method, "tools/list" | "tools/call"));
             self.requests.lock().unwrap().push(params);
             Ok(self.replies.lock().unwrap().pop_front().expect("next page"))
         })
@@ -116,4 +116,33 @@ async fn bounds_empty_pages_with_ever_changing_cursors() {
     let (mut client, channel) = client(pages);
     assert_eq!(client.list_tools().await, Err(McpError::Oversized));
     assert_eq!(channel.requests.lock().unwrap().len(), MAX_TOOL_PAGES);
+}
+
+#[tokio::test]
+async fn tool_results_preserve_structured_data_beside_status_text_and_resource_links() {
+    let (mut client, _) = client(vec![json!({
+        "content": [
+            {"type": "text", "text": "Action completed."},
+            {"type": "resource_link", "uri": "file:///report.csv", "name": "report", "mimeType": "text/csv"}
+        ],
+        "structuredContent": {"rows": [{"id": 7}]},
+        "isError": true
+    })]);
+    let output = client.call_tool("report", json!({})).await.unwrap();
+    assert!(output.text.contains("Action completed."));
+    assert!(output.text.contains("file:///report.csv"));
+    assert!(output.text.contains(r#""rows":[{"id":7}]"#));
+    assert!(output.is_error);
+}
+
+#[tokio::test]
+async fn structured_compatibility_text_is_not_duplicated() {
+    let (mut client, _) = client(vec![json!({
+        "content": [{"type": "text", "text": "{ \"value\": 7 }"}],
+        "structuredContent": {"value": 7}
+    })]);
+    assert_eq!(
+        client.call_tool("report", json!({})).await.unwrap().text,
+        "{ \"value\": 7 }"
+    );
 }

@@ -135,15 +135,12 @@ pub fn read_provider_secrets_with_repair(
         |bytes| Ok(decode_secrets(bytes)?.secrets),
         ProviderSecrets::new,
         salvage_provider_secrets,
-        |secrets| publish_secrets(home, secrets),
+        |secrets| {
+            secrets.validate()?;
+            encode_secrets(secrets, AuthorityRevision::ABSENT.checked_next()?)
+        },
     )?;
     Ok((loaded.value, loaded.repair))
-}
-
-fn publish_secrets(home: &HomeLayout, secrets: &ProviderSecrets) -> Result<(), ConfigError> {
-    secrets.validate()?;
-    let bytes = encode_secrets(secrets, AuthorityRevision::ABSENT.checked_next()?)?;
-    locked_update_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES, |_| Ok(bytes))
 }
 
 /// Serializes one validated store at `revision`.

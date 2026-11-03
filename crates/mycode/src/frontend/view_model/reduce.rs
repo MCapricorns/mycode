@@ -487,10 +487,11 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::CompactFinished { ok: _, head } => {
             state.compacting = false;
-            if !head.is_empty()
-                && let Some(conversation) = state.active.as_mut()
-            {
-                conversation.head = head;
+            if let Some(conversation) = state.active.as_mut() {
+                conversation.compacting = false;
+                if !head.is_empty() {
+                    conversation.head = head;
+                }
             }
         }
         FrontendAction::AssistantStepCommitted(entry) => {
@@ -681,6 +682,15 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             // The magpie Library file is the only MCP catalog: the settings
             // projection mirrors it so the page, the nav count and the `/`
             // menu read one list. It is read-only — never `dirty`.
+            // A stable id may now point at another endpoint or command. Its
+            // old tool list and pending probe do not describe this catalog.
+            let unchanged = |id: &String| {
+                servers.iter().any(|server| {
+                    &server.id == id && state.mcp_library.iter().any(|old| old == server)
+                })
+            };
+            state.mcp_tools.retain(|(id, _)| unchanged(id));
+            state.mcp_probing.retain(unchanged);
             if let Some(settings) = state.settings.as_mut() {
                 settings.mcp_servers = servers.clone();
             }

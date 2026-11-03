@@ -2,6 +2,41 @@ use super::*;
 use crate::app::{BranchId, HeadStamp, SessionId};
 
 #[tokio::test]
+async fn deletion_releases_retained_subagent_runtime() {
+    let root = std::env::temp_dir().join(format!("mycode-delete-runs-{}", uuid::Uuid::new_v4()));
+    let home = HomeLayout::from_root(&root).unwrap();
+    let state = CoreState::new(home, Vec::new());
+    let created = state.service.create(None).await.unwrap();
+    let session_id = created.session_id.to_string();
+    let runtime = Arc::new(crate::tools::builtin::AgentRuntime::new(
+        root.join("results"),
+    ));
+    let retained = Arc::downgrade(&runtime);
+    state
+        .agent_runtimes
+        .lock()
+        .insert(session_id.clone(), runtime);
+    let reply = handle(&state, BridgeCommand::DeleteSession { session_id }).await;
+    assert!(
+        matches!(reply, BridgeReply::SessionDeleted(Ok(()))),
+        "{reply:?}"
+    );
+    assert!(
+        retained.upgrade().is_none(),
+        "deleted session retains subagent reports"
+    );
+    state.service.clone().shutdown().await;
+    drop(state);
+    for _ in 0..100 {
+        if !root.exists() || std::fs::remove_dir_all(&root).is_ok() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("temporary session store remained open");
+}
+
+#[tokio::test]
 async fn recall_is_rejected_during_turns_and_manual_compaction() {
     let root = std::env::temp_dir().join(format!(
         "mycode-recall-busy-{}-{}",

@@ -40,6 +40,20 @@ fn take_done(events: Vec<crate::core::StreamEvent>) -> AssistantMessage {
 }
 
 #[test]
+fn refusal_text_is_visible_and_prevents_pending_tool_dispatch() {
+    let mut reducer = CompletionsReducer::new();
+    reducer.feed(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{}"}}]}}]}"#);
+    let events = reducer.feed(r#"{"choices":[{"delta":{"refusal":"I cannot help with that request."},"finish_reason":"stop"}]}"#);
+    assert!(
+        matches!(events.as_slice(), [crate::core::StreamEvent::TextDelta(text)] if text == "I cannot help with that request.")
+    );
+    let message = take_done(reducer.feed("[DONE]"));
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert!(message.text().contains("I cannot help with that request."));
+    assert!(message.text().contains("refusal"));
+}
+
+#[test]
 fn malformed_tool_arguments_do_not_dispatch_as_an_empty_object() {
     for arguments in ["{\"path\":", "{oops}"] {
         let mut reducer = CompletionsReducer::new();

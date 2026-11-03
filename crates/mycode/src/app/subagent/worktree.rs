@@ -3,6 +3,7 @@
 //! a crashed process left behind. Modified checkouts remain recoverable.
 
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use crate::config::HomeLayout;
@@ -127,18 +128,19 @@ impl WorktreeLease {
     pub(crate) fn release(self) -> bool {
         // git's own clean check omits ignored files. A build artifact may
         // also be user work, and a retained checkout must keep it intact.
-        let clean = git_command()
-            .arg("-C")
-            .arg(&self.path)
-            .args([
+        let clean = capped_git_output(
+            git_command().arg("-C").arg(&self.path).args([
                 "status",
                 "--porcelain",
                 "-z",
                 "--untracked-files=all",
                 "--ignored=matching",
-            ])
-            .output()
-            .is_ok_and(|output| output.status.success() && output.stdout.is_empty());
+            ]),
+            1,
+        )
+        .is_ok_and(|(output, clipped)| {
+            !clipped && output.status.success() && output.stdout.is_empty()
+        });
         if !clean {
             return false;
         }
@@ -189,16 +191,23 @@ const MAX_WORKTREE_DIFF_BYTES: usize = 256 * 1024;
 /// Reads the worktree diff while the checkout still exists.
 pub(crate) fn capture_worktree_diff(path: &Path) -> String {
     let mut out = String::new();
-    match git_command()
-        .arg("-C")
-        .arg(path)
-        .args(["diff", "--binary", "--no-ext-diff", "HEAD"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
+    match capped_git_output(
+        git_command().arg("-C").arg(path).args([
+            "diff",
+            "--binary",
+            "--no-ext-diff",
+            "--no-textconv",
+            "HEAD",
+        ]),
+        MAX_WORKTREE_DIFF_BYTES,
+    ) {
+        Ok((output, clipped)) if output.status.success() || clipped => {
             out.push_str(&String::from_utf8_lossy(&output.stdout));
+            if clipped {
+                return cap_diff(out);
+            }
         }
-        Ok(output) => {
+        Ok((output, _)) => {
             out.push_str("worktree diff failed: ");
             out.push_str(String::from_utf8_lossy(&output.stderr).trim());
             out.push('\n');
@@ -210,13 +219,23 @@ pub(crate) fn capture_worktree_diff(path: &Path) -> String {
     // `-z` prints raw NUL-terminated paths. The line format quotes names
     // with spaces or non-ASCII bytes, and the quoted spelling failed the
     // `path.join` lookup below.
-    match git_command()
-        .arg("-C")
-        .arg(path)
-        .args(["status", "--porcelain", "-z", "-uall"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
+    match capped_git_output(
+        git_command()
+            .arg("-C")
+            .arg(path)
+            .args(["status", "--porcelain", "-z", "-uall"]),
+        MAX_WORKTREE_DIFF_BYTES,
+    ) {
+        Ok((mut output, clipped)) if output.status.success() || clipped => {
+            if clipped {
+                // A partial final path must never become a different lookup.
+                let complete = output
+                    .stdout
+                    .iter()
+                    .rposition(|byte| *byte == 0)
+                    .map_or(0, |position| position + 1);
+                output.stdout.truncate(complete);
+            }
             for record in String::from_utf8_lossy(&output.stdout).split('\0') {
                 let Some(name) = record.strip_prefix("?? ") else {
                     continue;
@@ -226,7 +245,8 @@ pub(crate) fn capture_worktree_diff(path: &Path) -> String {
                 }
                 let file = path.join(name);
                 let _ = writeln!(out, "diff --git a/{name} b/{name}");
-                match std::fs::read_to_string(&file) {
+                match untracked_file_text(&file, MAX_WORKTREE_DIFF_BYTES.saturating_sub(out.len()))
+                {
                     Ok(body) => {
                         out.push_str("new file\n--- /dev/null\n+++ b/");
                         out.push_str(name);
@@ -240,9 +260,15 @@ pub(crate) fn capture_worktree_diff(path: &Path) -> String {
                         let _ = writeln!(out, "new file unreadable: {error}");
                     }
                 }
+                if out.len() > MAX_WORKTREE_DIFF_BYTES {
+                    break;
+                }
+            }
+            if clipped {
+                out.push_str("\n... diff truncated\n");
             }
         }
-        Ok(output) => {
+        Ok((output, _)) => {
             out.push_str("worktree status failed: ");
             out.push_str(String::from_utf8_lossy(&output.stderr).trim());
             out.push('\n');
@@ -252,6 +278,79 @@ pub(crate) fn capture_worktree_diff(path: &Path) -> String {
         }
     }
     cap_diff(out)
+}
+
+/// Bound output while Git runs, rather than allocating an entire binary
+/// patch or huge status listing before clipping the handoff. Drain stderr
+/// concurrently so a full error pipe cannot block stdout, retaining its prefix.
+fn capped_git_output(
+    command: &mut std::process::Command,
+    limit: usize,
+) -> std::io::Result<(std::process::Output, bool)> {
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let errors = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = (&mut stderr).take(limit as u64).read_to_end(&mut bytes);
+        if result.is_ok() {
+            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+        }
+        bytes
+    });
+    let mut bytes = Vec::new();
+    let read = stdout
+        .take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes);
+    let clipped = bytes.len() > limit;
+    if clipped || read.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait();
+    let errors = errors.join().unwrap_or_default();
+    read?;
+    Ok((
+        std::process::Output {
+            status: status?,
+            stdout: bytes,
+            stderr: errors,
+        },
+        clipped,
+    ))
+}
+
+/// A symlink contributes its link text, as Git would, never the target's
+/// contents. Non-regular files (for example FIFOs) must not block handoff.
+/// Read at most the remaining preview budget plus one byte to mark clipping.
+fn untracked_file_text(path: &Path, remaining: usize) -> std::io::Result<String> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Ok(std::fs::read_link(path)?.to_string_lossy().into_owned());
+    }
+    if !metadata.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(remaining.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    // A clipped UTF-8 codepoint must not discard the entire otherwise valid
+    // preview. Binary data keeps the existing unreadable-file behavior.
+    let valid = match std::str::from_utf8(&bytes) {
+        Ok(text) => text,
+        Err(error) if error.error_len().is_none() && bytes.len() > remaining => {
+            std::str::from_utf8(&bytes[..error.valid_up_to()]).expect("valid UTF-8 prefix")
+        }
+        Err(error) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+    };
+    let mut text = valid.to_owned();
+    if bytes.len() > remaining {
+        text.push_str("\n... diff truncated\n");
+    }
+    Ok(text)
 }
 
 fn cap_diff(mut text: String) -> String {

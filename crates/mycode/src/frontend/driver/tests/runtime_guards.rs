@@ -8,6 +8,62 @@ use crate::frontend::driver::ReplyScope;
 use crate::frontend::driver::turn::selected_route;
 use crate::frontend::view_model::{FrontendAction, SettingsState, WorkspaceState};
 
+#[test]
+fn terminal_events_unlock_recall_for_a_conversation_opened_while_busy() {
+    let (mut driver, root) = scratch_driver("terminal-recall");
+    let mut active = conversation("session", "branch");
+    active.entries.push(crate::app::ConversationEntry {
+        event_id: "evt1-00000000000000000000000000000002".into(),
+        kind: crate::app::EntryKind::UserMessage,
+        agent_states: None,
+        text: "prompt".into(),
+        call_id: None,
+        thinking: String::new(),
+    });
+    let mut out = Vec::new();
+    for failed in [false, true] {
+        active.running = true;
+        driver.vm.active = Some(active.clone());
+        driver.vm.sending = true;
+        assert!(!driver.can_rewind_message(0));
+        let terminal = if failed {
+            FrontendAction::ChatFailed {
+                message: "provider error".into(),
+                head: String::new(),
+            }
+        } else {
+            FrontendAction::ChatDone {
+                head: "head".into(),
+                entry: crate::app::ConversationEntry {
+                    event_id: "answer".into(),
+                    kind: crate::app::EntryKind::AssistantMessage,
+                    agent_states: None,
+                    text: "answer".into(),
+                    call_id: None,
+                    thinking: String::new(),
+                },
+            }
+        };
+        driver.act(terminal, &mut out);
+        assert!(driver.can_rewind_message(0));
+    }
+    active.running = false;
+    active.compacting = true;
+    driver.vm.active = Some(active);
+    driver.vm.compacting = true;
+    assert!(!driver.can_rewind_message(0));
+    driver.act(
+        FrontendAction::CompactFinished {
+            ok: false,
+            head: String::new(),
+        },
+        &mut out,
+    );
+    assert!(driver.can_rewind_message(0));
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn model_state() -> WorkspaceState {
     let mut settings = SettingsState::from_settings(&AppSettings::default(), 1);
     settings.providers = vec![crate::config::ProviderSettings::magpie(

@@ -353,7 +353,10 @@ impl FrameReducer for ResponsesReducer {
             )];
         };
         match event["type"].as_str().unwrap_or_default() {
-            "response.output_text.delta" => {
+            "response.output_text.delta" | "response.refusal.delta" => {
+                if event["type"].as_str() == Some("response.refusal.delta") {
+                    self.begin_interrupt("the model declined to continue (refusal)");
+                }
                 let part = event["delta"].as_str().unwrap_or_default();
                 if !part.is_empty() {
                     if !charge_stream(&mut self.accumulated, part.len()) {
@@ -537,6 +540,26 @@ mod tests {
 
     use super::ResponsesReducer;
     use crate::providers::driver::FrameReducer;
+
+    #[test]
+    fn refusal_text_is_visible_and_prevents_pending_tool_dispatch() {
+        let mut reducer = ResponsesReducer::new();
+        reducer.feed(r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"read"}}"#);
+        reducer.feed(r#"{"type":"response.function_call_arguments.delta","delta":"{}"}"#);
+        let events = reducer.feed(
+            r#"{"type":"response.refusal.delta","delta":"I cannot help with that request."}"#,
+        );
+        assert!(
+            matches!(events.as_slice(), [crate::core::StreamEvent::TextDelta(text)] if text == "I cannot help with that request.")
+        );
+        let events = reducer.feed(r#"{"type":"response.completed","response":{}}"#);
+        let [crate::core::StreamEvent::Done { message }] = events.as_slice() else {
+            panic!("expected a terminal message");
+        };
+        assert_eq!(message.stop_reason, StopReason::Error);
+        assert!(message.text().contains("I cannot help with that request."));
+        assert!(message.text().contains("refusal"));
+    }
 
     #[test]
     fn malformed_tool_arguments_do_not_dispatch_as_an_empty_object() {

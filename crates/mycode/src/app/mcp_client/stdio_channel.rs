@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::Stdio;
 #[cfg(unix)]
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -54,6 +55,7 @@ pub struct StdioChannel {
     stdout: Mutex<BufReader<tokio::process::ChildStdout>>,
     stderr_tail: Arc<StdMutex<VecDeque<String>>>,
     timeout: Duration,
+    tools_changed: AtomicBool,
     /// Process-group id captured at spawn. Shutdown signals the group.
     #[cfg(unix)]
     group_id: AtomicI32,
@@ -106,6 +108,7 @@ impl StdioChannel {
             stdout: Mutex::new(BufReader::new(stdout)),
             stderr_tail,
             timeout,
+            tools_changed: AtomicBool::new(false),
             #[cfg(unix)]
             group_id,
         })
@@ -228,6 +231,11 @@ impl StdioChannel {
             let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
                 continue;
             };
+            if value["method"].as_str() == Some("notifications/tools/list_changed")
+                && value["id"].is_null()
+            {
+                self.tools_changed.store(true, Ordering::Relaxed);
+            }
             if value["method"].is_string() && !value["id"].is_null() {
                 self.answer_server_request(&value).await?;
                 continue;
@@ -269,6 +277,10 @@ impl Drop for StdioChannel {
 }
 
 impl JsonRpcChannel for StdioChannel {
+    fn take_tools_changed(&self) -> bool {
+        self.tools_changed.swap(false, Ordering::Relaxed)
+    }
+
     fn request<'a>(
         &'a self,
         id: u64,
@@ -663,6 +675,32 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tool_list_notifications_are_consumed_without_losing_the_reply() {
+        use super::JsonRpcChannel as _;
+        let script = r#"read request
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}' '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}'
+read next
+"#;
+        let channel = super::StdioChannel::spawn(
+            "/bin/sh",
+            &["-c".to_owned(), script.to_owned()],
+            &[],
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        let reply = channel
+            .request(1, "tools/call", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(reply["ok"], true);
+        assert!(channel.take_tools_changed());
+        assert!(!channel.take_tools_changed());
+        channel.shutdown().await;
+    }
+
     #[tokio::test]
     async fn request_deadline_includes_blocked_stdin() {
         use crate::app::mcp_client::{JsonRpcChannel, McpError};

@@ -37,6 +37,48 @@ fn user_entry() -> ConversationEntry {
 }
 
 #[test]
+fn a_start_rejection_returns_an_interrupt_draft_to_its_original_chat() {
+    for offscreen in [false, true] {
+        let (mut driver, root) = scratch_driver("start-refused-interrupt");
+        let (session, branch) = ready_send(&mut driver);
+        let mut out = Vec::new();
+        driver.submit("original prompt", &mut out);
+        let _ = driver.held_send.take();
+        driver.held_interrupts.insert(
+            session.clone(),
+            super::super::HeldInterrupt {
+                send: Some("held message".into()),
+            },
+        );
+        if offscreen {
+            driver.park_conversation(&mut out);
+        }
+        driver.vm.composer_draft = "new draft".into();
+        driver.on_reply(
+            ReplyScope::SentTurn {
+                session: session.clone(),
+                branch,
+            },
+            BridgeReply::ChatStarted(Err("start refused".into())),
+            &mut out,
+        );
+        assert!(driver.held_interrupts.is_empty());
+        assert!(!driver.submitted_turns.contains_key(&session));
+        if offscreen {
+            assert_eq!(driver.vm.composer_draft, "new draft");
+            assert_eq!(
+                driver.vm.parked_steers,
+                vec![(session, vec!["held message".to_owned()])]
+            );
+        } else {
+            assert_eq!(driver.vm.composer_draft, "held message\n\nnew draft");
+        }
+        driver.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[test]
 fn a_delayed_send_acknowledgement_preserves_the_next_draft() {
     let (mut driver, root) = scratch_driver("send-next-draft");
     let (session, _) = ready_send(&mut driver);

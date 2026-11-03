@@ -106,6 +106,7 @@ impl FrontendDriver {
     ) {
         if let BridgeReply::ChatStarted(Err(message)) = reply {
             self.submitted_turns.remove(session);
+            let held = self.held_interrupts.remove(session);
             if self.send_view_matches(session, branch) {
                 self.act(
                     FrontendAction::ChatFailed {
@@ -114,8 +115,20 @@ impl FrontendDriver {
                     },
                     out,
                 );
+                if let Some(held) = held {
+                    self.restore_held_interrupt(held, out);
+                }
             } else {
                 self.toast(message, ToastKind::Error, out);
+                if let Some(text) = held.and_then(|held| held.send) {
+                    self.act(
+                        FrontendAction::SteersParked {
+                            session_id: session.to_owned(),
+                            texts: vec![text],
+                        },
+                        out,
+                    );
+                }
             }
         }
     }

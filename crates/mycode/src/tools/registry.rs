@@ -51,6 +51,16 @@ impl ToolRegistry {
         inner.specs = None;
     }
 
+    /// Removes one registered tool and invalidates its cached schema.
+    pub fn unregister(&self, name: &str) -> bool {
+        let mut inner = self.write();
+        let removed = inner.tools.remove(name).is_some();
+        if removed {
+            inner.specs = None;
+        }
+        removed
+    }
+
     /// Restrict the model-facing surface to `names`: `Request.tools`, the
     /// system-prompt list, and top-level dispatch see only those. Everything
     /// registered keeps dispatching through `run_code`'s `call(name, args)`.

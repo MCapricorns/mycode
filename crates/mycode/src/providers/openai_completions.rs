@@ -836,6 +836,19 @@ impl FrameReducer for CompletionsReducer {
                 }
                 self.absorb_content(text, &mut events);
             }
+            if let Some(refusal) = delta["refusal"].as_str() {
+                self.begin_interrupt("the model declined to continue (refusal)");
+                if !charge_stream(&mut self.accumulated, refusal.len()) {
+                    self.terminal_sent = true;
+                    return vec![crate::providers::driver::protocol_error(
+                        "stream exceeded the output limit",
+                    )];
+                }
+                if !refusal.is_empty() {
+                    self.text.push_str(refusal);
+                    events.push(StreamEvent::TextDelta(refusal.to_owned()));
+                }
+            }
             if let Some(fragments) = delta["tool_calls"].as_array() {
                 for fragment in fragments {
                     if let Err(message) = self.absorb_tool_fragment(fragment, &mut events) {

@@ -26,6 +26,7 @@ struct Call {
 struct FakeHost {
     calls: Mutex<Vec<Call>>,
     disabled: Mutex<BTreeSet<String>>,
+    writers: Mutex<BTreeSet<String>>,
     outputs: Mutex<BTreeMap<String, String>>,
     failures: Mutex<BTreeSet<String>>,
     hold_nodes: Mutex<BTreeSet<String>>,
@@ -41,6 +42,7 @@ impl Default for FakeHost {
         Self {
             calls: Mutex::new(vec![]),
             disabled: Mutex::new(BTreeSet::new()),
+            writers: Mutex::new(["artisan".into(), "custom-writer".into()].into()),
             outputs: Mutex::new(BTreeMap::new()),
             failures: Mutex::new(BTreeSet::new()),
             hold_nodes: Mutex::new(BTreeSet::new()),
@@ -62,7 +64,7 @@ impl AgentHost for FakeHost {
             if self.disabled.lock().contains(role) {
                 Err(ToolError::Execution("role disabled".into()))
             } else {
-                Ok(matches!(role, "artisan" | "custom-writer"))
+                Ok(self.writers.lock().contains(role))
             }
         })
     }
@@ -1164,4 +1166,44 @@ async fn cancelled_native_supervisor_must_join_before_scope_is_released() {
     assert!(task.await.unwrap().unwrap().is_error);
     assert!(finished.load(Ordering::Acquire));
     assert_eq!(f.runs()[0].status, AgentRunStatus::Cancelled);
+}
+
+#[tokio::test]
+async fn workflow_rejects_role_capability_changes_before_node_admission() {
+    let f = Fixture::new();
+    f.host.gated_nodes.lock().insert("primary".into());
+    let tool = f.workflow();
+    let ctx = f.ctx("role-change");
+    let task = tokio::spawn(async move {
+        tool.execute_dyn(
+            json!({"name": "research", "inputs": {"QUESTION": "verify evidence"}}),
+            &ctx,
+            &mut ToolStream::closed(),
+        )
+        .await
+    });
+    wait_for(|| {
+        f.host
+            .calls
+            .lock()
+            .iter()
+            .any(|call| call.request.description == "primary")
+    })
+    .await;
+    // The graph was validated while sentinel was read-only. A saved role
+    // change must not turn the later independent acceptance node into a writer.
+    f.host.writers.lock().insert("sentinel".into());
+    f.host.gate.add_permits(1);
+    let result = task.await.unwrap().unwrap();
+    assert!(result.is_error);
+    assert_eq!(f.workflows()[0].status, AgentWorkflowStatus::Failed);
+    assert!(text(&result).contains("write capability changed"));
+    assert!(
+        f.host
+            .calls
+            .lock()
+            .iter()
+            .all(|call| call.request.agent != "sentinel")
+    );
+    assert!(f.runs().iter().all(|run| run.role != "sentinel"));
 }

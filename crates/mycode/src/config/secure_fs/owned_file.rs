@@ -52,7 +52,7 @@ mod fallback {
         }
 
         pub(super) fn read(
-            &mut self,
+            &self,
             _maximum_bytes: usize,
         ) -> Result<Option<Zeroizing<Vec<u8>>>, ConfigError> {
             Err(unavailable())
@@ -120,6 +120,28 @@ pub(crate) fn quarantine_owned_file(
         return Err(ConfigError::new(ConfigErrorKind::PathEscape));
     }
     platform::quarantine_file(&path.root, &path.components, backup_name)
+}
+
+/// Quarantines only while the original native read rejection still applies.
+/// The directory transaction excludes concurrent saves between this check
+/// and the rename. A healthy replacement must never be moved for a stale
+/// permissions/link/type error from an earlier read.
+pub(crate) fn quarantine_rejected_owned_file(
+    home: &HomeLayout,
+    relative: &str,
+    backup: &str,
+    expected: &ConfigError,
+) -> Result<bool, ConfigError> {
+    let path = OwnedPath::new(home, Path::new(relative))?;
+    require_file_name(&path)?;
+    let transaction = platform::Transaction::begin(&path.root, &path.components)?;
+    // A zero-byte cap checks file trust without loading its contents. Any
+    // readable nonempty file reports Oversized, not an unusable-file error.
+    match transaction.read(0) {
+        Err(error) if error.kind() == expected.kind() && error.io_kind() == expected.io_kind() => {}
+        _ => return Err(ConfigError::new(ConfigErrorKind::RevisionConflict)),
+    }
+    quarantine_owned_file(home, relative, backup)
 }
 
 /// Reads a quarantined backup only while its bytes remain trustworthy.

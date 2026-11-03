@@ -413,7 +413,7 @@ fn plan_op(
                 // Models often reproduce a block from an older read with
                 // different indentation or trailing spaces. Match the same
                 // lines ignoring only whitespace before giving up.
-                matches = relaxed_literal_matches(body, &patterns[0])?;
+                matches = relaxed_literal_matches(body, &patterns[0], cancel)?;
                 if !matches.is_empty() {
                     notes.push(format!(
                         "literal pattern matched ignoring whitespace/indentation: {}",

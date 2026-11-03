@@ -706,7 +706,7 @@ fn finish_write(
             "published file content does not match written content".to_owned(),
         ));
     }
-    let revision = revision_token(&published.meta, &content_hash(&raw));
+    let revision = revision_token(&published.meta, &expected_hash);
     Ok(FileWrite {
         bytes_written,
         revision,

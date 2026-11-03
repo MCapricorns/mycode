@@ -509,7 +509,7 @@ fn request_summary_text(summary: &str) -> String {
 ///
 /// That summary was cut from a stitched history, whose indexes are not
 /// ledger indexes. It is stored only when every message after it matches
-/// the end of the ledger replay, role and text alike; `covered_messages` is
+/// the end of the ledger replay, including images and tool identities; `covered_messages` is
 /// then the ledger length minus that tail. Any mismatch keeps the older
 /// checkpoint, which stays correct, just less recent.
 pub(crate) fn persist_turn_summary(
@@ -539,14 +539,10 @@ pub(crate) fn persist_turn_summary(
     {
         return false;
     }
-    let same = |left: &Message, right: &Message| {
-        std::mem::discriminant(left) == std::mem::discriminant(right)
-            && message_text(left) == message_text(right)
-    };
     if !tail
         .iter()
         .zip(&ledger[covered..])
-        .all(|(left, right)| same(left, right))
+        .all(|(left, right)| left == right)
     {
         return false;
     }

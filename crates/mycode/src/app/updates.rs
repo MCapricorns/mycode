@@ -804,13 +804,7 @@ fn unix_script(new_binary: &Path, current: &Path, sha256: &str, relaunch: bool) 
     } else {
         ""
     };
-    let template = r#"#!/bin/sh
-set -e
-prev=__PREVIOUS__
-current=__CURRENT__
-new=__NEW__
-expected=__HASH__
-hash_file() {
+    let template = r#"hash_file() {
   _file=$1
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$_file" | awk '{print $1}'
@@ -886,12 +880,16 @@ rm -f "$prev"
 __RELAUNCH__
 rm -f "$0"
 "#;
-    template
-        .replace("__PREVIOUS__", &shell_single_quote(&previous))
-        .replace("__CURRENT__", &shell_single_quote(&current))
-        .replace("__NEW__", &shell_single_quote(&new_binary))
-        .replace("__HASH__", &shell_single_quote(sha256))
-        .replace("__RELAUNCH__", relaunch_line)
+    // Insert user paths only after expanding the static script. A directory
+    // named __HASH__ or __RELAUNCH__ must remain literal, including its quotes.
+    format!(
+        "#!/bin/sh\nset -e\nprev={}\ncurrent={}\nnew={}\nexpected={}\n{}",
+        shell_single_quote(&previous),
+        shell_single_quote(&current),
+        shell_single_quote(&new_binary),
+        shell_single_quote(sha256),
+        template.replace("__RELAUNCH__", relaunch_line),
+    )
 }
 
 fn previous_path(current: &Path) -> PathBuf {

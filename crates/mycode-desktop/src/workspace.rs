@@ -207,7 +207,7 @@ pub struct Workspace {
     close_armed: Option<Instant>,
     /// Row-delete key clicked once and waiting for the confirming click.
     /// Session, provider, MCP-server, and folder-root rows all share it.
-    armed_delete: Option<String>,
+    armed_delete: Option<conversation::DeleteConfirmation>,
     /// Last interface font size applied to the window. Empty until the first frame.
     applied_font_size: String,
     /// Language last written into input placeholders. `u8::MAX` until the

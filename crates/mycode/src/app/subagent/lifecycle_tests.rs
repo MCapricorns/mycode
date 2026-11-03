@@ -248,3 +248,101 @@ async fn disabling_roles_keeps_prior_results_and_stop_controls_reachable() {
         )));
     }
 }
+
+#[tokio::test]
+async fn newly_dispatched_children_observe_saved_role_and_skill_settings() {
+    let fixture = Fixture::new();
+    let host = fixture.host(AppSettings::default());
+    assert!(host.validate_role("artisan").await.unwrap());
+    let mut settings = host.settings.clone();
+    settings.subagents.role_mut("artisan").enabled = false;
+    settings.skills.set_enabled("deploy", false);
+    settings.magpie.api_key = "rotated-child-secret".into();
+    crate::config::replace_app_settings(
+        &fixture.home,
+        crate::config::AuthorityRevision::ABSENT,
+        &settings,
+    )
+    .unwrap();
+    assert!(
+        host.validate_role("artisan")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("disabled")
+    );
+    assert!(
+        !host
+            .current_settings()
+            .await
+            .unwrap()
+            .skills
+            .is_enabled("deploy")
+    );
+}
+
+#[tokio::test]
+async fn refreshed_gateway_credentials_remain_redacted() {
+    let fixture = Fixture::new();
+    let host = fixture.host(AppSettings::default());
+    let mut settings = host.settings.clone();
+    settings.magpie.api_key = "rotated-child-secret".into();
+    crate::config::replace_app_settings(
+        &fixture.home,
+        crate::config::AuthorityRevision::ABSENT,
+        &settings,
+    )
+    .unwrap();
+    host.current_settings().await.unwrap();
+    assert_eq!(
+        host.redact_text("fixture-secret-key rotated-child-secret"),
+        "[REDACTED] [REDACTED]"
+    );
+}
+
+#[tokio::test]
+async fn changed_role_capability_is_refused_before_child_setup() {
+    let fixture = Fixture::new();
+    let host = fixture.host(AppSettings::default());
+    let roles = fixture.home.root().join("agents");
+    std::fs::create_dir_all(&roles).unwrap();
+    let write_role = |writer: bool| {
+        let tools = if writer { "read, edit" } else { "read" };
+        std::fs::write(roles.join("custom.md"), format!(
+            "---\nname: custom\ndescription: Mutable role.\ntools: {tools}\nisolation: worktree\n---\nFollow the brief.\n"
+        )).unwrap();
+    };
+    for admitted_writer in [false, true] {
+        write_role(admitted_writer);
+        assert_eq!(host.validate_role("custom").await.unwrap(), admitted_writer);
+        write_role(!admitted_writer);
+        // Includes retained-worktree dispatch: rejecting configuration drift
+        // must happen before trying to reopen this deliberately missing path.
+        for retained in [None, Some(fixture.cwd.as_path())] {
+            let result = host
+                .run_subagent_validated(
+                    crate::tools::builtin::SubagentRequest {
+                        agent: "custom".into(),
+                        prompt: "Inspect the target".into(),
+                        description: "capability drift".into(),
+                        isolation: None,
+                    },
+                    &crate::tools::ToolStream::closed(),
+                    &CancellationToken::new(),
+                    "capability-drift",
+                    admitted_writer,
+                    retained,
+                )
+                .await;
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("write capability changed after admission")
+            );
+        }
+        assert!(host.steers.lock().is_empty());
+        assert!(host.cancels.lock().is_empty());
+        assert!(!fixture.home.root().join("agent-worktrees").exists());
+    }
+}

@@ -135,9 +135,26 @@ impl DynamicMcpTool {
     }
 }
 
+mod refresh;
 mod results;
+pub(crate) use refresh::McpRefresh;
 
 use results::{MAX_MCP_TOOL_RESULT_BYTES, bound_mcp_result, mcp_server_summary, mcp_snippet};
+
+/// A dropped exchange can leave a partially consumed JSON-RPC frame. The
+/// guard also covers outer task cancellation that never polls our select.
+struct InFlightExchange<'a> {
+    broken: &'a AtomicBool,
+    complete: bool,
+}
+
+impl Drop for InFlightExchange<'_> {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.broken.store(true, Ordering::Relaxed);
+        }
+    }
+}
 
 impl ToolDyn for DynamicMcpTool {
     fn spec(&self) -> ToolSpec {
@@ -166,7 +183,7 @@ impl ToolDyn for DynamicMcpTool {
             // scalars, an untagged union variant) before validating. This is
             // schema-driven only: camelCase keys are left alone because the
             // server may declare them that way.
-            let mut args = args;
+            let mut args = crate::tools::tool::normalize_tool_args(args);
             crate::tools::tool::repair_args(&mut args, &self.spec.params_schema);
             if let Some(validator) = &self.validator {
                 let errors: Vec<String> = validator
@@ -183,27 +200,40 @@ impl ToolDyn for DynamicMcpTool {
                 "calling {} on MCP server {}",
                 self.tool_name, self.server.id
             ));
-            // The dispatcher does not select on the turn token while a tool
-            // runs; bound the call here so Escape actually cancels an MCP call.
-            // The client lock is inside the race too: another session's turn
-            // can hold this shared connection for a full request timeout.
-            let call = async {
-                let mut client = self.client.lock().await;
-                client.call_tool(&self.tool_name, args).await
+            // Cancel lock waiting without invalidating a different session's
+            // in-flight request on this shared connection.
+            let cancelled = || {
+                ToolError::Execution(format!(
+                    "MCP call cancelled{}",
+                    crate::tools::tool::INTERRUPTED_NOTE
+                ))
+            };
+            let mut client = tokio::select! {
+                biased;
+                () = ctx.cancel.cancelled() => return Err(cancelled()),
+                client = self.client.lock() => client,
+            };
+            if self.broken.load(Ordering::Relaxed) {
+                return Err(ToolError::Execution(format!(
+                    "MCP server '{}' connection is unavailable; reconnect on the next turn",
+                    self.server.id
+                )));
+            }
+            let mut exchange = InFlightExchange {
+                broken: &self.broken,
+                complete: false,
             };
             let result = tokio::select! {
                 biased;
                 () = ctx.cancel.cancelled() => {
-                    // Dropping an in-flight stdio write/read can leave a partial
-                    // JSON-RPC line. Reconnect next turn instead of reusing it.
+                    // Dropping an in-flight stdio exchange can leave a partial
+                    // JSON-RPC line. Do not let queued calls reuse that stream.
                     self.broken.store(true, Ordering::Relaxed);
-                    return Err(ToolError::Execution(format!(
-                        "MCP call cancelled{}",
-                        crate::tools::tool::INTERRUPTED_NOTE
-                    )));
+                    return Err(cancelled());
                 }
-                result = call => result,
+                result = client.call_tool(&self.tool_name, args) => result,
             };
+            exchange.complete = true;
             let output = result.map_err(|error| {
                 let detail = if error.is_connection_lost() {
                     self.broken.store(true, Ordering::Relaxed);
@@ -216,6 +246,7 @@ impl ToolDyn for DynamicMcpTool {
                 };
                 ToolError::Execution(detail)
             })?;
+            drop(client);
             // A server that flags `isError` ran the tool and reported failure as
             // data. The model needs to read it to correct its arguments, so it
             // becomes an error *result* rather than a dispatcher failure.
@@ -271,6 +302,7 @@ pub(crate) enum McpSlot {
         /// Set by a tool when the shared connection dies; the next
         /// `spawn_slots` turns this slot back into `Connecting`.
         broken: Arc<AtomicBool>,
+        client: Arc<Mutex<crate::app::mcp_client::McpClient>>,
     },
     /// Failed to spawn/handshake/list. Retried at `retry_at`, per server.
     Failed {
@@ -407,16 +439,6 @@ pub(crate) struct McpConnect {
     pub(crate) warning: Option<String>,
 }
 
-impl McpConnect {
-    /// Whether any MCP server is configured at all.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.ready.is_empty()
-            && self.connecting.is_empty()
-            && self.failed.is_empty()
-            && self.warning.is_none()
-    }
-}
-
 /// Reads magpie's Library servers on the blocking pool.
 ///
 /// Managed rows carry their own headers. Discovery must not depend on an
@@ -486,6 +508,9 @@ pub(crate) async fn spawn_slots(
         ));
     }
     let pool_ref = guard.as_mut().expect("the pool was just ensured");
+    // The enabled server list can stay empty while a config error appears
+    // or is repaired, so warnings cannot be cached by its fingerprint.
+    pool_ref.warning = resolved.warning;
     let notify = Arc::clone(&pool_ref.notify);
     for (index, server) in resolved.servers.iter().enumerate() {
         let due = match &pool_ref.slots[index] {
@@ -531,18 +556,6 @@ pub(crate) async fn spawn_slots(
     connect
 }
 
-/// Resolves and spawns in one step; the turn's entry point.
-pub(crate) async fn connect_mcp_tools(
-    home: &crate::config::HomeLayout,
-    settings: &AppSettings,
-    pool: &Arc<Mutex<Option<McpPool>>>,
-    project: Option<&std::path::Path>,
-) -> McpConnect {
-    let resolved = resolve(home, settings, project).await;
-    let result_dir = Arc::new(home.root().join("mcp-results"));
-    spawn_slots(resolved, pool, result_dir).await
-}
-
 /// Reports servers becoming ready or failed for the rest of the turn.
 ///
 /// `on_ready` and `on_failed` run once per server id, including servers
@@ -555,11 +568,36 @@ pub(crate) async fn connect_mcp_tools(
 /// every session in the process, so one session's cancel must not kill a
 /// connection another session is waiting for. The handshakes are bounded by
 /// [`MCP_HANDSHAKE_TIMEOUT`] and their results are reused by the next turn.
+#[cfg(test)]
 pub(crate) async fn drain_mcp_ready<F, G>(
+    pool: Arc<Mutex<Option<McpPool>>>,
+    seen_ready: HashSet<String>,
+    seen_failed: HashSet<String>,
+    cancel: Option<CancellationToken>,
+    on_ready: F,
+    on_failed: G,
+) where
+    F: FnMut(Arc<McpServerInfo>, Vec<Arc<DynamicMcpTool>>),
+    G: FnMut(Arc<McpServerInfo>, &str),
+{
+    drain_mcp_ready_bound(
+        pool,
+        seen_ready,
+        seen_failed,
+        cancel,
+        None,
+        on_ready,
+        on_failed,
+    )
+    .await;
+}
+
+async fn drain_mcp_ready_bound<F, G>(
     pool: Arc<Mutex<Option<McpPool>>>,
     mut seen_ready: HashSet<String>,
     mut seen_failed: HashSet<String>,
     cancel: Option<CancellationToken>,
+    fingerprint: Option<u64>,
     mut on_ready: F,
     mut on_failed: G,
 ) where
@@ -572,6 +610,9 @@ pub(crate) async fn drain_mcp_ready<F, G>(
             let Some(pool_ref) = guard.as_ref() else {
                 return;
             };
+            if fingerprint.is_some_and(|expected| expected != pool_ref.fingerprint) {
+                return;
+            }
             (
                 pool_ref.ready(),
                 pool_ref.failed(),
@@ -634,11 +675,7 @@ fn spawn_handshake(
             return;
         }
         pool_ref.slots[index] = match outcome {
-            Ok((info, tools, broken)) => McpSlot::Ready {
-                server: info,
-                tools,
-                broken,
-            },
+            Ok(slot) => slot,
             Err(reason) => McpSlot::Failed {
                 server: Arc::new(McpServerInfo::new(&server.id, None)),
                 reason,
@@ -655,14 +692,7 @@ async fn handshake(
     server: &crate::config::McpServerSettings,
     api_key: Option<&str>,
     result_dir: &Arc<PathBuf>,
-) -> Result<
-    (
-        Arc<McpServerInfo>,
-        Vec<Arc<DynamicMcpTool>>,
-        Arc<AtomicBool>,
-    ),
-    String,
-> {
+) -> Result<McpSlot, String> {
     let attempt = async {
         let mut client = open_mcp_client(server, api_key.map(str::to_owned)).await?;
         let listed = client
@@ -694,7 +724,12 @@ async fn handshake(
             ))
         })
         .collect();
-    Ok((info, tools, broken))
+    Ok(McpSlot::Ready {
+        server: info,
+        tools,
+        broken,
+        client,
+    })
 }
 
 /// magpie's Library servers and any configuration warning.
@@ -745,7 +780,6 @@ fn mcp_fingerprint(servers: &[crate::config::McpServerSettings]) -> u64 {
 /// only mirrors the keys whose specs reach `Request.tools`.
 pub(crate) struct McpCatalog {
     inner: RwLock<CatalogInner>,
-    warning: Option<String>,
     /// Lowercased names of the tools already on the registry when the
     /// catalog was created. A name in here is directly callable, so a lookup
     /// miss on it gets a "call the tool directly" nudge instead of the
@@ -754,9 +788,12 @@ pub(crate) struct McpCatalog {
     /// The bridge is hidden from top-level dispatch and reached through
     /// `call` inside `run_code`. Set when the bridge is registered.
     code_mode: AtomicBool,
+    /// Live catalogs use stable server-qualified keys across reconfiguration.
+    qualified_names: AtomicBool,
 }
 
 struct CatalogInner {
+    warning: Option<String>,
     by_name: HashMap<String, Arc<DynamicMcpTool>>,
     /// Catalog key and one-line summary of each tool, sorted by key.
     listed: Vec<(String, String)>,
@@ -778,6 +815,12 @@ pub(crate) enum ServerStatus {
 /// Most tools one keyword search lists before it asks for a narrower query.
 const MAX_SEARCH_MATCHES: usize = 25;
 
+/// Escape component underscores so the separator cannot also occur inside
+/// a component. `(a__b, c)` and `(a, b__c)` must never share a canonical key.
+fn qualified_tool_key(server: &str, tool: &str) -> String {
+    format!("{}__{}", server.replace('_', "_u"), tool.replace('_', "_u"))
+}
+
 impl McpCatalog {
     /// An empty catalog for this turn's servers.
     pub(crate) fn new(
@@ -787,14 +830,15 @@ impl McpCatalog {
     ) -> Arc<Self> {
         Arc::new(Self {
             inner: RwLock::new(CatalogInner {
+                warning,
                 by_name: HashMap::new(),
                 listed: Vec::new(),
                 servers: Vec::new(),
                 pending: pending.into_iter().collect(),
             }),
-            warning,
             native,
             code_mode: AtomicBool::new(false),
+            qualified_names: AtomicBool::new(false),
         })
     }
 
@@ -822,9 +866,17 @@ impl McpCatalog {
                         .iter()
                         .any(|name| key.eq_ignore_ascii_case(name))
             };
-            let mut key = tool.spec.name.clone();
+            let mut key = if self.qualified_names.load(Ordering::Relaxed) {
+                qualified_tool_key(server.id(), &tool.spec.name)
+            } else {
+                tool.spec.name.clone()
+            };
             if taken(&key) {
-                let base = format!("{}__{}", server.id(), tool.spec.name);
+                let base = if self.qualified_names.load(Ordering::Relaxed) {
+                    qualified_tool_key(server.id(), &tool.spec.name)
+                } else {
+                    format!("{}__{}", server.id(), tool.spec.name)
+                };
                 key.clone_from(&base);
                 let mut suffix = 2;
                 while taken(&key) {
@@ -874,7 +926,7 @@ impl McpCatalog {
     pub(crate) fn prompt_note(&self) -> String {
         let inner = self.inner.read();
         let mut note = String::new();
-        if let Some(warning) = &self.warning {
+        if let Some(warning) = &inner.warning {
             note.push_str("Project MCP config: ");
             note.push_str(warning);
             note.push('\n');
@@ -931,7 +983,7 @@ impl McpCatalog {
         let mut lines = Vec::new();
         // The reason a server is missing belongs in the answer: a config that
         // failed to load is not the same as no MCP configured.
-        if let Some(warning) = &self.warning {
+        if let Some(warning) = &inner.warning {
             lines.push(format!("MCP config: {warning}"));
         }
         if inner.listed.is_empty() {
@@ -979,6 +1031,11 @@ impl McpCatalog {
                 [(key, tool)] => Some(((*key).clone(), Arc::clone(tool))),
                 _ => None,
             };
+        }
+        // A previously advertised canonical key must not be reinterpreted
+        // as another server's friendly alias after removal or reconfiguration.
+        if self.qualified_names.load(Ordering::Relaxed) && name.contains("__") {
+            return None;
         }
         let (prefix, bare) = name
             .rsplit_once("__")
@@ -1358,11 +1415,11 @@ impl ToolDyn for UseTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "use_tool".to_owned(),
-            description: "Call a connected MCP tool. Arguments must match the inputSchema returned by search_tool for that name. Do not call this before search_tool.".to_owned(),
+            description: "Call a connected MCP tool. Arguments must match the schema returned by search_tool or tool_search for that name. Load the schema before calling this tool.".to_owned(),
             params_schema: object_schema(
                 serde_json::json!({
-                    "name": {"type": "string", "description": "The exact name search_tool returned."},
-                    "arguments": {"type": "object", "description": "Arguments matching search_tool's inputSchema."}
+                    "name": {"type": "string", "description": "The exact name search_tool or tool_search returned."},
+                    "arguments": {"type": "object", "description": "Arguments matching the schema returned by search_tool or tool_search."}
                 }),
                 &["name", "arguments"],
             ),
@@ -1370,7 +1427,7 @@ impl ToolDyn for UseTool {
     }
 
     fn prompt_snippet_dyn(&self) -> Option<&str> {
-        Some("use_tool: call an MCP tool only after search_tool returned its schema.")
+        Some("use_tool: call an MCP tool after search_tool or tool_search returned its schema.")
     }
 
     /// A call to a tool that declares `readOnlyHint` runs beside other
@@ -1576,3 +1633,18 @@ pub(crate) fn stub_catalog_tool_with_read_only(
 mod regressions;
 #[cfg(test)]
 mod tests;
+
+/// Filters one drained server's tools for a role that cannot write.
+///
+/// The filter runs on the drain output, before registration: a read-only
+/// role never sees a schema it may not call.
+pub(crate) fn filter_mcp_tools(
+    tools: Vec<Arc<crate::app::mcp_tools::DynamicMcpTool>>,
+    write_capable: bool,
+) -> Vec<Arc<crate::app::mcp_tools::DynamicMcpTool>> {
+    if write_capable {
+        tools
+    } else {
+        tools.into_iter().filter(|tool| tool.read_only()).collect()
+    }
+}

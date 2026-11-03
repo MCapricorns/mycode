@@ -71,6 +71,11 @@ impl ToolSearchIndex {
         }
     }
 
+    /// Drops the previous connection generation before rebuilding discovery.
+    pub(crate) fn clear(&self) {
+        *self.state.write() = IndexState::default();
+    }
+
     /// The keys best matching `query`, best first.
     pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<String> {
         let state = self.state.read();

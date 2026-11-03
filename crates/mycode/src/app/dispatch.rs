@@ -610,6 +610,7 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             // session the user had already deleted.
             if deleted.is_ok() {
                 state.projects.lock().remove(session_id.as_str());
+                state.agent_runtimes.lock().remove(session_id.as_str());
             }
             BridgeReply::SessionDeleted(deleted)
         }

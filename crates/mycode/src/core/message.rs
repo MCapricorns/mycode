@@ -303,7 +303,8 @@ pub fn tool_label(name: &str, target: &str) -> String {
 }
 
 /// The distinct tools a code-mode script calls, in first-call order
-/// (`read · grep · edit`), read from its `call("name", …)` literals.
+/// (`read · grep · edit`), read from its `call("name", …)` or
+/// `callAsync("name", …)` literals.
 ///
 /// A script whose calls are all computed (no literal name) falls back to
 /// its first meaningful line, so the row still names something the script
@@ -323,6 +324,7 @@ fn script_call_summary(script: &str) -> String {
         if embedded {
             continue;
         }
+        let after = after.strip_prefix("Async").unwrap_or(after);
         let Some(after) = after.trim_start().strip_prefix('(') else {
             continue;
         };
@@ -697,6 +699,8 @@ mod tests {
         // row target comes from the script's `call` literals: distinct
         // names in first-call order.
         let args = json!({"script": "let a = call(\"read\", { path: \"x\" });\ncall(\"grep\", {});\ncall(\"read\", {});\ncomplete(a)"});
+        assert_eq!(tool_target("run_code", &args), "read · grep");
+        let args = json!({"script": "await Promise.all([callAsync(\"read\", {}), callAsync(\"grep\", {})]);"});
         assert_eq!(tool_target("run_code", &args), "read · grep");
         // A script with no literal call still names its first line, and a
         // longer name ending in `call` is not a host call.

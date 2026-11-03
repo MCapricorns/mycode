@@ -6,7 +6,7 @@
 //! returned row for the caller to store; a leading `Bearer ` is stripped so
 //! the user can paste either form.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -68,11 +68,15 @@ fn parse_document(text: &str, lift_secrets: bool) -> Result<Vec<ImportedMcpServe
     let value = parse_lenient(text).ok_or_else(|| "paste is not valid JSON".to_owned())?;
     let mut imported = Vec::new();
     collect_servers(&value, &mut imported, lift_secrets)?;
-    if imported.is_empty() {
+    if imported.is_empty() && lift_secrets {
         return Err("no MCP servers found in the pasted JSON".to_owned());
     }
     if imported.len() > crate::config::settings::MAX_MCP_SERVERS {
         return Err("too many MCP servers in the pasted JSON".to_owned());
+    }
+    let mut ids = BTreeSet::new();
+    if imported.iter().any(|entry| !ids.insert(&entry.server.id)) {
+        return Err("MCP server names must be unique after normalization".to_owned());
     }
     Ok(imported)
 }
@@ -391,6 +395,28 @@ fn sanitize_mcp_id(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{parse_mcp_import, parse_mcp_library};
+
+    #[test]
+    fn library_accepts_removed_servers_but_import_requires_entries() {
+        assert!(
+            parse_mcp_library(r#"{"mcpServers":{}}"#)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(parse_mcp_import(r#"{"mcpServers":{}}"#).is_err());
+    }
+
+    #[test]
+    fn normalized_server_id_collisions_are_rejected() {
+        let text = r#"{"mcpServers":{"Git Hub":{"command":"one"},"git-hub":{"command":"two"}}}"#;
+        for parse in [parse_mcp_import, parse_mcp_library] {
+            assert!(
+                parse(text)
+                    .unwrap_err()
+                    .contains("unique after normalization")
+            );
+        }
+    }
 
     #[test]
     fn magpie_loopback_hub_is_accepted_by_library_and_import() {

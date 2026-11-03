@@ -29,6 +29,7 @@ use crate::frontend::view_model::{FrontendAction, MainView, MentionKind, Workspa
 
 mod events;
 mod git;
+mod library;
 mod projects;
 mod replies;
 mod sends;
@@ -121,6 +122,8 @@ pub(crate) enum ReplyScope {
     /// A proxy probe belongs to the value that was tested, even if another
     /// probe starts after editing the field while this request is in flight.
     ProxyTest(String),
+    /// A tool probe belongs to the exact Library server configuration read.
+    McpProbe(Box<crate::config::McpServerSettings>),
     Open(String),
     /// A create keeps its original project and may open only while current.
     Create {
@@ -241,6 +244,10 @@ impl ReplyScope {
                 .settings
                 .as_ref()
                 .is_some_and(|settings| &settings.proxy == proxy),
+            Self::McpProbe(server) => vm
+                .mcp_library
+                .iter()
+                .any(|current| current == server.as_ref()),
             Self::Session { session, branch } => vm.active.as_ref().is_some_and(|active| {
                 &active.session_id == session
                     && branch
@@ -288,6 +295,8 @@ enum DriverMsg {
     RepairToastTick,
     /// A day of runtime passed; re-check for an update when allowed.
     UpdateRecheckTick,
+    /// Magpie replaced a Library file or edited a skill/role on disk.
+    LibraryChanged,
     /// The watched tree changed and its burst of events settled.
     GitTreeChanged { generation: u64 },
     /// A `git status` read finished.
@@ -445,6 +454,8 @@ pub struct FrontendDriver {
     held_interrupts: BTreeMap<String, HeldInterrupt>,
     /// The open folder's git status and opened diff; see [`git`].
     git: git::GitWatch,
+    /// Watches Library roots, including replacement of their directories.
+    library_watcher: Option<notify::RecommendedWatcher>,
     /// Free-text answers to the pending ask card, aligned with its rows.
     pub ask_texts: Vec<String>,
     /// The question the ask card is showing; answers step one at a time.
@@ -524,6 +535,7 @@ impl FrontendDriver {
             failed_send_drafts: BTreeMap::new(),
             held_interrupts: BTreeMap::new(),
             git: git::GitWatch::default(),
+            library_watcher: None,
             ask_texts: Vec::new(),
             ask_index: 0,
         };
@@ -543,6 +555,7 @@ impl FrontendDriver {
 
     /// Initial loads every frontend issues at startup.
     pub fn bootstrap(&mut self, effects: &mut Vec<Effect>) {
+        self.watch_library();
         self.dispatch(BridgeCommand::ListSessions);
         self.reload_settings();
         self.dispatch(BridgeCommand::LoadUiState);
@@ -779,6 +792,13 @@ impl FrontendDriver {
                     // A one-shot timer fired: re-arm so the daily cadence
                     // continues for the process's whole uptime.
                     self.spawn_update_recheck();
+                }
+                DriverMsg::LibraryChanged => {
+                    self.watch_library();
+                    self.reload_settings();
+                    self.reload_mcp_library(out);
+                    self.refresh_skills(out);
+                    self.invalidate_agent_roles();
                 }
                 DriverMsg::GitTreeChanged { generation } => self.on_git_tree_changed(generation),
                 DriverMsg::GitStatusRead {
@@ -1046,6 +1066,7 @@ impl FrontendDriver {
 
     /// Stops the core thread and waits for it to finish.
     pub fn shutdown(&mut self) {
+        self.library_watcher = None;
         self.bridge.shutdown();
     }
 }

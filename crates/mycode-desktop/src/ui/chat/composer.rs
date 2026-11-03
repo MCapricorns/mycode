@@ -211,7 +211,7 @@ pub(super) fn render_composer(
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(t("Ctrl+Enter cancels", "Ctrl+Enter 取消")),
+                    .child(format!("{} {}", interrupt_shortcut(), t("cancels", "取消"))),
             )
             .into_any_element()
     });
@@ -415,7 +415,7 @@ fn composer_round_button(
 }
 
 /// The steer arrow shown next to the stop square while a turn runs: click
-/// hands the draft to the running turn, same as Enter and Ctrl+G.
+/// hands the draft to the running turn, same as the steer shortcut.
 fn composer_steer_button(cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     div()
@@ -436,9 +436,17 @@ fn composer_steer_button(cx: &Context<Workspace>) -> impl IntoElement {
             workspace.on_steer_send(cx);
         }))
         .tooltip(|window, cx| {
-            Tooltip::new(t(
-                "Steer this turn without stopping it (Ctrl+G)",
-                "引导本轮任务，不打断（Ctrl+G）",
+            let keys = if cfg!(target_os = "macos") {
+                "⌘G"
+            } else {
+                "Ctrl+G"
+            };
+            Tooltip::new(format!(
+                "{} ({keys})",
+                t(
+                    "Steer this turn without stopping it",
+                    "引导本轮任务，不打断"
+                )
             ))
             .build(window, cx)
         })
@@ -555,7 +563,7 @@ fn render_send_choice(cx: &Context<Workspace>) -> impl IntoElement {
                 "Stops this turn and every subagent, then sends at once.",
                 "停止本轮和所有子代理，立即发送这条。",
             ),
-            "Ctrl+Enter",
+            interrupt_shortcut(),
             cx,
             |workspace, cx| workspace.on_send_choice_interrupt(cx),
         ))
@@ -567,6 +575,14 @@ fn render_send_choice(cx: &Context<Workspace>) -> impl IntoElement {
                 .text_color(theme.muted_foreground)
                 .child(t("Esc closes and keeps the draft.", "Esc 关闭，草稿保留。")),
         )
+}
+
+fn interrupt_shortcut() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌘Enter"
+    } else {
+        "Ctrl+Enter"
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

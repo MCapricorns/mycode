@@ -97,6 +97,26 @@ pub trait AgentHost: Send + Sync + 'static {
             ))
         })
     }
+    /// Runs with the write capability used to admit this run and reserve its scope.
+    ///
+    /// Hosts that reload roles at dispatch must compare `writer` with the exact
+    /// role configuration used to launch the child, before allocating a worktree
+    /// or exposing tools. A capability change must fail instead of silently
+    /// invalidating the runtime's ownership and workflow acceptance checks.
+    fn run_subagent_validated<'a>(
+        &'a self,
+        request: SubagentRequest,
+        progress: &'a ToolStream,
+        cancel: &'a tokio_util::sync::CancellationToken,
+        call_id: &'a str,
+        _writer: bool,
+        retained: Option<&'a std::path::Path>,
+    ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + 'a>> {
+        match retained {
+            Some(path) => self.run_subagent_reopened(request, progress, cancel, call_id, path),
+            None => self.run_subagent(request, progress, cancel, call_id),
+        }
+    }
     /// Queue steering using the host's real child identity.
     fn steer_subagent(&self, _call_id: &str, _message: &str) -> Result<(), ToolError> {
         Err(ToolError::Execution(

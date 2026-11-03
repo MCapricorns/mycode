@@ -27,6 +27,20 @@ const FIELD_ALIASES: &[(&str, &str)] = &[
     ("end", "end_line"),
     ("to_line", "end_line"),
     ("distance", "max_distance"),
+    // The generic normalizer preserves payload key spelling. Repair these
+    // editor-owned names before inferring a variant or dropping annotations.
+    ("startLine", "start_line"),
+    ("endLine", "end_line"),
+    ("expectedText", "expected_text"),
+    ("expectedHash", "expected_hash"),
+    ("maxDistance", "max_distance"),
+    ("replaceAll", "replace_all"),
+    ("oldString", "pattern"),
+    ("newString", "replacement"),
+    ("oldStr", "pattern"),
+    ("newStr", "replacement"),
+    ("fromLine", "start_line"),
+    ("toLine", "end_line"),
 ];
 
 /// Fields that belong to one variant. Anything else on the operation is
@@ -316,6 +330,21 @@ mod tests {
         let normalized = normalize_edit_args(args.clone());
         assert_eq!(normalized, args);
         assert!(validate_args_with_schema(&schema(), &normalized).is_err());
+    }
+
+    #[test]
+    fn camel_case_operation_fields_survive_variant_preparation() {
+        let normalized = normalize_edit_args(json!({
+            "path": "a.rs",
+            "operations": [
+                { "type": "line_range", "startLine": "1", "endLine": "2", "expectedText": "before", "replacement": "after" },
+                { "oldString": "before", "newString": "after", "replaceAll": true }
+            ]
+        }));
+        assert_eq!(normalized["operations"][0]["expected_text"], "before");
+        assert_eq!(normalized["operations"][0]["start_line"], 1);
+        assert_eq!(normalized["operations"][1]["occurrence"], "all");
+        assert_valid(&normalized);
     }
 
     #[test]

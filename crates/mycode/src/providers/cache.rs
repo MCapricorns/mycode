@@ -268,7 +268,7 @@ fn mark_stable_ends(
     if budget == 0 {
         return;
     }
-    let eligible: Vec<usize> = messages
+    let mut eligible = messages
         .iter()
         .enumerate()
         .filter(|(_, message)| {
@@ -281,21 +281,15 @@ fn mark_stable_ends(
             }
             content_is_markable(message.get("content"))
         })
-        .map(|(index, _)| index)
-        .collect();
-    let Some(&head) = eligible.first() else {
+        .map(|(index, _)| index);
+    let Some(head) = eligible.next() else {
         return;
     };
-    let mut chosen = vec![head];
-    if budget >= 2
-        && let Some(&tail) = eligible.last()
-        && tail != head
-    {
-        chosen.push(tail);
+    let tail = (budget >= 2).then(|| eligible.next_back()).flatten();
+    if let Some(tail) = tail {
+        mark_content(messages[tail].get_mut("content"));
     }
-    for index in chosen.into_iter().rev() {
-        mark_content(messages[index].get_mut("content"));
-    }
+    mark_content(messages[head].get_mut("content"));
 }
 
 /// True when this message replays provider reasoning that the next request

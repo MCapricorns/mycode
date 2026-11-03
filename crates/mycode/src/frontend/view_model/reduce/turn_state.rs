@@ -85,6 +85,9 @@ pub(super) fn end_turn(state: &mut WorkspaceState) {
     state.ask_answers.clear();
     state.sending = false;
     state.auto_compacting = false;
+    if let Some(active) = state.active.as_mut() {
+        active.running = false;
+    }
 }
 
 pub(super) fn push_entry_once(

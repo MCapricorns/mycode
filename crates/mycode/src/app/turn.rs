@@ -7,7 +7,6 @@ mod control;
 mod prompt;
 mod pump;
 
-use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,7 +26,7 @@ use crate::app::tool_hosts::BridgeAskChannel;
 pub(crate) use self::compact::manual_compact;
 use self::compact::{DeferredSummaries, publish_visible_summary};
 use self::control::TurnControl;
-use self::prompt::session_system_prompt;
+use self::prompt::SessionPrompt;
 pub(crate) use self::prompt::{
     MCP_CALL_GUIDANCE, push_scratch_note, push_workspace_path_guidance, push_workspace_skills,
     split_scratch_root, workspace_extra_roots,
@@ -249,19 +248,6 @@ async fn run_chat_turn_on(
         branch.clone(),
         expected_head,
     );
-    // MCP starts here without waiting for any handshake: `resolve` reads
-    // secrets and merges the server sources (blocking pool, a few ms),
-    // `spawn_slots` starts one background handshake per server, and each
-    // server's tools are registered as it becomes ready. A server that fails
-    // is skipped and retried after its own per-server cooldown.
-    let mcp_connect = control
-        .unless_cancelled(crate::app::mcp_tools::connect_mcp_tools(
-            home,
-            &settings,
-            &state.mcp_pool,
-            Some(&cwd),
-        ))
-        .await?;
     // Keep role discovery and workspace extra-root reads off the single
     // core runtime thread.
     let (role_catalog, extra_roots) = {
@@ -355,101 +341,30 @@ async fn run_chat_turn_on(
         );
         registry.expose_only(&exposed);
     }
-    // Progressive MCP: the meta tools exist from cycle 1, ready servers are
-    // written catalog-first then registry, and the rest arrive through the
-    // background drain. The drain task is aborted at the end of the turn —
-    // that stops this turn's listener only; the pool keeps its handshakes.
-    let mut _mcp_drain: Option<AbortTask> = None;
-    let mcp_catalog = if mcp_connect.is_empty() {
-        None
-    } else {
-        // Snapshot before the meta tools register, so the name checks below
-        // never see `search_tool` / `use_tool` / `tool_search` themselves.
-        let native: BTreeSet<String> = registry
-            .names()
-            .into_iter()
-            .map(|name| name.to_ascii_lowercase())
-            .collect();
-        let catalog = crate::app::mcp_tools::McpCatalog::new(
-            mcp_connect.warning.clone(),
-            native,
-            mcp_connect.connecting.clone(),
-        );
-        let index = crate::app::tool_search::ToolSearchIndex::new();
-        crate::app::mcp_tools::register_meta_tools(&registry, &catalog, Arc::clone(&index));
-        // Failures known at turn start are visible to a `use_tool` miss, and
-        // are seeded so the drain does not report them twice.
-        let mut seen_failed = HashSet::new();
-        for (id, reason) in &mcp_connect.failed {
-            catalog.mark_failed(
-                Arc::new(crate::app::mcp_tools::McpServerInfo::new(id, None)),
-                reason,
-            );
-            seen_failed.insert(id.clone());
-        }
-        let mut seen = HashSet::new();
-        for (server, tools) in mcp_connect.ready {
-            seen.insert(server.id().to_owned());
-            crate::app::mcp_tools::register_ready_server(
-                &registry, &catalog, &index, server, tools,
-            );
-        }
-        let drain_registry = Arc::clone(&registry);
-        let drain_catalog = Arc::clone(&catalog);
-        let failed_catalog = Arc::clone(&catalog);
-        _mcp_drain = Some(AbortTask(tokio::spawn(
-            crate::app::mcp_tools::drain_mcp_ready(
-                Arc::clone(&state.mcp_pool),
-                seen,
-                seen_failed,
-                Some(control.cancel.clone()),
-                move |server, tools| {
-                    crate::app::mcp_tools::register_ready_server(
-                        &drain_registry,
-                        &drain_catalog,
-                        &index,
-                        server,
-                        tools,
-                    );
-                },
-                // A server that fails mid-turn stops reading as "connecting";
-                // the next `use_tool` miss names the real failure and retry.
-                move |server, reason| failed_catalog.mark_failed(server, reason),
-            ),
-        )));
-        Some(catalog)
-    };
-
-    // Owned for the compaction hook and the cancel registration.
+    // Reconcile the live Library between requests; handshakes remain
+    // progressive, and an initially empty catalog can gain servers mid-turn.
+    let mcp_refresh = crate::app::mcp_tools::McpRefresh::new(
+        home.clone(),
+        Arc::clone(&state.mcp_pool),
+        Arc::clone(&registry),
+        control.cancel.clone(),
+        true,
+    );
+    let mcp_note = control.unless_cancelled(mcp_refresh.refresh()).await?;
     let session_id = session_id.to_owned();
-
     let context_window = model_context_window(state, &provider, model);
     let read_roots = crate::config::skill_read_roots(Some(home.root()));
-    let directive = crate::app::subagent::delegation_directive(&role_catalog, &settings.subagents);
-    let mcp_note = mcp_catalog
-        .as_ref()
-        .map(|catalog| catalog.prompt_note())
-        .filter(|note| !note.trim().is_empty());
-    let system_prompt = {
-        let home = home.clone();
-        let cwd = cwd.clone();
-        let registry = Arc::clone(&registry);
-        let extra_roots = extra_roots.clone();
-        let skill_settings = settings.skills.clone();
-        tokio::task::spawn_blocking(move || {
-            session_system_prompt(
-                &home,
-                &cwd,
-                &registry,
-                mcp_note.as_deref(),
-                &extra_roots,
-                &directive,
-                &skill_settings,
-            )
-        })
-        .await
-        .map_err(|error| format!("system prompt task: {error}"))?
+    let prompt_refresh = SessionPrompt {
+        home: home.clone(),
+        cwd: cwd.clone(),
+        registry: Arc::clone(&registry),
+        extra_roots: extra_roots.clone(),
+        subagents: settings.subagents.clone(),
+        skills: settings.skills.clone(),
     };
+    let system_prompt = control
+        .unless_cancelled(prompt_refresh.render(mcp_note))
+        .await??;
     let overhead_tokens = crate::app::compaction::estimate_prefix_tokens(
         std::slice::from_ref(&system_prompt),
         &registry.specs(),
@@ -561,9 +476,17 @@ async fn run_chat_turn_on(
         let before_request = compact_request(crate::app::compaction::CompactMode::Auto);
         let on_overflow = compact_request(crate::app::compaction::CompactMode::Overflow);
         HookRunner::default()
-            .with_before_request(move |request| {
-                let compacted = before_request(request);
-                async move { compacted.await.0 }
+            .with_before_request(move |mut request| {
+                let before_request = before_request.clone();
+                let prompt_refresh = prompt_refresh.clone();
+                let mcp_refresh = Arc::clone(&mcp_refresh);
+                async move {
+                    let note = mcp_refresh.refresh().await;
+                    if let Ok(prompt) = prompt_refresh.render(note).await {
+                        request.system_prompt = Arc::from([prompt]);
+                    }
+                    before_request(request).await.0
+                }
             })
             .with_context_overflow(move |request| {
                 let compacted = on_overflow(request);

@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 
 #[test]
 fn parent_dispatch_names_enabled_builtin_roles_and_runtime_capabilities() {
-    let text = super::delegation_directive(&builtin_roles(), &SubagentSettings::default());
+    let text = super::delegation_directive(&builtin_roles(), &SubagentSettings::default(), true);
     assert!(text.contains("`scout`"));
     assert!(text.contains("`artisan`"));
     assert!(text.contains("stands on its own"));
@@ -54,25 +54,25 @@ fn parent_dispatch_names_enabled_builtin_roles_and_runtime_capabilities() {
 fn parent_dispatch_never_names_a_role_switched_off_in_settings() {
     let mut settings = SubagentSettings::default();
     settings.role_mut("artisan").enabled = false;
-    let text = super::delegation_directive(&builtin_roles(), &settings);
+    let text = super::delegation_directive(&builtin_roles(), &settings, true);
     assert!(text.contains("`scout`"), "{text}");
     assert!(!text.contains("artisan"), "{text}");
 
     let mut settings = SubagentSettings::default();
     settings.role_mut("scout").enabled = false;
-    let text = super::delegation_directive(&builtin_roles(), &settings);
+    let text = super::delegation_directive(&builtin_roles(), &settings, true);
     assert!(text.contains("`artisan`"), "{text}");
     assert!(!text.contains("scout"), "{text}");
 
     settings.role_mut("artisan").enabled = false;
-    let remaining = super::delegation_directive(&builtin_roles(), &settings);
+    let remaining = super::delegation_directive(&builtin_roles(), &settings, true);
     assert!(remaining.contains("`sentinel`"));
     assert!(remaining.contains("`skeptic`"));
     assert!(!remaining.contains("name=research"));
     assert!(!remaining.contains("name=migration"));
 
     settings.role_mut("sentinel").enabled = false;
-    let without_sentinel = super::delegation_directive(&builtin_roles(), &settings);
+    let without_sentinel = super::delegation_directive(&builtin_roles(), &settings, true);
     assert!(without_sentinel.contains("`skeptic`"));
     assert!(!without_sentinel.contains("sentinel"));
     assert!(!without_sentinel.contains("agent_workflow"));
@@ -80,7 +80,7 @@ fn parent_dispatch_never_names_a_role_switched_off_in_settings() {
     for name in builtin_roles().names() {
         settings.role_mut(&name).enabled = false;
     }
-    assert!(super::delegation_directive(&builtin_roles(), &settings).is_empty());
+    assert!(super::delegation_directive(&builtin_roles(), &settings, true).is_empty());
 }
 
 #[test]
@@ -522,11 +522,11 @@ fn the_read_only_filter_runs_on_the_drained_tools() {
     );
     let tools = vec![readable, writable];
     assert_eq!(
-        super::filter_mcp_tools(tools.clone(), true).len(),
+        crate::app::mcp_tools::filter_mcp_tools(tools.clone(), true).len(),
         2,
         "a write-capable role keeps every tool"
     );
-    let filtered = super::filter_mcp_tools(tools, false);
+    let filtered = crate::app::mcp_tools::filter_mcp_tools(tools, false);
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].spec().name, "lookup");
 
@@ -630,6 +630,7 @@ fn artisan_gets_the_same_tool_guidance_as_the_parent() {
     let directive = super::delegation_directive(
         &builtin_roles(),
         &crate::config::SubagentSettings::default(),
+        true,
     );
     assert!(
         directive.contains("reuse supplied findings instead of repeating the parent's search"),
@@ -894,14 +895,30 @@ fn a_child_sizes_its_window_from_its_own_model() {
         "parent-model".to_owned(),
     );
     assert_eq!(
-        sized.child_window("scout"),
+        sized.child_window("scout", &settings),
         ("wide-model".to_owned(), 400_000),
         "a routed role compacts against its own model's window"
     );
     assert_eq!(
-        sized.child_window("artisan"),
+        sized.child_window("artisan", &settings),
         ("parent-model".to_owned(), 100_000),
         "an unrouted role runs on the parent turn's model"
     );
-    assert_eq!(host().child_window("scout"), (String::new(), 0));
+    assert_eq!(host().child_window("scout", &settings), (String::new(), 0));
+}
+
+#[test]
+fn a_truncated_child_report_is_not_accepted_as_success() {
+    let messages = vec![assistant_msg(
+        "partial findings",
+        crate::core::StopReason::Length,
+    )];
+    let error = super::subagent_answer(
+        Ok(crate::core::TurnOutcome::Completed),
+        &messages,
+        "sentinel",
+    )
+    .expect_err("an output limit does not complete the brief");
+    assert!(error.to_string().contains("truncated"));
+    assert!(error.to_string().contains("partial findings"));
 }

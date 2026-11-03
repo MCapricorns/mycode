@@ -32,6 +32,9 @@ pub(crate) struct CoreState {
     pub(crate) catalog: Arc<RwLock<Arc<CatalogDocument>>>,
     /// Unix seconds of the last successful gateway read; 0 before the first.
     pub(crate) catalog_fetched_at: Arc<AtomicU64>,
+    /// Only the most recently started gateway refresh may publish its result.
+    /// The lock also keeps generation checks and publication together.
+    catalog_refresh_generation: Mutex<u64>,
     /// Per-session project directories for tool runs.
     pub(crate) projects: Arc<Mutex<HashMap<String, PathBuf>>>,
     /// Live turn and `/compact` tokens by session id; Escape targets these.
@@ -101,6 +104,7 @@ impl CoreState {
             service: SessionService::new(&home),
             catalog: Arc::new(RwLock::new(Arc::new(CatalogDocument::default()))),
             catalog_fetched_at: Arc::new(AtomicU64::new(0)),
+            catalog_refresh_generation: Mutex::new(0),
             home,
             projects: Arc::new(Mutex::new(projects)),
             turn_cancels: Arc::new(Mutex::new(HashMap::new())),
@@ -206,38 +210,59 @@ pub(crate) async fn refresh_catalog(
     events: &crate::app::BridgeEventTx,
     _force: bool,
 ) -> BridgeReply {
+    let generation = {
+        let mut current = state.catalog_refresh_generation.lock();
+        *current = current.wrapping_add(1);
+        *current
+    };
     let read_home = state.home.clone();
-    let settings = match tokio::task::spawn_blocking(move || read_app_settings(&read_home)).await {
-        Ok(Ok(settings)) => settings,
-        Ok(Err(error)) => return BridgeReply::Catalog(Err(render_config_error(&error))),
-        Err(error) => return BridgeReply::Catalog(Err(format!("settings task failed: {error}"))),
-    };
-    crate::app::settings_io::apply_network(&settings);
-    if !settings.magpie.is_active() {
-        // A missing or disabled binding is a real error for a manual
-        // refresh: the Models page toast would otherwise report success
-        // while the list it asked for was just cleared.
-        let message = if settings.magpie.is_default() {
-            "magpie is not connected: install the agent plugin and pick a model in magpie"
-                .to_owned()
-        } else {
-            "magpie is not connected: pick a model in magpie first".to_owned()
-        };
-        if let Ok(mut guard) = state.catalog.write() {
-            *guard = Arc::new(CatalogDocument::default());
+    let loaded = tokio::task::spawn_blocking(move || read_app_settings(&read_home)).await;
+    let gateway = {
+        let current = state.catalog_refresh_generation.lock();
+        if *current != generation {
+            return BridgeReply::Catalog(Ok(catalog_info(state)));
         }
-        state.catalog_fetched_at.store(0, Ordering::Relaxed);
-        let _ = events.send(BridgeEvent::CatalogUpdated {
-            providers: 0,
-            fetched_at: 0,
-        });
-        return BridgeReply::Catalog(Err(message));
-    }
-    let gateway = match crate::app::magpie::Gateway::from_settings(&settings.magpie) {
-        Ok(gateway) => gateway,
-        Err(message) => return BridgeReply::Catalog(Err(message)),
+        let settings = match loaded {
+            Ok(Ok(settings)) => settings,
+            Ok(Err(error)) => return BridgeReply::Catalog(Err(render_config_error(&error))),
+            Err(error) => {
+                return BridgeReply::Catalog(Err(format!("settings task failed: {error}")));
+            }
+        };
+        crate::app::settings_io::apply_network(&settings);
+        if !settings.magpie.is_active() {
+            // A missing or disabled binding is a real error for a manual
+            // refresh: the Models page toast would otherwise report success
+            // while the list it asked for was just cleared.
+            let message = if settings.magpie.is_default() {
+                "magpie is not connected: install the agent plugin and pick a model in magpie"
+                    .to_owned()
+            } else {
+                "magpie is not connected: pick a model in magpie first".to_owned()
+            };
+            if let Ok(mut guard) = state.catalog.write() {
+                *guard = Arc::new(CatalogDocument::default());
+            }
+            state.catalog_fetched_at.store(0, Ordering::Relaxed);
+            let _ = events.send(BridgeEvent::CatalogUpdated {
+                providers: 0,
+                fetched_at: 0,
+            });
+            return BridgeReply::Catalog(Err(message));
+        }
+        match crate::app::magpie::Gateway::from_settings(&settings.magpie) {
+            Ok(gateway) => gateway,
+            Err(message) => return BridgeReply::Catalog(Err(message)),
+        }
     };
-    match gateway.fetch_models().await {
+    let fetched = gateway.fetch_models().await;
+    let current = state.catalog_refresh_generation.lock();
+    if *current != generation {
+        // A slow response (including a failure) from an old binding cannot
+        // replace the new list or return stale models to the frontend.
+        return BridgeReply::Catalog(Ok(catalog_info(state)));
+    }
+    match fetched {
         Ok(fetched) => {
             let document = Arc::new(crate::providers::catalog::magpie::document_from_provider(
                 fetched.provider,
@@ -360,6 +385,134 @@ mod tests {
     use super::startup_update_event;
     use crate::app::BridgeEvent;
     use crate::app::updates::UpdateOffer;
+
+    async fn held_gateway(
+        model: &str,
+    ) -> (
+        String,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("gateway listener");
+        let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let body = format!(r#"{{"data":[{{"id":"{model}"}}]}}"#);
+        let (started, requested) = tokio::sync::oneshot::channel();
+        let (release, ready) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("gateway request");
+            let mut request = Vec::new();
+            while !request.windows(4).any(|chunk| chunk == b"\r\n\r\n") {
+                let mut chunk = [0; 1024];
+                let count = stream.read(&mut chunk).await.expect("HTTP headers");
+                assert!(count > 0 && request.len() < 16 * 1024);
+                request.extend_from_slice(&chunk[..count]);
+            }
+            started.send(()).expect("request observer");
+            ready.await.expect("response release");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("response");
+        });
+        (base_url, requested, release, worker)
+    }
+
+    #[tokio::test]
+    async fn older_gateway_responses_cannot_replace_a_new_binding_or_reconnect_a_disabled_one() {
+        for disabled in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "mycode-catalog-generation-{}-{}",
+                std::process::id(),
+                crate::core::unix_now().as_nanos()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let home = crate::config::HomeLayout::from_root(&root).unwrap();
+            let state = std::sync::Arc::new(super::CoreState::new(home, Vec::new()));
+            let write_binding = |url: Option<&str>| {
+                let mut settings = crate::config::AppSettings::default();
+                if let Some(url) = url {
+                    settings.magpie.enabled = true;
+                    settings.magpie.base_url = url.into();
+                    settings.magpie.api_key = "fixture-key".into();
+                    settings.magpie.model = "selected".into();
+                }
+                std::fs::write(
+                    root.join("settings.json"),
+                    serde_json::to_vec(&settings).unwrap(),
+                )
+                .unwrap();
+            };
+            let (old_url, old_requested, release_old, old_gateway) = held_gateway("old").await;
+            write_binding(Some(&old_url));
+            let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+            let old_refresh = {
+                let state = state.clone();
+                let events = events.clone();
+                tokio::spawn(async move { super::refresh_catalog(&state, &events, true).await })
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(5), old_requested)
+                .await
+                .expect("old request started")
+                .unwrap();
+            let newer = if disabled {
+                write_binding(None);
+                super::refresh_catalog(&state, &events, true).await
+            } else {
+                let (new_url, requested, release, gateway) = held_gateway("new").await;
+                write_binding(Some(&new_url));
+                release.send(()).unwrap();
+                let reply = super::refresh_catalog(&state, &events, true).await;
+                requested.await.unwrap();
+                gateway.await.unwrap();
+                reply
+            };
+            assert_eq!(
+                matches!(newer, crate::app::BridgeReply::Catalog(Err(_))),
+                disabled
+            );
+            release_old.send(()).unwrap();
+            let crate::app::BridgeReply::Catalog(Ok(stale_reply)) = old_refresh.await.unwrap()
+            else {
+                panic!("superseded refresh should return the current catalog");
+            };
+            old_gateway.await.unwrap();
+            assert_eq!(stale_reply.document, state.models());
+            if disabled {
+                assert!(state.models().providers.is_empty());
+                assert_eq!(stale_reply.fetched_at, 0);
+            } else {
+                assert_eq!(state.models().providers[0].models[0].id, "new");
+            }
+            assert!(matches!(
+                received.try_recv(),
+                Ok(BridgeEvent::CatalogUpdated { .. })
+            ));
+            assert!(
+                received.try_recv().is_err(),
+                "stale refresh must not publish an event"
+            );
+            std::sync::Arc::try_unwrap(state)
+                .unwrap_or_else(|_| panic!("refresh tasks released state"))
+                .service
+                .shutdown()
+                .await;
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[test]
     fn startup_check_failure_is_an_event_and_current_is_quiet() {

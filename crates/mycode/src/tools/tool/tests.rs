@@ -4,7 +4,11 @@ use super::normalize_tool_args;
 
 #[test]
 fn an_echoed_parameter_object_is_unwrapped() {
-    let args = normalize_tool_args(json!({"mode": {"mode": "program"}}));
+    let mut args = normalize_tool_args(json!({"mode": {"mode": "program"}}));
+    super::repair_args(
+        &mut args,
+        &json!({"properties": {"mode": {"type": "string"}}}),
+    );
     assert_eq!(args, json!({"mode": "program"}));
 }
 
@@ -252,9 +256,17 @@ fn a_stringified_argument_object_is_unwrapped() {
 
 #[test]
 fn stringified_arguments_fold_camel_case_before_alias_repair() {
-    let args = normalize_tool_args(json!(
+    let mut args = normalize_tool_args(json!(
         r#"{"filePath":"a.rs","oldString":"a","newString":"b","operations":[{"maxDistance":2}]}"#
     ));
+    super::repair_args(
+        &mut args,
+        &json!({"properties": {
+            "path": {"type": "string"}, "old_string": {"type": "string"},
+            "new_string": {"type": "string"}, "operations": {"type": "array",
+            "items": {"properties": {"max_distance": {"type": "integer"}}}}
+        }}),
+    );
     assert_eq!(
         args,
         json!({
@@ -270,7 +282,11 @@ fn explicit_snake_case_values_win_regardless_of_object_order() {
         r#"{"oldString":"alias","old_string":"explicit"}"#,
         r#"{"old_string":"explicit","oldString":"alias"}"#,
     ] {
-        let args = normalize_tool_args(serde_json::from_str(text).unwrap());
+        let mut args = normalize_tool_args(serde_json::from_str(text).unwrap());
+        super::repair_args(
+            &mut args,
+            &json!({"properties": {"old_string": {"type": "string"}}}),
+        );
         assert_eq!(args["old_string"], "explicit");
         assert_eq!(args["oldString"], "alias");
     }
@@ -432,4 +448,21 @@ fn a_tagged_union_failure_lists_the_allowed_tags() {
         super::validate_args_with_schema(&schema, &args).expect_err("an unknown tag must fail");
     let text = err.to_string();
     assert!(text.contains("expected one of: literal, regex"), "{text}");
+}
+
+#[test]
+fn argument_repair_preserves_declared_names_and_opaque_payloads() {
+    let schema = json!({"properties": {
+        "camelCase": {"type": "string"}, "cmd": {"type": "string"},
+        "timeout": {"type": "integer"}, "arguments": {},
+        "env": {"type": "object", "additionalProperties": {"type": "string"}},
+        "payload": {"type": "object", "properties": {"payload": {"type": "string"}}}
+    }});
+    let original = json!({"camelCase": "value", "cmd": "run", "timeout": 5,
+        "arguments": {"camelCase": 1, "camel_case": 2, "oldString": "keep"},
+        "env": {"PATH": "/bin", "MY_API_KEY": "opaque"},
+        "payload": {"payload": "keep the wrapper"}});
+    let mut repaired = normalize_tool_args(original.clone());
+    super::repair_args(&mut repaired, &schema);
+    assert_eq!(repaired, original);
 }

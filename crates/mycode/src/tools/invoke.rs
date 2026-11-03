@@ -39,6 +39,7 @@ pub async fn prepare_tool_ctx(
         .with_extra_roots(extra_roots.to_vec())
         .with_read_roots(read_roots.to_vec());
     let mut args = crate::tools::tool::normalize_tool_args(args.clone());
+    crate::tools::tool::repair_args(&mut args, &tool.spec().params_schema);
     if let Some(access) = tool.search_access() {
         let path = args.get("path").and_then(Value::as_str).map(str::to_owned);
         let (root, path) = anchored_search(cwd, extra_roots, path.as_deref());
@@ -51,7 +52,6 @@ pub async fn prepare_tool_ctx(
     } else if let Some(access) = tool.file_access() {
         // Bind the same path that execute_dyn will use after schema-aware
         // alias repair (for example `file` or `target_file` -> `path`).
-        crate::tools::tool::repair_args(&mut args, &tool.spec().params_schema);
         let path = args
             .get("path")
             .and_then(Value::as_str)

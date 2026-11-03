@@ -17,6 +17,7 @@ pub(super) struct RunOptions {
     pub workflow_id: Option<String>,
     pub node_id: Option<String>,
     pub previous_run_id: Option<String>,
+    pub expected_writer: Option<bool>,
 }
 pub(super) struct RunRecord {
     pub snapshot: AgentRunSnapshot,
@@ -152,6 +153,14 @@ impl AgentRuntime {
             return Err(error("run prompt must contain 1-16000 characters"));
         }
         let writer = host.validate_role(&request.agent).await?;
+        if options
+            .expected_writer
+            .is_some_and(|expected| expected != writer)
+        {
+            return Err(error(
+                "role write capability changed after workflow validation; restart the workflow",
+            ));
+        }
         let reopen_path = if let Some(source_id) = &options.previous_run_id {
             {
                 let state = self.state.lock();
@@ -312,12 +321,14 @@ impl AgentRuntime {
         let task = tokio::spawn(async move {
             let (sink, mut rx) = ToolStream::channel();
             let activity = Arc::new(super::AgentActivity::default());
-            let host_work = match reopen_path.as_deref() {
-                Some(path) => {
-                    host.run_subagent_reopened(request, &sink, &child_cancel, &call_id, path)
-                }
-                None => host.run_subagent(request, &sink, &child_cancel, &call_id),
-            };
+            let host_work = host.run_subagent_validated(
+                request,
+                &sink,
+                &child_cancel,
+                &call_id,
+                writer,
+                reopen_path.as_deref(),
+            );
             let work = std::panic::AssertUnwindSafe(activity.scope(host_work));
             let work = work.catch_unwind();
             tokio::pin!(work);

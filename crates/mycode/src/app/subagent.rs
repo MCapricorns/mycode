@@ -59,6 +59,7 @@ pub(crate) struct BridgeAgentHost {
     home: HomeLayout,
     cwd: PathBuf,
     settings: AppSettings,
+    redaction_keys: parking_lot::Mutex<Vec<String>>,
     session_id: String,
     /// Child cancel tokens keyed by `session_id:call_id`.
     cancels: Arc<parking_lot::Mutex<std::collections::HashMap<String, Arc<CancellationToken>>>>,
@@ -97,6 +98,12 @@ impl BridgeAgentHost {
             home,
             cwd,
             settings: settings.clone(),
+            redaction_keys: parking_lot::Mutex::new(
+                (!settings.magpie.api_key.is_empty())
+                    .then(|| settings.magpie.api_key.clone())
+                    .into_iter()
+                    .collect(),
+            ),
             session_id,
             cancels,
             mcp_pool,
@@ -125,11 +132,11 @@ impl BridgeAgentHost {
     /// The model `role` runs on and its context window: the role's route
     /// when settings give one, otherwise the parent turn's model. `0` (the
     /// compaction fallback) when nothing is known.
-    fn child_window(&self, role: &str) -> (String, u64) {
+    fn child_window(&self, role: &str, settings: &AppSettings) -> (String, u64) {
         let Some(context) = &self.context else {
             return (String::new(), 0);
         };
-        let routed = self.settings.subagents.role(role).and_then(|entry| {
+        let routed = settings.subagents.role(role).and_then(|entry| {
             let (Some(provider_id), Some(model)) =
                 (entry.provider.as_deref(), entry.model.as_deref())
             else {
@@ -139,7 +146,7 @@ impl BridgeAgentHost {
                 return None;
             }
             let catalog = context.catalog.read().ok()?;
-            crate::app::magpie::provider_row(&self.settings.magpie, &catalog)
+            crate::app::magpie::provider_row(&settings.magpie, &catalog)
                 .map(|provider| (provider, model))
         });
         let (provider, model) = match routed {
@@ -232,7 +239,11 @@ fn agent_progress(role: &str, phase: &str, detail: &str) -> String {
 /// decision boundary: proactively dispatch independent work within the user
 /// request, while keeping small tasks local and writer scopes disjoint.
 #[must_use]
-pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSettings) -> String {
+pub(crate) fn delegation_directive(
+    catalog: &RoleCatalog,
+    settings: &SubagentSettings,
+    workflow_available: bool,
+) -> String {
     let enabled: Vec<&SubagentRole> = catalog
         .roles
         .iter()
@@ -264,7 +275,7 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
     if has("skeptic") {
         dispatch.push("`skeptic` challenges one explicit claim. Supply the claim, relevant evidence and a falsifiable done condition; it is read-only and must not repeat a general review.");
     }
-    let workflow_ready = workflow_enabled(catalog, settings);
+    let workflow_ready = workflow_available && workflow_enabled(catalog, settings);
     dispatch.push(if workflow_ready {
         "Calls to agent are serialized by the dispatcher, and call() inside run_code is synchronous. Multiple calls in one script do not run in parallel. Use a supported agent_workflow for its independent scheduled nodes; do not invent Promise or background dispatch APIs. Complete prerequisites before dependent calls."
     } else {
@@ -372,7 +383,12 @@ impl crate::tools::builtin::AgentHost for BridgeAgentHost {
         &'a self,
         role: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, crate::tools::ToolError>> + Send + 'a>> {
-        Box::pin(async move { self.enabled_role(role).await.map(|r| r.is_write_capable()) })
+        Box::pin(async move {
+            let settings = self.current_settings().await?;
+            self.enabled_role(role, &settings)
+                .await
+                .map(|r| r.is_write_capable())
+        })
     }
 
     fn validate_reopen<'a>(
@@ -400,7 +416,26 @@ impl crate::tools::builtin::AgentHost for BridgeAgentHost {
         call_id: &'a str,
         path: &'a Path,
     ) -> Pin<Box<dyn Future<Output = Result<String, crate::tools::ToolError>> + Send + 'a>> {
-        Box::pin(self.run_subagent_inner(request, progress, cancel, call_id, Some(path)))
+        Box::pin(self.run_subagent_inner(request, progress, cancel, call_id, Some(path), None))
+    }
+
+    fn run_subagent_validated<'a>(
+        &'a self,
+        request: crate::tools::builtin::SubagentRequest,
+        progress: &'a crate::tools::ToolStream,
+        cancel: &'a CancellationToken,
+        call_id: &'a str,
+        writer: bool,
+        retained: Option<&'a Path>,
+    ) -> Pin<Box<dyn Future<Output = Result<String, crate::tools::ToolError>> + Send + 'a>> {
+        Box::pin(self.run_subagent_inner(
+            request,
+            progress,
+            cancel,
+            call_id,
+            retained,
+            Some(writer),
+        ))
     }
 
     fn steer_subagent(&self, call_id: &str, message: &str) -> Result<(), crate::tools::ToolError> {
@@ -415,13 +450,13 @@ impl crate::tools::builtin::AgentHost for BridgeAgentHost {
     }
 
     fn redact_text(&self, text: &str) -> String {
-        let key = &self.settings.magpie.api_key;
-        if key.is_empty() {
-            text.to_owned()
-        } else {
-            text.replace(key, "[REDACTED]")
+        let mut text = text.to_owned();
+        for key in self.redaction_keys.lock().iter() {
+            text = text.replace(key, "[REDACTED]");
         }
+        text
     }
+
     fn run_subagent<'a>(
         &'a self,
         request: crate::tools::builtin::SubagentRequest,
@@ -429,7 +464,7 @@ impl crate::tools::builtin::AgentHost for BridgeAgentHost {
         cancel: &'a CancellationToken,
         call_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<String, crate::tools::ToolError>> + Send + 'a>> {
-        Box::pin(self.run_subagent_inner(request, progress, cancel, call_id, None))
+        Box::pin(self.run_subagent_inner(request, progress, cancel, call_id, None, None))
     }
 }
 
@@ -441,9 +476,20 @@ impl BridgeAgentHost {
         cancel: &CancellationToken,
         call_id: &str,
         retained: Option<&Path>,
+        admitted_writer: Option<bool>,
     ) -> Result<String, crate::tools::ToolError> {
         let fail = |message: String| crate::tools::ToolError::Execution(message);
-        let role = self.enabled_role(&request.agent).await?;
+        let settings = self.current_settings().await?;
+        let role = self.enabled_role(&request.agent, &settings).await?;
+        // Admission reserves ownership using this flag. Use the same freshly
+        // loaded role below, so later file edits cannot promote a reader into
+        // a writer after it bypassed writer-scope coordination.
+        if admitted_writer.is_some_and(|writer| writer != role.is_write_capable()) {
+            return Err(fail(format!(
+                "role '{}' write capability changed after admission; retry the delegation with its current configuration",
+                role.name,
+            )));
+        }
         let steer = Arc::new(crate::agent::SteerInbox::new());
         self.steers
             .lock()
@@ -501,6 +547,7 @@ impl BridgeAgentHost {
             .drive_subagent(
                 &request,
                 &role,
+                &settings,
                 progress,
                 &child_cancel,
                 worktree.as_ref().map(|lease| lease.path.as_path()),
@@ -523,7 +570,36 @@ impl BridgeAgentHost {
 }
 
 impl BridgeAgentHost {
-    async fn enabled_role(&self, name: &str) -> Result<SubagentRole, crate::tools::ToolError> {
+    /// New runs see settings saved since their parent turn began. A missing
+    /// document retains the host's explicit bootstrap settings.
+    async fn current_settings(&self) -> Result<AppSettings, crate::tools::ToolError> {
+        let home = self.home.clone();
+        let fallback = self.settings.clone();
+        let settings = tokio::task::spawn_blocking(move || {
+            if home.root().join(crate::config::SETTINGS_PATH).exists() {
+                crate::config::read_app_settings(&home)
+            } else {
+                Ok(fallback)
+            }
+        })
+        .await
+        .map_err(|error| crate::tools::ToolError::Execution(format!("settings task: {error}")))?
+        .map_err(|error| crate::tools::ToolError::Execution(format!("settings read: {error}")))?;
+        let key = &settings.magpie.api_key;
+        let mut keys = self.redaction_keys.lock();
+        if !key.is_empty() && !keys.contains(key) {
+            keys.push(key.clone());
+            // Redact a longer rotated key before a key that is its prefix.
+            keys.sort_by_key(|key| std::cmp::Reverse(key.len()));
+        }
+        Ok(settings)
+    }
+
+    async fn enabled_role(
+        &self,
+        name: &str,
+        settings: &AppSettings,
+    ) -> Result<SubagentRole, crate::tools::ToolError> {
         let home = self.home.clone();
         let cwd = self.cwd.clone();
         let name = name.to_owned();
@@ -538,7 +614,7 @@ impl BridgeAgentHost {
         })
         .await
         .map_err(|e| crate::tools::ToolError::Execution(format!("role discovery task: {e}")))??;
-        if !self.settings.subagents.is_enabled(&role.name) {
+        if !settings.subagents.is_enabled(&role.name) {
             return Err(crate::tools::ToolError::Execution(format!(
                 "role '{}' is disabled in settings",
                 role.name
@@ -553,10 +629,12 @@ impl BridgeAgentHost {
     /// cancelled, when the user stops this subagent, or when the
     /// conversation is deleted; each of those fires `cancel` or
     /// `child_cancel`, which cancels the child token and aborts the task.
+    #[allow(clippy::too_many_arguments)]
     async fn drive_subagent(
         &self,
         request: &crate::tools::builtin::SubagentRequest,
         role: &SubagentRole,
+        settings: &AppSettings,
         progress: &crate::tools::ToolStream,
         child_cancel: &CancellationToken,
         worktree: Option<&Path>,
@@ -565,7 +643,10 @@ impl BridgeAgentHost {
         let fail = |message: String| crate::tools::ToolError::Execution(message);
         let cancelled = || cancelled_subagent(&role.name);
         let run_dir = worktree.map_or_else(|| self.cwd.clone(), Path::to_path_buf);
-        let resolved = self.resolve_route(&role.name).await.map_err(fail)?;
+        let resolved = self
+            .resolve_route(&role.name, settings)
+            .await
+            .map_err(fail)?;
         if child_cancel.is_cancelled() {
             return Err(cancelled());
         }
@@ -573,34 +654,6 @@ impl BridgeAgentHost {
             .map_err(|error| fail(format!("HTTP transport unavailable: {error}")))?;
         let wire = WireProvider::new(resolved, Arc::new(transport));
         let allowed = role.resolve_tools(PARENT_TOOL_NAMES);
-        // Progressive MCP: `connect_mcp_tools` returns as soon as the
-        // handshakes are spawned. A child never waits for them; it registers
-        // whatever is already ready and drains the rest while it runs. The
-        // handshakes belong to the shared pool, so a stopped child only
-        // stops its own drain listener.
-        let mcp_connect = tokio::select! {
-            biased;
-            () = child_cancel.cancelled() => return Err(cancelled()),
-            connected = crate::app::mcp_tools::connect_mcp_tools(
-                &self.home,
-                &self.settings,
-                &self.mcp_pool,
-                Some(&self.cwd),
-            ) => connected,
-        };
-        // The read-only filter sits on the drained `Vec<Arc<DynamicMcpTool>>`
-        // output, not inside registration: a role that cannot write may only
-        // inherit tools that declare `readOnlyHint`.
-        let write_capable = role.is_write_capable();
-        let any_mcp = !mcp_connect.is_empty();
-        let ready: Vec<(
-            Arc<crate::app::mcp_tools::McpServerInfo>,
-            Vec<Arc<crate::app::mcp_tools::DynamicMcpTool>>,
-        )> = mcp_connect
-            .ready
-            .into_iter()
-            .map(|(server, tools)| (server, filter_mcp_tools(tools, write_capable)))
-            .collect();
         let shell = crate::tools::resolved_shell();
         let registry = Arc::new(child_registry_with(
             &allowed,
@@ -632,67 +685,50 @@ impl BridgeAgentHost {
             );
             registry.expose_only(&exposed);
         }
-        let mut mcp_drain: Option<ChildDrain> = None;
-        let mcp_note = if !any_mcp && ready.is_empty() {
-            None
-        } else {
-            let native: std::collections::BTreeSet<String> = registry
-                .names()
-                .into_iter()
-                .map(|name| name.to_ascii_lowercase())
-                .collect();
-            let catalog = crate::app::mcp_tools::McpCatalog::new(
-                mcp_connect.warning.clone(),
-                native,
-                mcp_connect.connecting.clone(),
-            );
-            let index = crate::app::tool_search::ToolSearchIndex::new();
-            crate::app::mcp_tools::register_meta_tools(&registry, &catalog, Arc::clone(&index));
-            let mut seen_failed = std::collections::HashSet::new();
-            for (id, reason) in &mcp_connect.failed {
-                catalog.mark_failed(
-                    Arc::new(crate::app::mcp_tools::McpServerInfo::new(id, None)),
-                    reason,
-                );
-                seen_failed.insert(id.clone());
-            }
-            let mut seen = std::collections::HashSet::new();
-            for (server, tools) in ready {
-                seen.insert(server.id().to_owned());
-                crate::app::mcp_tools::register_ready_server(
-                    &registry, &catalog, &index, server, tools,
-                );
-            }
-            let drain_registry = Arc::clone(&registry);
-            let drain_catalog = Arc::clone(&catalog);
-            let failed_catalog = Arc::clone(&catalog);
-            mcp_drain = Some(ChildDrain(tokio::spawn(
-                crate::app::mcp_tools::drain_mcp_ready(
-                    Arc::clone(&self.mcp_pool),
-                    seen,
-                    seen_failed,
-                    // A child cancel stops the listener only; the handshakes
-                    // belong to the shared pool.
-                    Some(child_cancel.clone()),
-                    move |server, tools| {
-                        let tools = filter_mcp_tools(tools, write_capable);
-                        crate::app::mcp_tools::register_ready_server(
-                            &drain_registry,
-                            &drain_catalog,
-                            &index,
-                            server,
-                            tools,
-                        );
-                    },
-                    move |server, reason| failed_catalog.mark_failed(server, reason),
-                ),
-            )));
-            Some(child_mcp_note(&catalog.prompt_note(), write_capable))
+        let mcp_refresh = crate::app::mcp_tools::McpRefresh::new(
+            self.home.clone(),
+            Arc::clone(&self.mcp_pool),
+            Arc::clone(&registry),
+            child_cancel.clone(),
+            role.is_write_capable(),
+        );
+        let mcp_note = tokio::select! {
+            biased;
+            () = child_cancel.cancelled() => return Err(cancelled()),
+            note = mcp_refresh.refresh() => note,
         };
-        let _mcp_drain = mcp_drain;
+        let extra_roots = {
+            let home = self.home.clone();
+            let cwd = self.cwd.clone();
+            let isolated = worktree.is_some();
+            tokio::task::spawn_blocking(move || {
+                if isolated {
+                    Vec::new()
+                } else {
+                    crate::app::turn::workspace_extra_roots(&home, &cwd)
+                }
+            })
+            .await
+            .map_err(|error| fail(format!("child workspace task: {error}")))?
+        };
+        let prompt_refresh = ChildPrompt {
+            home: self.home.clone(),
+            source_cwd: self.cwd.clone(),
+            run_dir: run_dir.clone(),
+            role: role.clone(),
+            registry: Arc::clone(&registry),
+            extra_roots: extra_roots.clone(),
+            shell: shell.clone(),
+            skills: settings.skills.clone(),
+        };
+        let system = tokio::select! {
+            biased;
+            () = child_cancel.cancelled() => return Err(cancelled()),
+            system = prompt_refresh.render(mcp_note) => system.map_err(fail)?,
+        };
         // The same compaction the parent turn runs, on this child's history
         // only: no checkpoint slot, so the parent's file is never touched.
-        let (child_model, context_window) = self.child_window(&role.name);
+        let (child_model, context_window) = self.child_window(&role.name, settings);
         let compactor = crate::app::compaction::RequestCompactor {
             wire: wire.clone(),
             model: child_model,
@@ -730,9 +766,17 @@ impl BridgeAgentHost {
         let before_request = compact_request(crate::app::compaction::CompactMode::Auto);
         let on_overflow = compact_request(crate::app::compaction::CompactMode::Overflow);
         let hooks = HookRunner::default()
-            .with_before_request(move |request| {
-                let compacted = before_request(request);
-                async move { compacted.await.0 }
+            .with_before_request(move |mut request| {
+                let before_request = before_request.clone();
+                let prompt_refresh = prompt_refresh.clone();
+                let mcp_refresh = Arc::clone(&mcp_refresh);
+                async move {
+                    let note = mcp_refresh.refresh().await;
+                    if let Ok(prompt) = prompt_refresh.render(note).await {
+                        request.system_prompt = Arc::from([prompt]);
+                    }
+                    before_request(request).await.0
+                }
             })
             .with_context_overflow(move |request| {
                 let compacted = on_overflow(request);
@@ -778,52 +822,11 @@ impl BridgeAgentHost {
         // same fields without touching the step log.
         let _ = progress.progress(agent_progress(&role.name, "goal", &request.description));
         let _ = progress.progress(agent_progress(&role.name, "task", &request.prompt));
-        let (extra_roots, system) = {
-            let has_worktree = worktree.is_some();
-            let home = self.home.clone();
-            let cwd = self.cwd.clone();
-            let role = role.clone();
-            let registry = Arc::clone(&registry);
-            let run_dir = run_dir.clone();
-            let shell = shell.clone();
-            let skills = self.settings.skills.clone();
-            tokio::task::spawn_blocking(move || {
-                let mut extra_roots = if has_worktree {
-                    Vec::new()
-                } else {
-                    crate::app::turn::workspace_extra_roots(&home, &cwd)
-                };
-                extra_roots.sort();
-                // The session workspace's instruction files, as the parent
-                // reads them: a worktree lacks the user's uncommitted edits.
-                let workspace = ChildWorkspace {
-                    resources: crate::config::render_resource_prompt(
-                        &crate::config::discover_resources(&home, &cwd),
-                    ),
-                    mcp_note,
-                    skills,
-                    mycode_home: Some(home.root().to_path_buf()),
-                };
-                let system = subagent_system_prompt(
-                    &role,
-                    &registry,
-                    &run_dir,
-                    &extra_roots,
-                    std::env::consts::OS,
-                    std::env::consts::ARCH,
-                    &shell,
-                    &workspace,
-                );
-                (extra_roots, system)
-            })
-            .await
-            .map_err(|error| fail(format!("subagent prompt task: {error}")))?
-        };
         let read_roots = crate::config::skill_read_roots(Some(self.home.root()));
         let mut config = AgentConfig::new()
             .with_system_prompt(system)
             .with_prompt_cache_key(Some(self.session_id.clone()));
-        if let Some(token) = thinking_for(role, &self.settings.subagents).effort() {
+        if let Some(token) = thinking_for(role, &settings.subagents).effort() {
             if let Some(level) = crate::core::ReasoningLevel::parse(token) {
                 config = config.with_reasoning(level);
             } else {
@@ -868,8 +871,12 @@ impl BridgeAgentHost {
     /// Resolves a per-role model override, or inherits the turn.
     ///
     /// A routed role runs on the same magpie gateway and key as the parent.
-    async fn resolve_route(&self, role: &str) -> Result<ResolvedProvider, String> {
-        let Some(entry) = self.settings.subagents.role(role) else {
+    async fn resolve_route(
+        &self,
+        role: &str,
+        settings: &AppSettings,
+    ) -> Result<ResolvedProvider, String> {
+        let Some(entry) = settings.subagents.role(role) else {
             return Ok(self.resolved.clone());
         };
         let (Some(provider_id), Some(model)) = (entry.provider.as_deref(), entry.model.as_deref())
@@ -881,15 +888,12 @@ impl BridgeAgentHost {
                 "role '{role}' provider '{provider_id}' is not the magpie gateway"
             ));
         }
-        let provider =
-            crate::app::magpie::provider_row(&self.settings.magpie, &self.catalog_document())
-                .ok_or_else(|| {
-                    "magpie is not connected: pick a model in magpie first".to_owned()
-                })?;
+        let provider = crate::app::magpie::provider_row(&settings.magpie, &self.catalog_document())
+            .ok_or_else(|| "magpie is not connected: pick a model in magpie first".to_owned())?;
         ResolvedProvider::resolve(
             &provider,
             model,
-            &self.settings.magpie.api_key,
+            &settings.magpie.api_key,
             &crate::app::user_agent::default_user_agent(),
         )
         .map_err(|error| format!("role '{role}' provider setup failed: {error}"))
@@ -929,6 +933,9 @@ fn subagent_answer(
         });
     match answer {
         Some((text, crate::core::StopReason::Error)) if !text.trim().is_empty() => Err(fail(text)),
+        Some((text, crate::core::StopReason::Length)) => Err(fail(format!(
+            "subagent answer was truncated at the output token limit; partial answer:\n{text}"
+        ))),
         Some((text, _)) if !text.trim().is_empty() => Ok(text),
         _ => Err(fail("subagent returned no answer".to_owned())),
     }
@@ -1070,6 +1077,60 @@ fn subagent_system_prompt(
     system
 }
 
+/// Stable capability boundary and fresh workspace metadata for one child.
+#[derive(Clone)]
+struct ChildPrompt {
+    home: HomeLayout,
+    source_cwd: PathBuf,
+    run_dir: PathBuf,
+    role: SubagentRole,
+    registry: Arc<ToolRegistry>,
+    extra_roots: Vec<PathBuf>,
+    shell: crate::tools::DetectedShell,
+    skills: crate::config::SkillsSettings,
+}
+
+impl ChildPrompt {
+    async fn render(&self, mcp_note: Option<String>) -> Result<String, String> {
+        let snapshot = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let skills = if snapshot
+                .home
+                .root()
+                .join(crate::config::SETTINGS_PATH)
+                .exists()
+            {
+                crate::config::read_app_settings(&snapshot.home)
+                    .map_err(|error| format!("child prompt settings: {error}"))?
+                    .skills
+            } else {
+                snapshot.skills
+            };
+            let workspace = ChildWorkspace {
+                resources: crate::config::render_resource_prompt(
+                    &crate::config::discover_resources(&snapshot.home, &snapshot.source_cwd),
+                ),
+                mcp_note: mcp_note
+                    .map(|note| child_mcp_note(&note, snapshot.role.is_write_capable())),
+                skills,
+                mycode_home: Some(snapshot.home.root().to_owned()),
+            };
+            Ok(subagent_system_prompt(
+                &snapshot.role,
+                &snapshot.registry,
+                &snapshot.run_dir,
+                &snapshot.extra_roots,
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                &snapshot.shell,
+                &workspace,
+            ))
+        })
+        .await
+        .map_err(|error| format!("child prompt task: {error}"))?
+    }
+}
+
 /// Per-run workspace text a child prompt carries after its fixed parts.
 #[derive(Default)]
 struct ChildWorkspace {
@@ -1095,30 +1156,6 @@ fn child_mcp_note(catalog_note: &str, write_capable: bool) -> String {
         note.push_str(" This role receives only MCP tools that declare readOnlyHint.");
     }
     note
-}
-
-/// Filters one drained server's tools for a role that cannot write.
-///
-/// The filter runs on the drain output, before registration: a read-only
-/// role never sees a schema it may not call.
-fn filter_mcp_tools(
-    tools: Vec<Arc<crate::app::mcp_tools::DynamicMcpTool>>,
-    write_capable: bool,
-) -> Vec<Arc<crate::app::mcp_tools::DynamicMcpTool>> {
-    if write_capable {
-        tools
-    } else {
-        tools.into_iter().filter(|tool| tool.read_only()).collect()
-    }
-}
-
-/// Aborts a child's MCP drain listener when the child run ends.
-struct ChildDrain(tokio::task::JoinHandle<()>);
-
-impl Drop for ChildDrain {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
 }
 
 fn render_os_block(os: &str, arch: &str, cwd: &Path) -> String {

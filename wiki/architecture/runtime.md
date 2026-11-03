@@ -96,6 +96,8 @@ MCP 服务在后台连接，支持标准输入输出和 Streamable HTTP。第一
 
 模型先用 search_tool 或 tool_search 查看工具名称与参数，再用 use_tool 调用。内置工具说明直接放入提示，MCP 工具的完整 schema 按需查询，避免每轮请求都附上整个远端工具目录。
 
+每次模型请求前重新协调 MCP 配置；新增服务后台握手，移除或改配的服务不再留在后续目录中，已经开始的调用不重放。已收到的 notifications/tools/list_changed 会触发目录重取。连接没有独立的空闲通知读取循环，因此服务端通知在下一次协议交互时被发现。
+
 主回合直接看到平台 shell、run_code、wait_code，其他工具通过脚本里的 call 或 callAsync 调用。read、find、grep 和声明只读的 MCP 调用可以通过 Promise.all 并发。只读子代理也只能获得声明为只读的 MCP 工具。
 
 脚本示例和完整调用规则见 [CodeMode](code-mode-engine.md#model-contract)。
@@ -111,6 +113,8 @@ MCP 服务在后台连接，支持标准输入输出和 Streamable HTTP。第一
 规则读取顺序是：全局 AGENTS.md，然后是项目 AGENTS.md、MYCODE.md、.mycode/agents.md、.agents/AGENTS.md。项目规则覆盖全局规则，同目录后读的规则覆盖前面的冲突项，用户明确要求优先。修改子目录文件前，还应读取适用的嵌套规则。
 
 magpie Library 提供 skills/ 和 MCP 配置。关闭的技能不出现在可用目录中。主代理和子代理采用同一套规则读取方式，各角色的工具权限仍然分别控制。
+
+界面监听 Library 文件变化并合并短时间内的通知，自动刷新设置、技能与 MCP 目录。运行中的代理在后续模型请求前重新读取规则、技能元数据和启停状态；技能正文仍按需读取。新派遣的子代理使用最新设置与角色文件，已运行子代理的角色权限保持不变。主回合启动时未注册的派遣能力在下一回合生效。
 
 <a id="windows-background-execution"></a>
 

@@ -117,45 +117,6 @@ impl Tool for AgentWorkflowTool {
             "agent_workflow: proactively use research, code-review or migration for substantial tasks matching <dispatch>. Supply the named inputs, collect the result and inspect independent acceptance. A waiting_integration handoff needs parent integration and resume before completion.",
         )
     }
-    fn prepare_args(&self, mut args: serde_json::Value) -> serde_json::Value {
-        // The common tool normalizer folds every object key, including named
-        // dictionary inputs. Restore only the fixed reference input names.
-        if let Some(inputs) = args
-            .get_mut("inputs")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            for key in [
-                "QUESTION",
-                "TARGET",
-                "CONTRACT",
-                "CORE_CHANGE",
-                "ADAPTER_CHANGE",
-                "CORE_SCOPE",
-                "CORE_TEST_SCOPE",
-                "ADAPTER_SCOPE",
-                "ADAPTER_TEST_SCOPE",
-            ] {
-                let folded: String = key
-                    .chars()
-                    .enumerate()
-                    .flat_map(|(i, c)| {
-                        if c.is_ascii_uppercase() && i > 0 {
-                            vec!['_', c.to_ascii_lowercase()]
-                        } else {
-                            vec![c.to_ascii_lowercase()]
-                        }
-                    })
-                    .collect();
-                if !inputs.contains_key(key)
-                    && let Some(value) = inputs.remove(&folded)
-                {
-                    inputs.insert(key.into(), value);
-                }
-            }
-        }
-        args
-    }
-
     async fn execute(
         &self,
         args: Self::Args,
@@ -534,6 +495,7 @@ impl AgentRuntime {
                                         workflow_id: Some(workflow_id.clone()),
                                         node_id: Some(spec.id.clone()),
                                         previous_run_id,
+                                        expected_writer: Some(spec.writer),
                                     },
                                     &stream,
                                     &ctx,

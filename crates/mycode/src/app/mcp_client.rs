@@ -56,6 +56,11 @@ pub trait JsonRpcChannel: Send + Sync + 'static {
         method: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>>;
 
+    /// Consumes a tool-list change notification observed during an exchange.
+    fn take_tools_changed(&self) -> bool {
+        false
+    }
+
     /// Releases the transport gracefully; stdio closes the child's stdin
     /// and waits before killing it. Stateless transports do nothing.
     fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
@@ -215,6 +220,11 @@ impl McpClient {
         self.instructions.as_deref()
     }
 
+    /// Whether a transport observed a changed tool catalog since the last check.
+    pub(crate) fn take_tools_changed(&self) -> bool {
+        self.channel.take_tools_changed()
+    }
+
     /// Performs the MCP initialize handshake and sends the initialized
     /// notification.
     ///
@@ -330,6 +340,7 @@ impl McpClient {
                         block["type"].as_str().unwrap_or("binary"),
                         block["mimeType"].as_str().unwrap_or("unknown type")
                     )),
+                    Some("resource_link") => Some(block.to_string()),
                     Some("resource") => block["resource"]["text"]
                         .as_str()
                         .map(str::to_owned)
@@ -348,10 +359,24 @@ impl McpClient {
                 }
             }
         }
-        // Servers that return structuredContent only still owe the model a
-        // readable body.
-        if text.is_empty() && !result["structuredContent"].is_null() {
-            text = result["structuredContent"].to_string();
+        // Text may be only a status line ("Action completed"). Preserve the
+        // actual structured payload too, unless a compatibility text block
+        // already contains that same JSON value.
+        let structured = &result["structuredContent"];
+        if !structured.is_null()
+            && !result["content"].as_array().is_some_and(|blocks| {
+                blocks.iter().any(|block| {
+                    block["type"] == "text"
+                        && block["text"].as_str().is_some_and(|text| {
+                            serde_json::from_str::<Value>(text).ok().as_ref() == Some(structured)
+                        })
+                })
+            })
+        {
+            if !text.is_empty() {
+                text.push_str("\n\nstructuredContent: ");
+            }
+            text.push_str(&structured.to_string());
         }
         Ok(McpToolOutput {
             text,

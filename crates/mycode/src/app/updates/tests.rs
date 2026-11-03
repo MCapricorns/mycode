@@ -204,7 +204,7 @@ fn spawn_sh(script: &std::path::Path) -> std::process::Child {
 #[cfg(unix)]
 #[test]
 fn unix_script_good_hash_replaces_and_removes_the_backup() {
-    let dir = scratch("unix-good");
+    let dir = scratch("unix-good-__CURRENT__-__NEW__-__HASH__-__RELAUNCH__");
     let current = dir.join("app");
     let staged = dir.join("next");
     let old = b"old-bytes";

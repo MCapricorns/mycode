@@ -203,13 +203,14 @@ def render(graph: dict, files: dict[str, str]) -> str:
     for token in (GRAPH_TOKEN, FILE_TOKEN, DOC_TOKEN):
         if token not in shell:
             raise SystemExit(f"{SHELL.name} is missing {token}")
-    graph_payload = payload({"lanes": graph["lanes"], "nodes": graph["nodes"]})
-    html = shell.replace(GRAPH_TOKEN, graph_payload).replace(FILE_TOKEN, payload(files))
-    html = html.replace(DOC_TOKEN, payload({key: render_doc(path) for key, path in DOCS.items()}))
-    for token in (GRAPH_TOKEN, FILE_TOKEN, DOC_TOKEN):
-        if token in html:
-            raise SystemExit(f"{OUT.name} still contains {token}")
-    return html
+    replacements = {
+        GRAPH_TOKEN: payload({"lanes": graph["lanes"], "nodes": graph["nodes"]}),
+        FILE_TOKEN: payload(files),
+        DOC_TOKEN: payload({key: render_doc(path) for key, path in DOCS.items()}),
+    }
+    # Replace only template tokens, never token-like text in embedded source.
+    return re.sub("|".join(map(re.escape, replacements)),
+                  lambda match: replacements[match[0]], shell)
 
 
 def brand_assets() -> dict[Path, str]:

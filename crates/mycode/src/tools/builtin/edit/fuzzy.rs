@@ -140,8 +140,15 @@ fn plan_fuzzy_inner(
             "fuzzy pattern is only whitespace after tokenization".to_owned(),
         ));
     }
-    let haystack = normalize(body, MAX_FUZZY_TOKENS, Some(cancel))?;
     let needle_chars = needle.norm.chars().count();
+    // Automatic literal fallback reaches this function without `prepare`.
+    // Apply the same bound before building or ranking its haystack.
+    if needle_chars > MAX_FUZZY_NORM_CHARS {
+        return Err(ToolError::InvalidArgs(format!(
+            "fuzzy pattern exceeds {MAX_FUZZY_NORM_CHARS} normalized characters"
+        )));
+    }
+    let haystack = normalize(body, MAX_FUZZY_TOKENS, Some(cancel))?;
     let required_margin = required_margin(needle_chars);
     let ranking_distance = max_distance.saturating_add(required_margin.saturating_sub(1));
 
@@ -675,6 +682,27 @@ mod tests {
     use super::{FUZZY_CANCEL_INTERVAL, FuzzyCancelGuard, FuzzyPlan, plan_fuzzy};
     use crate::tools::tool::ToolError;
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn automatic_fallback_keeps_the_fuzzy_needle_bound() {
+        let needle = "word ".repeat(100);
+        let mut planned = Vec::new();
+        let error = super::plan_fuzzy_fallback(
+            &needle,
+            FuzzyPlan {
+                pattern: &needle,
+                replacement: "x",
+                max_distance: 1,
+            },
+            0,
+            &mut planned,
+            &mut 0,
+            &CancellationToken::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("256 normalized characters"));
+        assert!(planned.is_empty());
+    }
 
     #[test]
     fn fuzzy_cancel_checks_bytes_during_candidate_scan() {

@@ -177,6 +177,11 @@ impl FrontendDriver {
             } => self.finish_send(&session, head, entry, out),
             BridgeReply::Settings(Ok(loaded)) => {
                 self.note_config_repairs(&loaded.repairs);
+                let gateway_changed = self
+                    .vm
+                    .settings
+                    .as_ref()
+                    .is_some_and(|current| current.magpie != loaded.settings.magpie);
                 let revision = loaded.revision.get();
                 let mut state = SettingsState::from_settings(&loaded.settings, revision);
                 state.mcp_with_keys = loaded.mcp_keys;
@@ -193,6 +198,12 @@ impl FrontendDriver {
                     out.push(Effect::SyncProxyField);
                 }
                 self.act(FrontendAction::SettingsLoaded(Box::new(state)), out);
+                if gateway_changed {
+                    // A Library edit can replace or disconnect the gateway
+                    // while no model menu is open. Refresh quietly; unchanged
+                    // settings replies from that refresh do not start another.
+                    self.dispatch(BridgeCommand::RefreshCatalog);
+                }
                 if std::mem::take(&mut self.catalog_refresh_toast_pending) {
                     self.toast(
                         crate::frontend::i18n::t("Provider catalog refreshed", "服务商目录已刷新")

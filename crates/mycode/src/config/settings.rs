@@ -224,7 +224,10 @@ pub fn read_app_settings_with_repair(
         },
         AppSettings::default,
         salvage_app_settings,
-        |settings| publish_settings(home, settings),
+        |settings| {
+            settings.validate()?;
+            encode_settings(AuthorityRevision::ABSENT.checked_next()?, settings)
+        },
     )?;
     // Publication failures are I/O/update errors, not damage to the valid
     // bootstrap bytes. Keep them outside load_or_reset's decode callback.
@@ -297,17 +300,6 @@ fn import_magpie_bootstrap(home: &crate::config::HomeLayout) -> Result<AppSettin
         },
     )?;
     imported.ok_or_else(|| ConfigError::new(ConfigErrorKind::Serialization))
-}
-
-fn publish_settings(
-    home: &crate::config::HomeLayout,
-    settings: &AppSettings,
-) -> Result<(), ConfigError> {
-    settings.validate()?;
-    let bytes = encode_settings(AuthorityRevision::ABSENT.checked_next()?, settings)?;
-    locked_update_owned_file(home, SETTINGS_PATH, MAX_AUTHORITY_DOCUMENT_BYTES, |_| {
-        Ok(bytes)
-    })
 }
 
 /// Replaces `settings.json` under revision compare-and-swap.

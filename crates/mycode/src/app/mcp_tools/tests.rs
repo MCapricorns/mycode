@@ -775,6 +775,7 @@ async fn a_pool_reuses_ready_slots_across_turns() {
         let pool_ref = guard.as_mut().expect("pool");
         pool_ref.slots[0] = McpSlot::Ready {
             server: Arc::clone(&info),
+            client: Arc::clone(&tool.client),
             tools: vec![tool],
             broken: Arc::new(AtomicBool::new(false)),
         };
@@ -825,6 +826,7 @@ async fn the_drain_reports_a_server_once_when_its_slot_becomes_ready() {
                 if let Some(pool_ref) = guard.as_mut() {
                     pool_ref.slots[0] = McpSlot::Ready {
                         server: task_info,
+                        client: Arc::clone(&task_tool.client),
                         tools: vec![task_tool],
                         broken: Arc::new(AtomicBool::new(false)),
                     };
@@ -999,4 +1001,54 @@ async fn cancelled_mcp_call_invalidates_the_shared_connection() {
     .unwrap_err();
     assert!(error.to_string().contains("cancelled"));
     assert!(broken.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[tokio::test]
+async fn cancellation_while_waiting_for_another_call_does_not_break_the_connection() {
+    let tool = catalog_tool("docs", "lookup", "Look up docs");
+    let _other_call = tool.client.lock().await;
+    let ctx = crate::tools::ToolCtx::new(std::env::temp_dir());
+    ctx.cancel.cancel();
+    let error = tool
+        .execute_dyn(json!({}), &ctx, &mut crate::tools::ToolStream::closed())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("cancelled"));
+    assert!(!tool.broken.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[tokio::test]
+async fn use_tool_preserves_server_camel_case_and_untyped_payload_keys() {
+    let scripted = Arc::new(ScriptedMcp {
+        calls: std::sync::Mutex::new(Vec::new()),
+    });
+    let server = server_info("docs", None);
+    let tool = Arc::new(super::DynamicMcpTool::new(
+        Arc::clone(&server),
+        McpTool {
+            name: "lookup".to_owned(),
+            description: None,
+            read_only: true,
+            input_schema: json!({"type": "object", "properties": {
+                "camelCase": {"type": "string"}, "payload": {"type": "object"}
+            }, "required": ["camelCase", "payload"]}),
+        },
+        Arc::new(tokio::sync::Mutex::new(
+            crate::app::mcp_client::McpClient::new(scripted.clone()),
+        )),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(std::env::temp_dir()),
+    ));
+    let catalog = catalog_from(vec![tool], None, &native(&[]));
+    let payload = json!({"camelCase": "value", "payload": {"cmd": "literal", "timeout": 5, "userName": "user", "mode": {"mode": "nested"}}});
+    let result = UseTool::new(catalog)
+        .execute_dyn(
+            json!({"name": "lookup", "arguments": payload}),
+            &crate::tools::ToolCtx::new(std::env::temp_dir()),
+            &mut crate::tools::ToolStream::closed(),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error);
+    assert_eq!(scripted.calls.lock().unwrap()[0]["arguments"], payload);
 }

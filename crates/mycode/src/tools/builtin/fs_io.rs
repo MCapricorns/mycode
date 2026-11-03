@@ -1,8 +1,8 @@
 //! Host-owned shared file capability and kernel.
 //!
-//! Paths are anchored at an already-opened session cwd directory handle. User
-//! components are opened no-follow, one name at a time. Absolute arguments are
-//! accepted only when they are lexically and handle-proven inside that cwd.
+//! Paths are anchored at an already-opened directory handle. User components
+//! are opened no-follow, one name at a time. Paths outside the session cwd or
+//! crossing a link are resolved once and bound from their resolved location.
 //! Hidden names are readable and writable; Search ignore policy is not applied.
 //! Prepared handles stay inside this process.
 use std::sync::Mutex;

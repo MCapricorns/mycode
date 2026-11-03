@@ -1,28 +1,16 @@
-//! Tool-argument repair: camelCase folding, stringified objects, common
-//! aliases, required-field filling, and tagged-union arms, so model-emitted
-//! arguments match the snake_case schemas before validation runs.
+//! Schema-aware tool-argument repair: stringified objects, declared key
+//! aliases, required-field filling, and tagged-union arms. Unknown payload
+//! keys and server-declared spelling are preserved before validation runs.
 
 use serde_json::Value;
 
-/// Accepts camelCase, a JSON object encoded as a string, and a few common
-/// aliases so model-emitted tool arguments match the snake_case schemas
-/// without failing validation.
+/// Unwrap a JSON object encoded as a string without changing argument names.
+///
+/// Key aliases and echoed values require the target schema: a remote tool may
+/// legitimately declare camelCase keys, and arbitrary JSON payloads are data.
+/// [`repair_args`] performs those repairs after the schema is available.
 pub fn normalize_tool_args(args: Value) -> Value {
-    let mut args = fold_camel_keys(unwrap_stringified_object(args));
-    let Value::Object(map) = &mut args else {
-        return args;
-    };
-    alias_key(map, "timeout", "timeout_secs");
-    alias_key(map, "cmd", "command");
-    // Spellings other agents' file tools use. Without them the file
-    // preflight fails on a missing `path`, or `edit` reports that no
-    // replacement was given, and the model spends a turn on the retry.
-    alias_key(map, "file_path", "path");
-    alias_key(map, "filepath", "path");
-    alias_key(map, "old_str", "old_string");
-    alias_key(map, "new_str", "new_string");
-    unwrap_echoed_values(map);
-    args
+    unwrap_stringified_object(args)
 }
 
 /// Unwraps arguments that arrive as a JSON object encoded in a string.
@@ -100,7 +88,6 @@ const REQUIRED_ALIASES: &[(&str, &[&str])] = &[
 /// without a `const`/single-`enum` tag, and a value that does not parse are
 /// left exactly as they arrived, so validation still reports them.
 pub fn repair_args(args: &mut Value, schema: &Value) {
-    fill_required_aliases(args, schema);
     repair_node(args, schema);
 }
 
@@ -160,6 +147,10 @@ fn is_string_array(schema: &Value) -> bool {
 }
 
 fn repair_node(value: &mut Value, schema: &Value) {
+    if let Value::Object(map) = value {
+        repair_keys(map, schema);
+    }
+    fill_required_aliases(value, schema);
     match value {
         Value::Object(map) => {
             let arms = tagged_arms(schema);
@@ -177,6 +168,7 @@ fn repair_node(value: &mut Value, schema: &Value) {
                     .and_then(|properties| properties.get(key))
                     .or_else(|| property_schema(schema, key));
                 if let Some(property) = property {
+                    unwrap_echoed_value(key, child, property);
                     repair_node(child, property);
                 }
             }
@@ -423,7 +415,7 @@ fn scalar_types(property: &Value) -> Vec<&str> {
         Some(Value::Array(names)) => types.extend(names.iter().filter_map(Value::as_str)),
         _ => {}
     }
-    for keyword in ["anyOf", "oneOf"] {
+    for keyword in ["anyOf", "oneOf", "allOf"] {
         for arm in property
             .get(keyword)
             .and_then(Value::as_array)
@@ -436,67 +428,57 @@ fn scalar_types(property: &Value) -> Vec<&str> {
     types
 }
 
-/// Unwraps `{key: {key: value}}` into `{key: value}`.
-///
-/// Models occasionally echo the parameter name inside the value — the
-/// observed case was shell `mode={"mode":"program"}`, which schema
-/// validation reports as an opaque `oneOf` failure. A value that is an
-/// object holding exactly the same single key with a non-object value is
-/// the echoed shape; anything else passes through untouched.
-fn unwrap_echoed_values(map: &mut serde_json::Map<String, Value>) {
-    for (key, value) in map.iter_mut() {
-        let echoed = value.as_object().is_some_and(|inner| {
-            inner.len() == 1
-                && inner.iter().next().is_some_and(|(inner_key, inner_value)| {
-                    inner_key.as_str() == key.as_str() && !inner_value.is_object()
-                })
-        });
-        if !echoed {
+/// Repair only names the schema actually declares. Unknown objects such as
+/// `use_tool.arguments` and process environment maps remain opaque.
+fn repair_keys(map: &mut serde_json::Map<String, Value>, schema: &Value) {
+    const ALIASES: &[(&str, &str)] = &[
+        ("timeout", "timeout_secs"),
+        ("cmd", "command"),
+        ("file_path", "path"),
+        ("filepath", "path"),
+        ("old_str", "old_string"),
+        ("new_str", "new_string"),
+    ];
+    let mut repaired = serde_json::Map::new();
+    let explicit: std::collections::HashSet<_> = map.keys().cloned().collect();
+    for (key, value) in std::mem::take(map) {
+        if property_schema(schema, &key).is_some() {
+            repaired.insert(key, value);
             continue;
         }
-        let unwrapped = value
-            .as_object_mut()
-            .and_then(|inner| inner.values_mut().next().map(std::mem::take));
-        if let Some(unwrapped) = unwrapped {
-            *value = unwrapped;
+        let folded = camel_to_snake(&key);
+        let target = if property_schema(schema, &folded).is_some() {
+            folded.as_str()
+        } else {
+            ALIASES
+                .iter()
+                .find(|(alias, target)| {
+                    *alias == folded && property_schema(schema, target).is_some()
+                })
+                .map_or(key.as_str(), |(_, target)| *target)
+        };
+        // An explicit property always wins, independent of input order. Keep
+        // conflicting aliases so strict schemas can report them to the model.
+        if target != key && !explicit.contains(target) && !repaired.contains_key(target) {
+            repaired.insert(target.to_owned(), value);
+        } else {
+            repaired.insert(key, value);
         }
     }
+    *map = repaired;
 }
 
-fn alias_key(map: &mut serde_json::Map<String, Value>, from: &str, to: &str) {
-    if map.contains_key(to) {
+/// Unwrap an echoed scalar only when the property cannot itself be an object.
+fn unwrap_echoed_value(key: &str, value: &mut Value, schema: &Value) {
+    let types = scalar_types(schema);
+    if types.is_empty() || types.contains(&"object") {
         return;
     }
-    if let Some(value) = map.remove(from) {
-        map.insert(to.to_owned(), value);
-    }
-}
-
-fn fold_camel_keys(value: Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut out = serde_json::Map::new();
-            // Reserve explicit snake_case spellings before folding aliases.
-            // JSON objects preserve input order, so checking only `out` would
-            // let an earlier camelCase alias silently replace the real field.
-            let explicit: std::collections::HashSet<_> = map.keys().cloned().collect();
-            for (key, child) in map {
-                let snake = camel_to_snake(&key);
-                let folded = fold_camel_keys(child);
-                if snake != key && explicit.contains(&snake) {
-                    out.insert(key, folded);
-                } else if !out.contains_key(&snake) {
-                    out.insert(snake, folded);
-                } else if snake != key {
-                    // An explicit snake_case field already occupies the slot.
-                    // Keep the original camelCase key instead of dropping it.
-                    out.entry(key).or_insert(folded);
-                }
-            }
-            Value::Object(out)
-        }
-        Value::Array(items) => Value::Array(items.into_iter().map(fold_camel_keys).collect()),
-        other => other,
+    let echoed = value.as_object().is_some_and(|inner| {
+        inner.len() == 1 && inner.get(key).is_some_and(|child| !child.is_object())
+    });
+    if echoed {
+        *value = value.as_object_mut().unwrap().remove(key).unwrap();
     }
 }
 

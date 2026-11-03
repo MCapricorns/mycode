@@ -380,7 +380,6 @@ fn unix_open_alias(
 ) -> io::Result<(StableHandle, OsString)> {
     #[cfg(unix)]
     if access == SearchAccess::Metadata && expected != Some(FsEntryKind::Directory) {
-        confirm_named_unix_metadata(parent, name, expected)?;
         let (identity, kind) = unix_named_identity(parent, name)?;
         if let Some(expected) = expected
             && kind != expected

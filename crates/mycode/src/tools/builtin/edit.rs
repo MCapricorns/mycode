@@ -198,8 +198,8 @@ impl Tool for EditTool {
          are ignored. Batch literal, fuzzy (whitespace-insensitive, unique \
          best match), bounded regex, and line-range ops all match one \
          snapshot and publish once. `old_string` must match \
-         exactly once, or every time with `replace_all`; line endings and \
-         spaces at the end of a line may differ, indentation may not. Hidden \
+         exactly once, or every time with `replace_all`. A unique whitespace-normalized \
+         match can repair an exact miss; the result reports that repair. Hidden \
          files are editable. Returns a revision and a \
          bounded diff summary, not the file body."
     }

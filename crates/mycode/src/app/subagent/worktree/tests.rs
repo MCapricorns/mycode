@@ -256,3 +256,53 @@ fn a_clean_worktree_is_removed_after_handoff() {
     assert!(!path.exists());
     assert!(!manifest.exists());
 }
+
+#[test]
+fn untracked_preview_is_bounded_and_keeps_a_clipped_unicode_prefix() {
+    let fixture = Repository::new();
+    let file = fixture.repo.join("large.txt");
+    std::fs::write(&file, "中".repeat(MAX_WORKTREE_DIFF_BYTES)).unwrap();
+    let text = untracked_file_text(&file, 100).unwrap();
+    assert!(text.starts_with(&"中".repeat(33)));
+    assert!(text.ends_with("... diff truncated\n"));
+    assert!(text.len() < 150);
+}
+
+#[cfg(unix)]
+#[test]
+fn untracked_symlink_handoff_does_not_read_its_target() {
+    let fixture = Repository::new();
+    let outside = fixture.root.join("outside.txt");
+    std::fs::write(&outside, "private target contents").unwrap();
+    std::os::unix::fs::symlink(&outside, fixture.repo.join("link.txt")).unwrap();
+    let diff = capture_worktree_diff(&fixture.repo);
+    assert!(diff.contains("link.txt"), "{diff}");
+    assert!(diff.contains("outside.txt"), "{diff}");
+    assert!(!diff.contains("private target contents"), "{diff}");
+}
+
+#[test]
+fn tracked_diff_is_bounded_while_git_is_still_producing_it() {
+    let fixture = Repository::new();
+    std::fs::write(
+        fixture.repo.join("tracked.txt"),
+        "changed line\n".repeat(MAX_WORKTREE_DIFF_BYTES),
+    )
+    .unwrap();
+    let (output, clipped) = capped_git_output(
+        git_command().arg("-C").arg(&fixture.repo).args([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "HEAD",
+        ]),
+        4096,
+    )
+    .unwrap();
+    assert!(clipped);
+    assert_eq!(output.stdout.len(), 4097);
+    let preview = capture_worktree_diff(&fixture.repo);
+    assert!(preview.starts_with("diff --git"));
+    assert!(preview.ends_with("... diff truncated\n"));
+    assert!(preview.len() < MAX_WORKTREE_DIFF_BYTES + 100);
+}

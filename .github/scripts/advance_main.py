@@ -141,6 +141,9 @@ def resolve_release_trees(
         cargo = rewrite_workspace_version(cargo, version)
         lock = rewrite_lock(lock, version)
     changelog = merge_changelog(main_changelog, built_changelog, version)
+    # A later release may already be on main while this build finishes.
+    # Retain its comparison baseline as well as its manifest version.
+    changelog = _upsert_links(changelog, workspace_version(cargo))
     return {
         "Cargo.toml": cargo,
         "Cargo.lock": lock,
@@ -559,6 +562,7 @@ def _expect_resolve() -> None:
         newer["Cargo.lock"],
     )
     _expect("## [0.9.1]" in newer["CHANGELOG.md"], newer["CHANGELOG.md"])
+    _expect("v0.9.2...HEAD" in newer["CHANGELOG.md"], newer["CHANGELOG.md"])
     _expect(_is_non_ff("! [rejected] HEAD -> main (fetch first)"), "fetch first")
     _expect(_is_non_ff("non-fast-forward"), "non-ff")
     _expect(not _is_non_ff("protected branch hook declined"), "protected branch")

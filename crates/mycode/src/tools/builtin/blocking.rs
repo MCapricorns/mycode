@@ -121,7 +121,12 @@ where
     // whenever thread startup is slow.
     let spawn_cancel = worker_cancel.clone();
     let activity = crate::tools::builtin::agent::activity::current_guard();
-    let worker = tokio::task::spawn_blocking(move || {
+    let startup_admitted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let admission = Arc::clone(&startup_admitted);
+    let mut startup = tokio::task::spawn_blocking(move || {
+        if admission.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err(ToolError::Execution("worker startup cancelled".to_owned()));
+        }
         InterruptibleWorker::spawn(
             move || {
                 if function_cancel.is_cancelled() {
@@ -129,17 +134,16 @@ where
                         "cancelled before completion{INTERRUPTED_NOTE}"
                     )));
                 }
+                if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    return Err(ToolError::Execution("time limit reached".to_owned()));
+                }
                 function(function_cancel)
             },
             tx,
             spawn_cancel,
             activity,
         )
-    })
-    .await
-    .map_err(|error| {
-        ToolError::Execution(format!("{label} worker spawn task failed: {error}"))
-    })??;
+    });
     let deadline_wait = async {
         match deadline {
             Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
@@ -147,6 +151,40 @@ where
         }
     };
     tokio::pin!(deadline_wait);
+    let startup_result = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        _ = &mut deadline_wait => None,
+        result = &mut startup => Some(result),
+    };
+    let Some(startup_result) = startup_result else {
+        worker_cancel.cancel();
+        // Aborting a queued blocking task removes it before admission. If it
+        // already started, await its handshake and join its supervised worker
+        // so a stopped tool cannot leave an in-flight mutation behind.
+        let admitted = startup_admitted.swap(true, std::sync::atomic::Ordering::SeqCst);
+        startup.abort();
+        let authority_error = if admitted {
+            match startup.await {
+                Ok(Ok(worker)) => worker.join().await,
+                _ => None,
+            }
+        } else {
+            // Tokio may only settle an aborted blocking JoinHandle once its
+            // pool gets a free thread. The admission gate already guarantees
+            // that this queued task cannot spawn or run a worker.
+            None
+        };
+        let suffix = interrupt_suffix(authority_error);
+        return Err(ToolError::Execution(if cancel.is_cancelled() {
+            format!("{label} cancelled before completion{suffix}{INTERRUPTED_NOTE}")
+        } else {
+            format!("{label} time limit reached{suffix}")
+        }));
+    };
+    let worker = startup_result.map_err(|error| {
+        ToolError::Execution(format!("{label} worker spawn task failed: {error}"))
+    })??;
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {
@@ -622,6 +660,66 @@ fn duplicate_current_thread() -> io::Result<SendHandle> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn queued_startup_observes_cancellation_and_deadline() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        for cancelled in [false, true] {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .max_blocking_threads(1)
+                .build()
+                .unwrap();
+            let ran = Arc::new(AtomicBool::new(false));
+            runtime.block_on(async {
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let (release, blocked) = std::sync::mpsc::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    let _ = started.send(());
+                    let _ = blocked.recv();
+                });
+                ready.await.unwrap();
+                let observed = Arc::clone(&ran);
+                let cancel = tokio_util::sync::CancellationToken::new();
+                let task_cancel = cancel.clone();
+                let task = tokio::spawn(async move {
+                    super::run_blocking(
+                        "queued",
+                        &task_cancel,
+                        Duration::from_millis(if cancelled { 30_000 } else { 10 }),
+                        move |_| {
+                            observed.store(true, Ordering::SeqCst);
+                            Ok(())
+                        },
+                    )
+                    .await
+                });
+                tokio::task::yield_now().await;
+                if cancelled {
+                    cancel.cancel();
+                }
+                let result = tokio::time::timeout(Duration::from_secs(1), task).await;
+                // Always unblock the pool before asserting so a failed test
+                // cannot deadlock runtime shutdown.
+                release.send(()).unwrap();
+                blocker.await.unwrap();
+                tokio::task::spawn_blocking(|| ()).await.unwrap();
+                let error = result
+                    .expect("queued startup must stop promptly")
+                    .unwrap()
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    error.contains(if cancelled { "cancelled" } else { "time limit" }),
+                    "{error}"
+                );
+            });
+            assert!(!ran.load(Ordering::SeqCst));
+        }
+    }
+
     #[test]
     fn dropping_queued_startup_does_not_run_the_worker() {
         use std::sync::Arc;

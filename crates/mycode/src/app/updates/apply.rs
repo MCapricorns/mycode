@@ -137,7 +137,9 @@ pub(crate) fn helper_arguments(
 /// Returns a failure message when the staged hash is wrong or the swap cannot
 /// finish. A busy target is retried. A hash mismatch is not.
 pub fn run_apply_update_helper(args: &ApplyUpdateArgs) -> Result<(), String> {
-    wait_for_process_exit(args.wait_pid, Duration::from_secs(60));
+    // A background stage can be armed hours before the user quits. Expiring
+    // this wait would exhaust swap retries while Windows still locks the exe.
+    wait_for_process_exit(args.wait_pid);
     // Sibling helpers share the staged source and the target's incoming
     // path, so a loser's replace can fail mid-flight even though the swap
     // landed. Checking the target digest treats that as applied — the
@@ -353,17 +355,41 @@ fn is_retryable(error: &std::io::Error) -> bool {
     ) || matches!(error.raw_os_error(), Some(5 | 32 | 33))
 }
 
-fn wait_for_process_exit(pid: u32, timeout: Duration) {
+#[cfg(not(windows))]
+fn wait_for_process_exit(pid: u32) {
     if pid == 0 || pid == std::process::id() {
         return;
     }
-    let start = std::time::Instant::now();
     while process_is_running(pid) {
-        if start.elapsed() > timeout {
-            return;
-        }
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+#[cfg(windows)]
+fn wait_for_process_exit(pid: u32) {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
+
+    if pid == 0 || pid == std::process::id() {
+        return;
+    }
+    if let Some(process) = open_process_for_wait(pid) {
+        // SAFETY: the retained handle has SYNCHRONIZE access and stays live
+        // until the wait finishes. Reopening the PID while polling could
+        // switch to an unrelated process after the original UI exits.
+        unsafe { WaitForSingleObject(process.as_raw_handle(), INFINITE) };
+    }
+}
+
+#[cfg(windows)]
+fn open_process_for_wait(pid: u32) -> Option<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+
+    // SAFETY: OpenProcess only acquires a synchronization handle; a non-null
+    // result is uniquely owned and closed by OwnedHandle on every exit path.
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    (!handle.is_null()).then(|| unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
 #[cfg(unix)]
@@ -384,25 +410,15 @@ pub(crate) fn process_is_running(pid: u32) -> bool {
 
 #[cfg(windows)]
 pub(crate) fn process_is_running(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-    if pid == 0 {
-        return false;
-    }
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return false;
-        }
-        let mut code = 0u32;
-        let ok = GetExitCodeProcess(handle, &mut code);
-        let _ = CloseHandle(handle);
-        // `GetExitCodeProcess` writes a `u32`. windows-sys 0.61 types
-        // `STILL_ACTIVE` as `i32` (NTSTATUS, value 259).
-        ok != 0 && code == STILL_ACTIVE as u32
-    }
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+    open_process_for_wait(pid).is_some_and(|process| {
+        // SAFETY: this live handle has SYNCHRONIZE access; a zero timeout
+        // observes termination without confusing exit code 259 with STILL_ACTIVE.
+        (unsafe { WaitForSingleObject(process.as_raw_handle(), 0) }) == WAIT_TIMEOUT
+    })
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -430,6 +446,65 @@ fn relaunch_target(target: &Path) -> Result<(), String> {
 mod tests {
     use super::{helper_arguments, parse_apply_update_args, replace_verified_executable};
     use std::path::Path;
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "child-side updater process wait probe"]
+    fn wait_exit_259_probe() {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).unwrap();
+        std::process::exit(259);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn helper_wait_observes_termination_even_when_exit_code_is_still_active() {
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        let (_, module) = module_path!().split_once("::").unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("{module}::wait_exit_259_probe"),
+                "--ignored",
+                "--nocapture",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take();
+        let pid = child.id();
+        assert!(super::process_is_running(pid));
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            super::wait_for_process_exit(pid);
+            let _ = finished_tx.send(());
+        });
+        assert!(matches!(
+            finished_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(stdin);
+        assert_eq!(child.wait().unwrap().code(), Some(259));
+        // Retaining Child keeps its process handle open, so the exited PID
+        // can still be queried and GetExitCodeProcess would still return 259.
+        assert!(!super::process_is_running(pid));
+        finished_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("wait must finish after exit, including exit code 259");
+        worker.join().unwrap();
+        drop(child);
+    }
+
+    #[test]
+    fn helper_wait_skips_zero_self_and_invalid_pids() {
+        for pid in [0, std::process::id(), u32::MAX] {
+            super::wait_for_process_exit(pid);
+        }
+    }
 
     #[cfg(windows)]
     #[test]

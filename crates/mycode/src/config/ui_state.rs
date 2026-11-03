@@ -477,7 +477,10 @@ pub fn read_ui_state_with_repair(
         decode_ui_state,
         UiState::default,
         salvage_ui_state,
-        |state| replace_ui_state(home, state),
+        |state| {
+            state.validate()?;
+            replace_bytes(state)
+        },
     )?;
     Ok((loaded.value, loaded.repair))
 }

@@ -6,6 +6,7 @@
 //! Credential headers come from the server binding; keys live in the secret
 //! store and never travel through settings.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use std::future::Future;
@@ -90,6 +91,7 @@ pub struct HttpChannel {
     endpoint: String,
     options: HttpChannelOptions,
     session_id: RwLock<Option<String>>,
+    tools_changed: AtomicBool,
 }
 
 impl HttpChannel {
@@ -101,6 +103,7 @@ impl HttpChannel {
             endpoint: endpoint.to_owned(),
             options,
             session_id: RwLock::new(None),
+            tools_changed: AtomicBool::new(false),
         }
     }
 
@@ -190,7 +193,7 @@ impl HttpChannel {
             .unwrap_or_default()
             .to_ascii_lowercase();
         if content_type.contains("text/event-stream") {
-            return streaming_sse_reply(response, id).await;
+            return streaming_sse_reply(response, id, &self.tools_changed).await;
         }
         let bytes = bounded_body(response, MAX_MESSAGE_BYTES).await?;
         if bytes.is_empty() {
@@ -208,6 +211,7 @@ impl HttpChannel {
 async fn streaming_sse_reply(
     mut response: reqwest::Response,
     id: Option<u64>,
+    tools_changed: &AtomicBool,
 ) -> Result<Option<Value>, McpError> {
     let mut bytes = Vec::new();
     let mut scanned = 0;
@@ -229,7 +233,9 @@ async fn streaming_sse_reply(
             let empty =
                 index == line_start || (index == line_start + 1 && bytes[line_start] == b'\r');
             if empty {
-                if let Some(reply) = sse_reply(&bytes[event_start..=index], id)? {
+                if let Some(reply) =
+                    sse_reply_with_changes(&bytes[event_start..=index], id, tools_changed)?
+                {
                     return Ok(Some(reply));
                 }
                 event_start = index + 1;
@@ -239,7 +245,7 @@ async fn streaming_sse_reply(
         scanned = bytes.len();
     }
     // Retain support for servers that omit the final blank line before EOF.
-    sse_reply(&bytes[event_start..], id)
+    sse_reply_with_changes(&bytes[event_start..], id, tools_changed)
 }
 
 /// Extracts the JSON-RPC response from an SSE body.
@@ -249,18 +255,31 @@ async fn streaming_sse_reply(
 /// Server-initiated requests and notifications on the stream carry a
 /// `method` and are skipped; with `id` set, only that request's reply (or an
 /// id-less error) is returned.
+#[cfg(test)]
 fn sse_reply(bytes: &[u8], id: Option<u64>) -> Result<Option<Value>, McpError> {
+    sse_reply_with_changes(bytes, id, &AtomicBool::new(false))
+}
+
+fn sse_reply_with_changes(
+    bytes: &[u8],
+    id: Option<u64>,
+    tools_changed: &AtomicBool,
+) -> Result<Option<Value>, McpError> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| McpError::protocol("SSE body is not UTF-8"))?;
     let mut data = String::new();
     let mut has_data = false;
     for line in text.lines().chain(std::iter::once("")) {
         if line.is_empty() {
-            if has_data
-                && let Some(value) = sse_event(&data)?
-                && is_reply(&value, id)
-            {
-                return Ok(Some(value));
+            if has_data && let Some(value) = sse_event(&data)? {
+                if value["method"].as_str() == Some("notifications/tools/list_changed")
+                    && value["id"].is_null()
+                {
+                    tools_changed.store(true, Ordering::Relaxed);
+                }
+                if is_reply(&value, id) {
+                    return Ok(Some(value));
+                }
             }
             data.clear();
             has_data = false;
@@ -324,6 +343,10 @@ fn finish_reply(value: Option<Value>, id: u64) -> Result<Value, McpError> {
 }
 
 impl JsonRpcChannel for HttpChannel {
+    fn take_tools_changed(&self) -> bool {
+        self.tools_changed.swap(false, Ordering::Relaxed)
+    }
+
     fn request<'a>(
         &'a self,
         id: u64,
@@ -381,6 +404,21 @@ mod tests {
     }
 
     #[test]
+    fn sse_reply_records_tool_list_notifications_before_the_response() {
+        let changed = super::AtomicBool::new(false);
+        let body = concat!(
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n",
+        );
+        assert!(
+            super::sse_reply_with_changes(body.as_bytes(), Some(1), &changed)
+                .unwrap()
+                .is_some()
+        );
+        assert!(changed.load(super::Ordering::Relaxed));
+    }
+
+    #[test]
     fn sse_reply_ignores_other_ids_and_keeps_bare_errors() {
         let other = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
         assert!(sse_reply(other.as_bytes(), Some(2)).unwrap().is_none());
@@ -423,7 +461,7 @@ mod tests {
             reqwest::Response::from(http::Response::new(reqwest::Body::wrap_stream(chunks)));
         let reply = tokio::time::timeout(
             std::time::Duration::from_secs(1),
-            super::streaming_sse_reply(response, Some(7)),
+            super::streaming_sse_reply(response, Some(7), &super::AtomicBool::new(false)),
         )
         .await
         .expect("a complete reply must not wait for EOF")

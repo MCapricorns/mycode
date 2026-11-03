@@ -1,7 +1,11 @@
 //! Literal, whitespace-tolerant, and regex match finding for one edit plan.
 
 use super::*;
-pub(super) fn relaxed_literal_matches(body: &str, pattern: &str) -> Result<Vec<Found>, ToolError> {
+pub(super) fn relaxed_literal_matches(
+    body: &str,
+    pattern: &str,
+    cancel: &CancellationToken,
+) -> Result<Vec<Found>, ToolError> {
     let include_terminator = pattern.ends_with('\n');
     let mut needle: Vec<String> = pattern.split('\n').map(normalize_line).collect();
     if include_terminator {
@@ -13,33 +17,42 @@ pub(super) fn relaxed_literal_matches(body: &str, pattern: &str) -> Result<Vec<F
     if needle.is_empty() || needle.iter().all(String::is_empty) {
         return Ok(Vec::new());
     }
-    let mut lines: Vec<(usize, usize, &str)> = Vec::new();
-    let mut offset = 0usize;
+    // KMP over normalized lines avoids re-normalizing every sliding window.
+    // Only the last needle-width byte ranges are needed for original spans.
+    let width = needle.len();
+    let mut prefix = vec![0; width];
+    let mut matched = 0;
+    for index in 1..width {
+        while matched > 0 && needle[matched] != needle[index] {
+            matched = prefix[matched - 1];
+        }
+        if needle[matched] == needle[index] {
+            matched += 1;
+        }
+        prefix[index] = matched;
+    }
+    let mut spans = std::collections::VecDeque::with_capacity(width);
+    let mut found = Vec::new();
+    let mut offset = 0;
+    matched = 0;
     for line in body.split_inclusive('\n') {
+        check_cancel(cancel)?;
         let start = offset;
         offset += line.len();
-        let content = line
-            .strip_suffix('\n')
-            .unwrap_or(line)
-            .strip_suffix('\r')
-            .unwrap_or_else(|| line.strip_suffix('\n').unwrap_or(line));
-        lines.push((start, line.len(), content));
-    }
-    if lines.is_empty() {
-        return Ok(Vec::new());
-    }
-    let width = needle.len();
-    let mut found = Vec::new();
-    for first in 0..lines.len() {
-        let last = first + width - 1;
-        if last >= lines.len() {
-            break;
+        let content = line.strip_suffix('\n').unwrap_or(line);
+        let content = content.strip_suffix('\r').unwrap_or(content);
+        if spans.len() == width {
+            spans.pop_front();
         }
-        let matches = needle
-            .iter()
-            .enumerate()
-            .all(|(index, wanted)| normalize_line(lines[first + index].2) == *wanted);
-        if !matches {
+        spans.push_back((start, start + content.len(), offset));
+        let normalized = normalize_line(content);
+        while matched > 0 && needle[matched] != normalized {
+            matched = prefix[matched - 1];
+        }
+        if needle[matched] == normalized {
+            matched += 1;
+        }
+        if matched != width {
             continue;
         }
         if found.len() >= MAX_MATCHES {
@@ -47,25 +60,32 @@ pub(super) fn relaxed_literal_matches(body: &str, pattern: &str) -> Result<Vec<F
                 "edit produced more than {MAX_MATCHES} matches"
             )));
         }
-        let start = lines[first].0;
-        let mut end = lines[last].0 + lines[last].1;
-        if !include_terminator {
-            let content_len = lines[last].2.len();
-            end = lines[last].0 + content_len;
-        }
+        let &(start, _, _) = spans.front().expect("full matching line window");
+        let &(_, content_end, full_end) = spans.back().expect("full matching line window");
         found.push(Found {
             start,
-            end,
+            end: if include_terminator {
+                full_end
+            } else {
+                content_end
+            },
             pattern_id: 0,
         });
+        // Preserve intersecting windows for the shared ambiguity rejection.
+        matched = prefix[matched - 1];
     }
-    // Preserve overlapping windows for the shared ambiguity check. Dropping
-    // one here would turn an ambiguous edit into an apparently unique match.
     Ok(found)
 }
 
 pub(super) fn normalize_line(line: &str) -> String {
-    line.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut normalized = String::new();
+    for word in line.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.push_str(word);
+    }
+    normalized
 }
 
 pub(super) fn literal_matches(body: &str, patterns: &[String]) -> Result<Vec<Found>, ToolError> {

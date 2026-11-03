@@ -618,12 +618,7 @@ fn run_detail(
         .vm()
         .subagent_session()
         .and_then(|session| session.activity.iter().find(|(id, _)| id == &run.id))
-        .map(|(_, lines)| {
-            lines.join(
-                "
-",
-            )
-        })
+        .map(|(_, lines)| lines.join("\n"))
         .unwrap_or_default();
     div()
         .flex()
@@ -767,11 +762,7 @@ fn run_detail(
         .child(optional_section(
             "agent-identity",
             t("Run identity", "运行标识"),
-            &format!(
-                "{}
-{}",
-                run.id, run.call_id
-            ),
+            &format!("{}\n{}", run.id, run.call_id),
             workspace,
             cx,
         ))
@@ -973,37 +964,29 @@ pub(crate) fn render_subagent_window(
 ) -> AnyElement {
     let selected = workspace.vm().subagent_window.clone().unwrap_or_default();
     let session = workspace.vm().subagent_session();
-    let run = session.and_then(|session| session.run(&selected)).cloned();
-    let workflow = session
-        .and_then(|session| {
-            session
-                .workflows
-                .iter()
-                .find(|workflow| workflow.id == selected)
-        })
-        .cloned();
+    let run = session.and_then(|session| session.run(&selected));
+    let workflow = session.and_then(|session| {
+        session
+            .workflows
+            .iter()
+            .find(|workflow| workflow.id == selected)
+    });
     let legacy = workspace
         .vm()
         .live_jobs
         .iter()
-        .find(|job| job.call_id == selected)
-        .cloned();
+        .find(|job| job.call_id == selected);
     let is_workflow = workflow.is_some();
     let title = run
-        .as_ref()
         .map(|run| run.description.clone())
-        .or_else(|| {
-            workflow
-                .as_ref()
-                .map(|workflow| workflow_label(&workflow.name).to_owned())
-        })
-        .or_else(|| legacy.as_ref().map(|job| job.title()))
+        .or_else(|| workflow.map(|workflow| workflow_label(&workflow.name).to_owned()))
+        .or_else(|| legacy.map(|job| job.title()))
         .unwrap_or_else(|| t("Subagent", "子代理").to_owned());
-    let content = if let Some(run) = &run {
+    let content = if let Some(run) = run {
         run_detail(run, workspace, window, cx)
-    } else if let Some(workflow) = &workflow {
+    } else if let Some(workflow) = workflow {
         workflow_detail(workflow, workspace, window, cx)
-    } else if let Some(job) = &legacy {
+    } else if let Some(job) = legacy {
         let run = AgentRunSnapshot {
             id: job.call_id.clone(),
             call_id: if job.provider_call_id.is_empty() {

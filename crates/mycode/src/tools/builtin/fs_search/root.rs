@@ -374,7 +374,6 @@ fn confirm_child_identity(
     #[cfg(unix)]
     {
         let _ = allowed;
-        confirm_named_unix_metadata(parent, name, Some(expected))?;
         let (identity, kind) = unix_named_identity(parent, name)?;
         if kind != expected {
             return Err(io::Error::new(
