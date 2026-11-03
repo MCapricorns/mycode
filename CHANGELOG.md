@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+## [0.12.41] - 2026-11-03
+
+### Changed
+
+- 带 `[release]` 标记的 `main` 推送发布。
+
 ## [0.12.40] - 2026-11-03
 
 ### Changed
@@ -636,7 +642,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.40...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.41...HEAD
+[0.12.41]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.41
 [0.12.40]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.40
 [0.12.39]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.39
 [0.12.38]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.38
