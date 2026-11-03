@@ -37,6 +37,14 @@ pub(in crate::config::secure_fs) fn read_file(
     let Some((parent, name)) = open_existing_parent(root, components)? else {
         return Ok(None);
     };
+    // Classic FileRenameInformation cannot replace an open destination,
+    // even when the reader shares DELETE. Use the writer's directory mutex
+    // until read_bounded closes the file, including its owner/DACL checks.
+    let mut directory = root.to_path_buf();
+    for component in &components[..components.len() - 1] {
+        directory.push(component);
+    }
+    let _lock = DirectoryLock::acquire(&directory)?;
     let Some(file) = open_existing_regular(&parent, name, true)? else {
         return Ok(None);
     };
@@ -707,6 +715,46 @@ mod tests {
 
         assert_eq!(loaded, AppSettings::default());
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn a_reader_waits_for_a_nested_directory_transaction_to_publish() {
+        use std::sync::mpsc::{RecvTimeoutError, channel};
+        use std::time::Duration;
+
+        let tree = TempTree::new("read-during-replace");
+        let root = tree.path.join("home");
+        let home = HomeLayout::from_root(&root).expect("layout");
+        let relative = "nested/document.json";
+        crate::config::locked_update_owned_file(&home, relative, 1024, |_| Ok(b"before".to_vec()))
+            .expect("initial publish");
+        let components = ["nested".into(), "document.json".into()];
+        let mut transaction = super::Transaction::begin(&root, &components).expect("transaction");
+        let (started_tx, started_rx) = channel();
+        let (finished_tx, finished_rx) = channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                started_tx.send(()).unwrap();
+                let bytes = crate::config::read_owned_file(&home, relative, 1024)
+                    .expect("read after publish")
+                    .expect("document");
+                finished_tx.send(bytes.to_vec()).unwrap();
+            });
+            started_rx.recv().unwrap();
+            assert!(
+                matches!(
+                    finished_rx.recv_timeout(Duration::from_millis(100)),
+                    Err(RecvTimeoutError::Timeout)
+                ),
+                "a reader must wait until the active replacement finishes"
+            );
+            transaction.replace(b"after").expect("replace");
+            drop(transaction);
+            assert_eq!(
+                finished_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                b"after"
+            );
+        });
     }
 
     /// A home created the way the session index does (`create_dir_all`)
