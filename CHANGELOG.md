@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.40] - 2026-11-03
+
 ### Changed
 
 - 对话界面升级为圆润叠纸像素风格：移除输入框工具栏的圆环进度占位（`ProgressCircle`），改为 5 格圆角像素能量块（`context_pips`）并内嵌在底部工具栏芯片行；卡片、输入框、按钮、菜单与状态指示点统一采用柔和圆角、纸张层叠底沿与暖色调板，消除生硬棱角。
@@ -634,7 +636,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.39...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.40...HEAD
+[0.12.40]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.40
 [0.12.39]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.39
 [0.12.38]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.38
 [0.12.37]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.37
