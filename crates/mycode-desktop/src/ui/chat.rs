@@ -28,6 +28,24 @@ use crate::i18n::t;
 use crate::view_model::{ConversationEntry, EntryKind};
 use crate::workspace::Workspace;
 
+/// Shared rich result rendering for the subagent inspector.
+pub(super) fn render_detail_markdown(
+    id: &str,
+    text: &str,
+    theme: &gpui_kit::component::theme::Theme,
+    window: &Window,
+) -> gpui_kit::AnyElement {
+    markdown::render_markdown(
+        id.to_owned().into(),
+        text.to_owned().into(),
+        None,
+        theme,
+        false,
+        window,
+    )
+    .into_any_element()
+}
+
 /// Pictures and code files waiting to ride the next prompt, above the input.
 /// Each chip names one attachment and detaches it.
 pub(super) fn render_attachment_chips(

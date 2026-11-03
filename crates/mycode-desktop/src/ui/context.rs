@@ -149,9 +149,8 @@ pub(crate) fn review_panel(
         .flex_col()
         .rounded(crate::ui::skin::radius_card())
         .border_1()
-        .border_b_2()
-        .border_color(crate::ui::skin::border_strong(theme))
-        .bg(crate::ui::skin::popover(theme))
+        .border_color(crate::ui::skin::border_subtle(theme))
+        .bg(crate::ui::skin::panel_fill(theme))
         .shadow(crate::ui::skin::elevation_shadow(theme))
         .overflow_hidden()
         .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
@@ -188,7 +187,11 @@ pub(crate) fn subagent_window_bounds(
         // The strip the diff panel would occupy: clear of Details.
         diff_right
     };
-    let width = SUBAGENT_WINDOW_WIDTH.min((viewport_width - 2. * PANEL_GAP).max(0.));
+    let available = (viewport_width - preferred - PANEL_GAP).max(SUBAGENT_WINDOW_WIDTH);
+    let width = (viewport_width * 0.38)
+        .clamp(SUBAGENT_WINDOW_WIDTH, 760.)
+        .min(available)
+        .min((viewport_width - 2. * PANEL_GAP).max(0.));
     let right = if preferred + width + PANEL_GAP <= viewport_width {
         preferred
     } else {
@@ -250,9 +253,8 @@ pub(super) fn render_context_panel(
                 .overflow_hidden()
                 .rounded(super::skin::radius_card())
                 .border_1()
-                .border_b_2()
                 .border_color(super::skin::glass_border(theme))
-                .bg(super::skin::glass_sidebar(theme))
+                .bg(super::skin::panel_fill(theme))
                 .child(inspector_bar(true, cx))
                 .child(inspector_body(workspace, cx)),
         )
@@ -300,8 +302,8 @@ pub(super) fn render_inspector_drawer(
                 .flex_col()
                 .rounded(super::skin::radius_card())
                 .border_1()
-                .border_color(super::skin::border_strong(theme))
-                .bg(super::skin::glass_sidebar(theme))
+                .border_color(super::skin::border_subtle(theme))
+                .bg(super::skin::panel_fill(theme))
                 .shadow(super::skin::elevation_shadow(theme))
                 .overflow_hidden()
                 .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
@@ -334,14 +336,15 @@ fn inspector_bar(docked: bool, cx: &Context<Workspace>) -> impl IntoElement {
         .items_center()
         .gap_2()
         .px_3()
-        .h(px(36.))
+        .h(px(48.))
         .border_b_1()
         .border_color(super::skin::glass_border(theme))
         .child(
             div()
                 .flex_1()
-                .text_xs()
-                .text_color(theme.muted_foreground)
+                .text_sm()
+                .font_weight(super::skin::WEIGHT_STRONG)
+                .text_color(theme.foreground)
                 .child(t("Details", "详情")),
         )
         .child(super::icon_button(
@@ -381,22 +384,30 @@ fn inspector_body(workspace: &mut Workspace, cx: &mut Context<Workspace>) -> imp
         .py_3()
         .flex()
         .flex_col()
-        .gap_4()
-        .when(
-            crate::view_model::task_surface_visible(workspace.vm())
-                && workspace.vm().has_subagents(),
-            |this| this.child(render_subagents(workspace, cx)),
+        .gap_5()
+        .child(render_subagents(workspace, cx))
+        .child(
+            div()
+                .pt_4()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .child(render_changes(workspace, cx)),
         )
-        .child(render_changes(workspace, cx))
-        .child(render_model_usage(workspace, cx))
+        .child(
+            div()
+                .pt_4()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .child(render_model_usage(workspace, cx)),
+        )
 }
 
 fn section_heading(text: &str, theme: &Theme) -> impl IntoElement {
     div()
-        .text_xs()
+        .text_sm()
         .font_weight(crate::ui::skin::WEIGHT_STRONG)
-        .text_color(theme.muted_foreground)
-        .child(text.to_uppercase())
+        .text_color(theme.foreground)
+        .child(text.to_owned())
 }
 
 fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {

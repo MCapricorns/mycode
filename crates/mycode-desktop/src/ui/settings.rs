@@ -85,8 +85,6 @@ pub(super) fn render_settings_view(
                             cx.reduce_motion(),
                             div()
                                 .id("settings-content-inner")
-                                .mx_auto()
-                                .max_w(px(960.))
                                 .w_full()
                                 .h_auto()
                                 .flex_none()
@@ -95,7 +93,7 @@ pub(super) fn render_settings_view(
                                 .justify_start()
                                 .gap(crate::ui::skin::space(6))
                                 .px_6()
-                                .py_4()
+                                .py_6()
                                 .child(
                                     div()
                                         .id("settings-page-header")
@@ -108,7 +106,7 @@ pub(super) fn render_settings_view(
                                         .pb_1()
                                         .child(
                                             div()
-                                                .text_lg()
+                                                .text_size(px(24.))
                                                 .font_weight(crate::ui::skin::WEIGHT_STRONG)
                                                 .child(section.label()),
                                         )
@@ -177,7 +175,7 @@ fn settings_header(
         .gap_3()
         .border_b_1()
         .border_color(theme.border)
-        .bg(theme.title_bar)
+        .bg(crate::ui::skin::glass(theme))
         .child(
             div()
                 .id("settings-back")

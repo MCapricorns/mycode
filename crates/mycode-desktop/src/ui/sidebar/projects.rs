@@ -116,7 +116,12 @@ fn unassigned_row(selected: bool, cx: &Context<Workspace>) -> impl IntoElement {
                 .flex_shrink_0()
                 .text_color(theme.muted_foreground),
         )
-        .child(div().text_sm().truncate().child(t("Unassigned", "未分配")))
+        .child(
+            div()
+                .text_sm()
+                .truncate()
+                .child(t("Default chat", "默认聊天")),
+        )
 }
 
 fn project_row(root: &str, cwd: Option<&str>, cx: &Context<Workspace>) -> impl IntoElement {

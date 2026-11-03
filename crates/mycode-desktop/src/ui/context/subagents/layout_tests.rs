@@ -123,6 +123,7 @@ impl Render for DetailProbe {
             "a_very_long_directory_name".repeat(14)
         );
         let row = AgentRow {
+            workflow: false,
             id: "run".into(),
             title: "Audit cancellation and retained results under window resizing".into(),
             role: "sentinel".into(),

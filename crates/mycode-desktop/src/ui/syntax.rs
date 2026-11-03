@@ -5,8 +5,10 @@
 use gpui_kit::base::TextViewDefaults;
 use gpui_kit::base::text::CodeBlock;
 use gpui_kit::component::theme::Theme;
-use gpui_kit::{App, FontStyle, HighlightStyle, Hsla};
+use gpui_kit::{App, FontStyle, HighlightStyle, Hsla, SharedString};
 use mycode::frontend::highlight::{TokenKind, highlight};
+use std::ops::Range;
+use std::sync::{Arc, LazyLock};
 
 /// Rebuilds the Base theme, then installs the code highlighter on top.
 ///
@@ -27,6 +29,35 @@ pub(crate) fn sync_base(cx: &mut App) {
                 .collect()
         })
         .install(cx);
+}
+
+type CodeHighlighter = Arc<dyn Fn(&CodeBlock) -> Vec<(Range<usize>, HighlightStyle)> + Send + Sync>;
+
+/// Bind fenced code directly to the application lexer, independently of theme defaults.
+pub(super) fn code_view(
+    id: String,
+    source: SharedString,
+    theme: &Theme,
+) -> gpui_kit::base::TextView {
+    static LIGHT: LazyLock<CodeHighlighter> =
+        LazyLock::new(|| Arc::new(|block| code_highlights(block, true)));
+    static DARK: LazyLock<CodeHighlighter> =
+        LazyLock::new(|| Arc::new(|block| code_highlights(block, false)));
+    gpui_kit::base::TextView::markdown(SharedString::from(id), source)
+        .shared_code_block_highlighter(if theme.mode.is_dark() {
+            DARK.clone()
+        } else {
+            LIGHT.clone()
+        })
+        .selectable(true)
+        .selection_format(gpui_kit::base::text::SelectionFormat::Plain)
+}
+
+fn code_highlights(block: &CodeBlock, light: bool) -> Vec<(Range<usize>, HighlightStyle)> {
+    highlight(&block.code(), block.lang().as_deref())
+        .into_iter()
+        .map(|(range, kind)| (range, style(kind, light)))
+        .collect()
 }
 
 pub(crate) fn style(kind: TokenKind, light: bool) -> HighlightStyle {

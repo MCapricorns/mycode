@@ -66,7 +66,10 @@ fn the_subagent_window_stacks_left_of_details_drawer_and_diff() {
     let (right, width) =
         super::subagent_window_bounds(wide, super::INSPECTOR_OVERLAY_SPAN, false, false);
     assert_eq!(right, super::INSPECTOR_OVERLAY_SPAN + 12.);
-    assert_eq!(width, super::SUBAGENT_WINDOW_WIDTH);
+    assert!(width >= super::SUBAGENT_WINDOW_WIDTH);
+    let (_, wider) =
+        super::subagent_window_bounds(2560., super::INSPECTOR_OVERLAY_SPAN, false, false);
+    assert!(wider > width, "agent details should use a wider window");
     // With the drawer open it moves left of the drawer.
     let (right, _) =
         super::subagent_window_bounds(wide, super::INSPECTOR_OVERLAY_SPAN, true, false);

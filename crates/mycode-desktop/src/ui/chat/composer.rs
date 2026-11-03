@@ -90,9 +90,7 @@ pub(super) fn render_composer(
     let sending = workspace.vm().sending || workspace.vm().compacting;
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
     let has_attachments = !workspace.attachments.is_empty();
-    // A draft or a dropped attachment alone enables the arrow:
-    // `submit_from_welcome` answers a missing folder with a toast instead of
-    // leaving a dead button.
+    // A draft or attachment enables sending, including in the default chat space.
     let can_send = has_draft || has_attachments;
     let steer_panel = (!workspace.vm().pending_steers.is_empty())
         .then(|| render_pending_steers(&workspace.vm().pending_steers, cx).into_any_element());
@@ -178,7 +176,7 @@ pub(super) fn render_composer(
     let project_chip_label: SharedString = session_project
         .as_deref()
         .map(project_label)
-        .unwrap_or_else(|| t("Set folder", "选择目录").to_owned())
+        .unwrap_or_else(|| t("Default chat", "默认聊天").to_owned())
         .into();
     // The chip shows the folder's basename; the tooltip carries the full path.
     let project_tooltip: Option<SharedString> = session_project.as_deref().map(SharedString::from);
@@ -225,9 +223,6 @@ pub(super) fn render_composer(
         .justify_center()
         .w_full()
         .flex_shrink_0()
-        .border_t_1()
-        .border_color(theme.border)
-        .bg(theme.sidebar)
         .px_4()
         .py_3()
         .child(
@@ -252,12 +247,12 @@ pub(super) fn render_composer(
                         .px(skin::space(3))
                         .py(skin::space(2))
                         .w_full()
-                        .min_h(px(58.))
-                        .rounded(px(14.))
+                        .min_h(px(56.))
+                        .rounded(skin::radius_card())
                         .border_1()
-                        .border_b_2()
                         .border_color(skin::border_subtle(theme))
-                        .bg(skin::popover(theme))
+                        .bg(skin::panel_fill(theme))
+                        .shadow(skin::elevation_shadow(theme))
                         // Dropping a picture or a code file attaches it to
                         // the next prompt; folders still bind the project.
                         .can_drop(|value, _, _| value.is::<gpui_kit::ExternalPaths>())
@@ -483,20 +478,10 @@ fn composer_pill_chip(
         .gap(px(5.))
         .min_w_0()
         .max_w(chip.max_w)
-        .px(px(10.))
-        .h(px(26.))
-        .rounded(skin::radius_sm())
-        .border_1()
-        .border_color(if chip.open {
-            theme.primary.opacity(0.55)
-        } else {
-            theme.border.opacity(0.75)
-        })
-        .bg(if chip.open {
-            theme.secondary_hover
-        } else {
-            theme.sidebar.opacity(0.55)
-        })
+        .px(px(8.))
+        .h(px(24.))
+        .rounded(px(6.))
+        .when(chip.open, |this| this.bg(theme.secondary_hover))
         .text_xs()
         .cursor_pointer()
         .text_color(ink)
@@ -523,12 +508,9 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .px(px(8.))
-        .h(px(26.))
-        .rounded(skin::radius_sm())
-        .border_1()
-        .border_color(theme.border.opacity(0.65))
-        .bg(theme.sidebar.opacity(0.45))
+        .px(px(7.))
+        .h(px(24.))
+        .rounded(px(6.))
         .text_xs()
         .text_color(theme.muted_foreground)
         .cursor_pointer()
@@ -753,12 +735,9 @@ fn composer_meter_chip(
         .gap(skin::space(1))
         .min_w_0()
         .max_w(px(220.))
-        .px(px(9.))
-        .h(px(26.))
-        .rounded(skin::radius_sm())
-        .border_1()
-        .border_color(theme.border.opacity(0.65))
-        .bg(theme.sidebar.opacity(0.45))
+        .px(skin::space(2))
+        .h(px(24.))
+        .rounded(px(6.))
         .text_xs()
         // The resting label is the window ratio alone; the cache figures
         // and the turn's in/out ride the hover tooltip instead of crowding

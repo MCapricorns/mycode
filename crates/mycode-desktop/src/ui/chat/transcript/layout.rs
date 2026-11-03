@@ -117,6 +117,55 @@ fn open_probe(
 }
 
 #[gpui_kit::test]
+fn thinking_and_reply_fill_a_maximized_conversation(cx: &mut TestAppContext) {
+    struct WideProbe;
+    impl Render for WideProbe {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let mut entry = assistant("wide", "A reply follows the available conversation width.");
+            entry.thinking = "Checking the current implementation and its constraints.".into();
+            div().size_full().child(transcript_stack().child(desk_block(
+                &entry,
+                assistant_block(
+                    &entry,
+                    true,
+                    super::AssistantDisplay {
+                        reasoning: true,
+                        speaker: true,
+                    },
+                    None,
+                    cx.theme(),
+                    window,
+                    super::AssistantActions {
+                        on_toggle: Box::new(|_, _, _| {}),
+                        on_copy: Box::new(|_, _, _| {}),
+                    },
+                ),
+            )))
+        }
+    }
+    cx.update(gpui_kit::init);
+    for width in [960., 1440., 1920., 2560.] {
+        let handle = cx.open_window(size(px(width), px(600.)), |_, _| WideProbe);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let entry = window.find("entry-wide").bounds();
+            let thinking = window.find("thinking-toggle-thinking-wide").bounds();
+            let reply = window.find("reply-shell-agent-md-wide").bounds();
+            assert!(
+                thinking.size.width >= entry.size.width - px(30.),
+                "thinking must fill {width}px: {thinking:?}"
+            );
+            assert!(
+                reply.size.width >= entry.size.width - px(30.),
+                "reply must fill {width}px: {reply:?}"
+            );
+            assert!(thinking.right() <= entry.right() && reply.right() <= entry.right());
+        })
+        .unwrap();
+    }
+}
+
+#[gpui_kit::test]
 fn a_long_running_status_stays_inside_the_column(cx: &mut TestAppContext) {
     struct StatusProbe(String);
     impl Render for StatusProbe {

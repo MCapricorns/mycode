@@ -653,7 +653,10 @@ fn render_blocks(
                 MarkdownBlock::Code(body) => div()
                     .w_full()
                     .min_w_0()
-                    .child(text_view(format!("{id}-c{index}"), body, ink, fade))
+                    .child(
+                        crate::ui::syntax::code_view(format!("{id}-c{index}"), body, theme)
+                            .text_color(ink),
+                    )
                     .into_any_element(),
                 MarkdownBlock::Table(table) => {
                     let widths = match cache {
@@ -670,16 +673,9 @@ fn render_blocks(
         }))
 }
 
-/// Left-aligns a block on the same edge as the tool cards.
-///
-/// `max_w` only caps an ultrawide pane. The block is not centered, so a
-/// normal chat column matches the tool-card width.
+/// Shares the full available transcript width with tool cards and the composer.
 pub(super) fn prose_measure(child: impl IntoElement) -> impl IntoElement {
-    div()
-        .w_full()
-        .max_w(skin::prose_max())
-        .min_w_0()
-        .child(child)
+    div().w_full().min_w_0().child(child)
 }
 
 /// `ink` overrides the theme foreground the TextView root paints with, so

@@ -90,7 +90,74 @@ pub(super) fn render_agents_section(
         .flex_col()
         .gap_4()
         .children(groups)
+        .child(workflow_templates(cx.theme()))
         .into_any_element()
+}
+
+fn workflow_templates(theme: &Theme) -> impl IntoElement {
+    let templates = [
+        (
+            "research",
+            t(
+                "Independent evidence, synthesis and acceptance",
+                "独立取证、综合结论与验收",
+            ),
+        ),
+        (
+            "code-review",
+            t(
+                "Multiple review perspectives and independent acceptance",
+                "多角度代码审查与独立验收",
+            ),
+        ),
+        (
+            "migration",
+            t(
+                "Scoped changes, worktree integration and verification",
+                "划分修改范围、整合 worktree 并验证",
+            ),
+        ),
+    ];
+    super::widgets::settings_card(
+        "workflows",
+        t("Workflow templates", "工作流模板"),
+        Some(t(
+            "The model can start a suitable workflow for a substantial task. Enabled roles and independent acceptance are required.",
+            "模型可为复杂任务主动选择工作流；启动时会检查所需角色与独立验收角色是否可用。",
+        )),
+        theme,
+        templates
+            .into_iter()
+            .map(|(name, description)| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        Icon::new(IconName::GitBranch)
+                            .small()
+                            .text_color(theme.primary),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_sm().font_weight(skin::WEIGHT_STRONG).child(name))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .whitespace_normal()
+                                    .text_color(theme.muted_foreground)
+                                    .child(description),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .collect(),
+    )
 }
 
 fn role_row(

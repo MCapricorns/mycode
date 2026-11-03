@@ -29,10 +29,13 @@ pub(super) fn render_page_band(
         .map(|summary| summary.title.clone())
         .filter(|title| !title.is_empty())
         .unwrap_or_else(|| t("New conversation", "新对话").to_owned());
-    let scope = vm
-        .project_dir
-        .clone()
-        .unwrap_or_else(|| t("Choose a project to get started", "选择项目后开始对话").to_owned());
+    let scope = vm.project_dir.clone().unwrap_or_else(|| {
+        t(
+            "Default workspace · Choose a project anytime",
+            "默认空间 · 可随时选择项目",
+        )
+        .to_owned()
+    });
     let git = workspace.git();
     let changes = if git.note.is_some() {
         t("Review changes", "查看改动").to_owned()

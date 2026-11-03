@@ -12,7 +12,7 @@ use gpui_kit::{
 
 use crate::workspace::Workspace;
 
-/// One settings card: a quiet border, an opaque surface, and a short title.
+/// One settings sheet with a clear heading and aligned control rows.
 pub(super) fn settings_card(
     id: &str,
     title: &str,
@@ -57,12 +57,11 @@ pub(super) fn settings_card(
         .flex_col()
         .justify_start()
         .gap(crate::ui::skin::space(4))
-        .p(crate::ui::skin::space(6))
+        .p(crate::ui::skin::space(5))
         .rounded(crate::ui::skin::radius_card())
         .border_1()
-        .border_b_2()
         .border_color(crate::ui::skin::glass_border(theme))
-        .bg(crate::ui::skin::frost_card(theme))
+        .bg(crate::ui::skin::panel_fill(theme))
         .test_support()
         .child(
             div()

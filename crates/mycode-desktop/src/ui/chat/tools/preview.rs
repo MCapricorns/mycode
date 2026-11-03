@@ -304,6 +304,21 @@ pub(super) fn code_calls_body(
         .children(calls.iter().map(|call| code_call_row(call, theme, desk)));
     let head = head.trim();
     if !head.is_empty() {
+        let preview = (calls.len() == 1 && !calls[0].failed)
+            .then(|| {
+                let call = &calls[0];
+                let target = tool_label_target(call.label);
+                match tool_name(call.label) {
+                    "read" => file_preview(read_path(target), head, theme, desk),
+                    tool if is_shell_tool(tool) => shell_read::shell_read_path(target)
+                        .and_then(|path| file_preview(&path, head, theme, desk)),
+                    _ => None,
+                }
+            })
+            .flatten();
+        if let Some(preview) = preview {
+            return column.child(preview);
+        }
         column = column.child(
             div()
                 .w_full()

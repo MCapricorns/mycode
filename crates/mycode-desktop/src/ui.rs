@@ -1,5 +1,5 @@
-//! GPUI rendering for the workspace: a quiet frame, a paper-like reading
-//! surface, and an inspector on the right.
+//! GPUI workspace: translucent chrome, a flexible transcript, and contextual panels.
+mod brand;
 mod chat;
 pub(crate) mod command_palette;
 mod context;
@@ -60,7 +60,7 @@ pub fn render_root(
     let theme = cx.theme();
     let ui_font = theme.font_family.clone();
     let fg = theme.foreground;
-    let frame = theme.sidebar;
+    let frame = skin::ambient(theme);
     let focus_handle = workspace.focus_handle().clone();
     // Opening settings unmounts the composer and the sidebar control that
     // was focused. A stale focus handle is not in this frame, so key dispatch
@@ -233,8 +233,7 @@ fn main_pane(
             .mb(px(8.))
             .rounded(skin::radius_card())
             .border_1()
-            .border_b_2()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().border.opacity(0.65))
             .overflow_hidden()
             .flex()
             .flex_col()

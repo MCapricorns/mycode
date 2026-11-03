@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Render MYCode's bracket-M SVG into desktop icons and visual proofs.
+"""Render MYCode's paper-pixel SVGs into desktop icons and gradient wordmarks.
 
 Run `python scripts/make_icon.py` to regenerate, or add `--check` to verify
 committed artifacts. Uses only the standard library. icon.svg is the source:
-its rounded rect and polygon share a square viewBox with no transforms.
+its ordered rectangles and polygons share a square viewBox with no transforms.
 Each size is rasterized directly with 4x supersampling and straight alpha;
 no host fonts, external images, timestamps, or platform tools are involved.
 """
@@ -62,44 +62,58 @@ def coverage(size, scale, spans):
 
 
 def render(svg, size):
-    """RGBA rows from the SVG's rounded tile and wholly contained monogram."""
-    ns = {"svg": "http://www.w3.org/2000/svg"}
-    tile = svg.find("svg:rect", ns)
-    mark = svg.find("svg:polygon", ns)
+    """Rasterize ordered flat SVG shapes with source-over antialiasing."""
     frame = tuple(map(float, svg.attrib["viewBox"].split()))
     if frame[:2] != (0, 0) or frame[2] != frame[3]:
         raise ValueError("icon.svg requires a square viewBox starting at 0,0")
     scale = size / frame[2]
-    tx, ty, tw, th, radius = (
-        float(tile.attrib[k]) for k in ("x", "y", "width", "height", "rx"))
-    points = [tuple(map(float, point.split(",")))
-              for point in mark.attrib["points"].split()]
-    segments = list(zip(points, points[1:] + points[:1]))
-    ground, ink = rgb(tile.attrib["fill"]), rgb(mark.attrib["fill"])
-    samples = SS * SS
-    # Average premultiplied samples, then recover straight-alpha RGB. This
-    # keeps red edges clean on both paper and ink backgrounds.
-    palette = {(0, 0): bytes(4)}
-    for bg in range(1, samples + 1):
-        for fg in range(bg + 1):
-            color = tuple((g * (bg - fg) + i * fg + bg // 2) // bg
-                          for g, i in zip(ground, ink))
-            palette[bg, fg] = bytes((*color, (bg * 255 + samples // 2) // samples))
+    shapes = []
+    for shape in svg:
+        tag = shape.tag.rsplit("}", 1)[-1]
+        if tag in ("title", "desc"):
+            continue
+        color = rgb(shape.attrib["fill"])
+        if tag == "rect":
+            geometry = tuple(float(shape.attrib.get(k, 0))
+                             for k in ("x", "y", "width", "height", "rx"))
+        elif tag == "polygon":
+            points = [tuple(map(float, p.split(",")))
+                      for p in shape.attrib["points"].split()]
+            geometry = list(zip(points, points[1:] + points[:1]))
+        else:
+            raise ValueError(f"unsupported icon shape: {tag}")
+        shapes.append((tag, geometry, color))
     rows = []
+    samples = SS * SS
     for py in range(size):
-        tile_spans, mark_spans = [], []
-        for sy in range(SS):
-            y = (py + (sy + 0.5) / SS) / scale
-            if ty <= y < ty + th:
-                dy = max(ty + radius - y, y - (ty + th - radius), 0)
-                inset = radius - math.sqrt(max(0, radius * radius - dy * dy))
-                tile_spans.append((tx + inset, tx + tw - inset))
-            hits = sorted(ax + (y - ay) * (bx - ax) / (by - ay)
-                          for (ax, ay), (bx, by) in segments
-                          if min(ay, by) <= y < max(ay, by))
-            mark_spans.extend(zip(hits[::2], hits[1::2]))
-        rows.append(b"".join(palette[bg, fg] for bg, fg in zip(
-            coverage(size, scale, tile_spans), coverage(size, scale, mark_spans))))
+        row = bytearray(size * 4)
+        for tag, geometry, color in shapes:
+            spans = []
+            for sy in range(SS):
+                y = (py + (sy + 0.5) / SS) / scale
+                if tag == "rect":
+                    x, top, width, height, radius = geometry
+                    if top <= y < top + height:
+                        dy = max(top + radius - y, y - (top + height - radius), 0)
+                        inset = radius - math.sqrt(max(0, radius * radius - dy * dy))
+                        spans.append((x + inset, x + width - inset))
+                else:
+                    hits = sorted(ax + (y - ay) * (bx - ax) / (by - ay)
+                                  for (ax, ay), (bx, by) in geometry
+                                  if min(ay, by) <= y < max(ay, by))
+                    spans.extend(zip(hits[::2], hits[1::2]))
+            for x, covered in enumerate(coverage(size, scale, spans)):
+                if not covered:
+                    continue
+                at = x * 4
+                alpha = covered / samples
+                old_alpha = row[at + 3] / 255
+                combined = alpha + old_alpha * (1 - alpha)
+                for channel in range(3):
+                    row[at + channel] = round((color[channel] * alpha
+                        + row[at + channel] * old_alpha * (1 - alpha)) / combined)
+                row[at + 3] = round(combined * 255)
+        rows.append(bytes(row))
     return rows
 
 
@@ -113,6 +127,30 @@ def png_bytes(rows, width, height=None):
     raw = b"".join(b"\x00" + row for row in rows)
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def wordmark_images(svg):
+    """Render the pixel mask with each evenly spaced SVG color palette at 3x."""
+    scale = 3
+    width, height = (int(svg.attrib[key]) * scale for key in ("width", "height"))
+    namespace = "{http://www.w3.org/2000/svg}"
+    for gradient in svg.iter(namespace + "linearGradient"):
+        colors = [rgb(stop.attrib["stop-color"]) for stop in gradient]
+        stripe = bytearray()
+        for x in range(width):
+            position = x / (width - 1) * (len(colors) - 1)
+            index = min(int(position), len(colors) - 2)
+            amount = position - index
+            stripe.extend(round(a + (b - a) * amount)
+                          for a, b in zip(colors[index], colors[index + 1]))
+            stripe.append(255)
+        rows = [bytearray(width * 4) for _ in range(height)]
+        for rect in svg.iter(namespace + "rect"):
+            x, y, w, h = (int(rect.attrib[key]) * scale for key in ("x", "y", "width", "height"))
+            for row in rows[y:y + h]:
+                row[x * 4:(x + w) * 4] = stripe[x * 4:(x + w) * 4]
+        index = gradient.attrib["id"].removeprefix("palette-")
+        yield f"wordmark-{index}.png", png_bytes(rows, width, height)
 
 
 def bmp_entry(rows, size):
@@ -282,6 +320,7 @@ def main():
         "icon.png": pngs[1024],
         "icon-preview.png": preview(images),
     }
+    artifacts.update(wordmark_images(ET.parse(assets / "wordmark.svg").getroot()))
     stale = False
     for name, data in artifacts.items():
         path = assets / name

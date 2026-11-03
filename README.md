@@ -9,13 +9,25 @@
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/github/license/MCapricorns/mycode?style=flat-square"></a>
 </p>
 
-**打开项目，用自然语言读代码、修改文件、运行命令。**
+**从一句想法，到一次可检查的改动。**
+
+叠纸像素风的原生工作台，把对话、代码和子代理协作放在一起。
 
 [下载](https://github.com/MCapricorns/mycode/releases/latest) · [快速开始](#快速开始) · [开发](#参与开发) · [Wiki](https://mcapricorns.github.io/mycode/wiki/index.html) · [更新日志](CHANGELOG.md)
 
 </div>
 
-MYCode 是使用 Rust 和 GPUI 的原生编码代理。模型通过本机 [magpie](https://usemagpie.ai) 网关连接；项目操作、会话记录、工具执行和界面状态由 MYCode 管理。发送给模型的消息、附件和工具结果经过网关转发到你配置的上游服务。
+MYCode 是使用 Rust 和 GPUI 构建的原生桌面编码代理。打开就能聊天；选择项目后，可以读代码、修改文件、运行命令，再逐项检查结果。
+
+| 你想做什么 | 在 MYCode 中 |
+| --- | --- |
+| 先聊一个想法 | 欢迎页直接发送消息，使用默认聊天空间 |
+| 开始修改项目 | 选择或拖入目录，附上文件、图片与任务要求 |
+| 看懂模型在做什么 | 对话中查看思考、带高亮的代码和工具进度 |
+| 把复杂任务拆开 | 子代理处理独立任务，workflow 展示节点、依赖和验收结果 |
+| 检查实际成果 | Details 查看任务状态、改动与用量，打开 diff 检查文件 |
+
+模型通过本机 [magpie](https://usemagpie.ai) 网关连接。项目操作、会话记录、工具执行和界面状态由 MYCode 管理；发给模型的消息、附件和工具结果经网关转发到你配置的上游服务。
 
 ## 安装
 
@@ -45,13 +57,15 @@ xattr -d com.apple.quarantine /Applications/MYCode.app
    ```
 
 3. 在 magpie 的 Agents 页为 **MCode** 选择模型。插件会写入 MYCode 的网关绑定。
-4. 打开 MYCode，选择或拖入项目目录，然后输入任务。
+4. 打开 MYCode，在欢迎页直接开始对话。需要处理代码时，选择或拖入项目目录，再输入任务。
 
 MYCode 的「设置 → Magpie」显示网关连接和模型目录。修改 magpie 绑定后，点击「刷新模型」即可同步。没有模型时，先确认 magpie 正在运行、插件已安装、MCode 已完成模型选择。
 
 ## 日常使用
 
-左侧分别显示项目和当前项目的对话。选择项目会打开最近的对话，没有历史则创建新对话。「新对话」或 `/new` 保留当前项目；移除项目入口不会删除文件或历史。未绑定项目的旧会话位于「未分配」。
+欢迎页展示 MYCode 标识和最近项目。未选择项目时，发送消息会使用默认聊天空间；随时可以切换到本地项目。左侧分别显示项目和当前空间的对话。选择项目会打开最近的对话，没有历史则创建新对话。「新对话」或 `/new` 保留当前空间；移除项目入口不会删除文件或历史。未绑定项目的旧会话位于「默认聊天」。
+
+对话、思考区和代码块随窗口宽度伸展。Details 按子代理与工作流、文件改动、模型与用量分组，可以固定在右侧，也可以作为浮层查看。设置页集中管理外观、字号、快捷键、模型、角色、技能和 MCP。
 
 使用 `@` 搜索文件，或拖入文本文件、图片。每条消息最多 4 张图片与 8 个文本文件；单张图片原始数据最多 3.75 MB，全部图片 base64 合计最多 6 MiB；文本单文件最多 256 KiB，合计最多 512 KiB。超长文本会标记截断。
 
@@ -90,7 +104,17 @@ MYCode 没有内置网页搜索。配置 MCP 服务后，通过 `search_tool` / 
 
 角色可在全局 `~/.mycode/agents/` 或项目 `.mycode/agents/` 覆盖、扩展，并在设置中启停。内置只读角色不会因覆盖提示词而获得写入能力。普通 `agent` 调用顺序执行；固定 workflow 可以调度独立节点。没有统一的子代理并发数量上限，但同时修改的路径或符号范围不能重叠。
 
-`agent_workflow` 提供 research、code-review 和 migration 三种固定流程，最后由独立的 sentinel 检查结果。migration 的两个写入任务完成后，先等主代理整合 worktree，再用 resume 继续检查。需要返工时，用 revise 提交反馈，重新执行受影响的任务。子代理不会自动提交、合并或推送。
+主模型会收到主动派遣指引：较大的调研、边界明确的实现与独立审查适合交给子代理，简单问答和小改动直接完成。是否派遣仍由当前模型结合任务、已启用的角色和你的要求判断。
+
+`agent_workflow` 提供三种固定流程，界面会明确标识工作流类型、节点依赖、运行状态和保留结果：
+
+| Workflow | 适用任务 | 完成方式 |
+| --- | --- | --- |
+| research | 需要多个证据视角的调研 | 独立检索、综合结论、sentinel 验收 |
+| code-review | 需要多角度检查的代码审查 | 提供具体代码或 diff，独立审查与验收 |
+| migration | 核心与适配层边界明确的迁移 | 分开修改、主代理整合 worktree、继续检查与验收 |
+
+migration 的写入节点返回后，`waiting_integration` 表示仍需主代理整合，再用 `resume` 继续检查。需要返工时，用 `revise` 提交反馈，重新执行受影响的任务。子代理不会自动提交、合并或推送。
 
 任务结束后，可以用 agent_status 查看结果、错误和文件路径；还在执行的任务可以用 agent_stop 停止。这两个工具在全部角色关闭后仍然可用。agent_message 能给任务补充说明；任务已完成时，需要提供摘要来启动后续工作。它不会恢复原来的模型会话，已取消的任务也不能续接。
 
@@ -138,6 +162,7 @@ cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo test -p mycode-desktop --features test-support --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
+python scripts/make_icon.py --check
 python scripts/build_wiki.py
 python scripts/build_wiki.py --check
 python -B -m unittest discover -s wiki/tests -v

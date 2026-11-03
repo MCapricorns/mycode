@@ -1,4 +1,6 @@
 //! Session agent inspector: compact run/workflow rows and result-first details.
+use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Selectable as _, Sizable as _};
@@ -67,6 +69,7 @@ fn tone_color(tone: StatusTone, theme: &Theme) -> gpui_kit::Hsla {
 struct AgentRow {
     id: String,
     title: String,
+    workflow: bool,
     role: String,
     status: String,
     tone: StatusTone,
@@ -82,6 +85,7 @@ fn can_stop(run: &AgentRunSnapshot) -> bool {
 
 fn run_row(run: &AgentRunSnapshot) -> AgentRow {
     AgentRow {
+        workflow: false,
         id: run.id.clone(),
         title: if run.description.is_empty() {
             run.role.clone()
@@ -193,7 +197,8 @@ fn rows(state: &WorkspaceState) -> Vec<AgentRow> {
                 .unwrap_or_else(|| "—".to_owned());
             AgentRow {
                 id: workflow.id.clone(),
-                title: workflow.name.clone(),
+                title: workflow_label(&workflow.name).to_owned(),
+                workflow: true,
                 role: t("Workflow", "工作流").to_owned(),
                 status: workflow_status_text(workflow),
                 tone: workflow_tone(workflow.status),
@@ -220,7 +225,19 @@ fn rows(state: &WorkspaceState) -> Vec<AgentRow> {
                 cancel_id: None,
             }
         }));
-        rows.extend(session.runs.iter().rev().map(run_row));
+        rows.extend(
+            session
+                .runs
+                .iter()
+                .rev()
+                .filter(|run| {
+                    !session
+                        .workflows
+                        .iter()
+                        .any(|workflow| run.workflow_id.as_deref() == Some(workflow.id.as_str()))
+                })
+                .map(run_row),
+        );
     }
     rows.extend(
         state
@@ -237,6 +254,7 @@ fn rows(state: &WorkspaceState) -> Vec<AgentRow> {
                 })
             })
             .map(|job| AgentRow {
+                workflow: false,
                 id: job.call_id.clone(),
                 title: if job.label.is_empty() {
                     job.title()
@@ -259,25 +277,46 @@ fn rows(state: &WorkspaceState) -> Vec<AgentRow> {
     rows
 }
 
+fn workflow_label(name: &str) -> &str {
+    match name {
+        "research" => t("Research workflow", "调研工作流"),
+        "code-review" => t("Code review workflow", "代码审查工作流"),
+        "migration" => t("Migration workflow", "迁移工作流"),
+        name => name,
+    }
+}
+
 fn row_content(row: &AgentRow, theme: &Theme) -> Div {
     div()
         .w_full()
         .min_w_0()
         .flex()
         .flex_col()
-        .gap_1()
+        .gap_2()
         .child(
             div()
+                .w_full()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .gap_2()
-                .min_w_0()
+                .child(
+                    Icon::new(if row.workflow {
+                        IconName::GitBranch
+                    } else {
+                        IconName::Bot
+                    })
+                    .small()
+                    .flex_shrink_0()
+                    .text_color(theme.primary),
+                )
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .text_sm()
                         .truncate()
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .text_color(theme.foreground)
                         .child(row.title.clone()),
                 )
@@ -285,17 +324,24 @@ fn row_content(row: &AgentRow, theme: &Theme) -> Div {
                     div()
                         .flex_shrink_0()
                         .text_xs()
-                        .font_family(theme.mono_font_family.clone())
                         .text_color(theme.muted_foreground)
                         .child(row.elapsed.clone()),
                 ),
         )
         .child(
             div()
+                .w_full()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .gap_2()
-                .min_w_0()
+                .child(crate::ui::lamp(tone_color(row.tone, theme)))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(tone_color(row.tone, theme))
+                        .child(row.status.clone()),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -304,13 +350,6 @@ fn row_content(row: &AgentRow, theme: &Theme) -> Div {
                         .truncate()
                         .text_color(theme.muted_foreground)
                         .child(row.role.clone()),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(tone_color(row.tone, theme))
-                        .child(row.status.clone()),
                 ),
         )
         .when(!row.activity.is_empty(), |this| {
@@ -335,7 +374,9 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
             .vm()
             .subagent_session()
             .and_then(|session| session.run(id))
-            .map_or(id, |run| run.id.as_str())
+            .map_or(id, |run| {
+                run.workflow_id.as_deref().unwrap_or(run.id.as_str())
+            })
     });
     div()
         .id("subagents")
@@ -351,7 +392,7 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                     div()
                         .text_sm()
                         .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                        .child(t("Subagents", "子代理")),
+                        .child(t("Agents & workflows", "子代理与工作流")),
                 )
                 .child(
                     div()
@@ -366,10 +407,22 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                 .whitespace_normal()
                 .text_color(theme.muted_foreground)
                 .child(t(
-                    "Recent runs in this session · this app process",
-                    "此会话的近期运行 · 当前应用进程",
+                    "Tasks, progress and retained results",
+                    "任务进度、流程节点与保留结果",
                 )),
         )
+        .when(count == 0, |this| {
+            this.child(
+                div()
+                    .py_3()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(t(
+                        "Delegated tasks will appear here.",
+                        "派遣的任务将在这里显示。",
+                    )),
+            )
+        })
         .child(
             div()
                 .id("subagents-list")
@@ -384,7 +437,8 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                     let is_selected = selected == Some(id.as_str());
                     div()
                         .flex()
-                        .flex_col()
+                        .flex_row()
+                        .items_start()
                         .min_w_0()
                         .flex_shrink_0()
                         .gap_1()
@@ -392,10 +446,17 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                             Button::new(format!("subagent-open-{index}"))
                                 .ghost()
                                 .h_auto()
-                                .w_full()
+                                .flex_1()
                                 .min_w_0()
-                                .px_2()
-                                .py_2()
+                                .px_3()
+                                .py_3()
+                                .rounded(crate::ui::skin::radius_sm())
+                                .border_1()
+                                .border_color(if is_selected {
+                                    theme.primary.opacity(0.55)
+                                } else {
+                                    theme.border
+                                })
                                 .selected(is_selected)
                                 .accessibility_label(format!(
                                     "{}: {}",
@@ -474,6 +535,26 @@ fn detail_section(id: &str, title: &str, text: &str, theme: &Theme) -> gpui_kit:
         .child(detail_text(&format!("{id}-text"), text))
 }
 
+fn result_section(id: &str, title: &str, text: &str, theme: &Theme, window: &Window) -> Div {
+    div()
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .text_sm()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                .child(title.to_owned()),
+        )
+        .child(crate::ui::chat::render_detail_markdown(
+            id, text, theme, window,
+        ))
+}
+
 fn copy_button(id: &str, label: &str, text: String, cx: &Context<Workspace>) -> Button {
     Button::new(id.to_owned())
         .label(label.to_owned())
@@ -528,6 +609,7 @@ fn optional_section(
 fn run_detail(
     run: &AgentRunSnapshot,
     workspace: &Workspace,
+    window: &Window,
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -595,11 +677,12 @@ fn run_detail(
             )
         })
         .when_some(run.result.clone(), |this, result| {
-            this.child(detail_section(
+            this.child(result_section(
                 "agent-result",
                 t("Result", "结果"),
                 &result,
                 theme,
+                window,
             ))
             .child(copy_button(
                 "agent-copy-result",
@@ -720,6 +803,7 @@ fn acceptance_text(workflow: &AgentWorkflowSnapshot) -> String {
 fn workflow_detail(
     workflow: &AgentWorkflowSnapshot,
     workspace: &Workspace,
+    window: &Window,
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let theme = cx.theme();
@@ -738,7 +822,17 @@ fn workflow_detail(
             div()
                 .text_sm()
                 .text_color(tone_color(workflow_tone(workflow.status), theme))
-                .child(workflow_status_text(workflow)),
+                .child(format!(
+                    "{} · {} / {} {}",
+                    workflow_status_text(workflow),
+                    workflow
+                        .nodes
+                        .iter()
+                        .filter(|node| node.status == AgentRunStatus::Completed)
+                        .count(),
+                    workflow.nodes.len(),
+                    t("nodes complete", "节点完成")
+                )),
         )
         .child(
             detail_section(
@@ -753,11 +847,12 @@ fn workflow_detail(
             ),
         )
         .when_some(workflow.result.clone(), |this, result| {
-            this.child(detail_section(
+            this.child(result_section(
                 "workflow-result",
                 t("Result / handoff", "结果 / 交接"),
                 &result,
                 theme,
+                window,
             ))
             .child(copy_button(
                 "workflow-copy-result",
@@ -792,6 +887,9 @@ fn workflow_detail(
                 .min_w_0()
                 .gap_2()
                 .flex_shrink_0()
+                .pt_3()
+                .border_t_1()
+                .border_color(theme.border)
                 .child(
                     div()
                         .flex()
@@ -890,16 +988,21 @@ pub(crate) fn render_subagent_window(
         .iter()
         .find(|job| job.call_id == selected)
         .cloned();
+    let is_workflow = workflow.is_some();
     let title = run
         .as_ref()
         .map(|run| run.description.clone())
-        .or_else(|| workflow.as_ref().map(|workflow| workflow.name.clone()))
+        .or_else(|| {
+            workflow
+                .as_ref()
+                .map(|workflow| workflow_label(&workflow.name).to_owned())
+        })
         .or_else(|| legacy.as_ref().map(|job| job.title()))
         .unwrap_or_else(|| t("Subagent", "子代理").to_owned());
     let content = if let Some(run) = &run {
-        run_detail(run, workspace, cx)
+        run_detail(run, workspace, window, cx)
     } else if let Some(workflow) = &workflow {
-        workflow_detail(workflow, workspace, cx)
+        workflow_detail(workflow, workspace, window, cx)
     } else if let Some(job) = &legacy {
         let run = AgentRunSnapshot {
             id: job.call_id.clone(),
@@ -922,7 +1025,7 @@ pub(crate) fn render_subagent_window(
             workflow_id: None,
             node_id: None,
         };
-        run_detail(&run, workspace, cx)
+        run_detail(&run, workspace, window, cx)
     } else {
         detail_text(
             "agent-expired",
@@ -957,20 +1060,37 @@ pub(crate) fn render_subagent_window(
         .flex_col()
         .rounded(crate::ui::skin::radius_card())
         .border_1()
-        .border_color(crate::ui::skin::border_strong(theme))
-        .bg(crate::ui::skin::popover(theme))
+        .border_color(crate::ui::skin::border_subtle(theme))
+        .bg(crate::ui::skin::panel_fill(theme))
         .shadow(crate::ui::skin::elevation_shadow(theme))
         .overflow_hidden()
         .child(
             div()
-                .px_3()
-                .py_2()
+                .px_4()
+                .py_3()
                 .flex()
                 .items_center()
-                .gap_2()
+                .gap_3()
                 .border_b_1()
                 .border_color(theme.border)
-                .child(div().flex_1().min_w_0().text_sm().truncate().child(title))
+                .child(
+                    Icon::new(if is_workflow {
+                        IconName::GitBranch
+                    } else {
+                        IconName::Bot
+                    })
+                    .small()
+                    .text_color(theme.primary),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                        .whitespace_normal()
+                        .child(title),
+                )
                 .child(
                     Button::new("subagent-window-close")
                         .label(t("Close", "关闭"))
@@ -990,7 +1110,7 @@ pub(crate) fn render_subagent_window(
                 .min_w_0()
                 .overflow_y_scroll()
                 .track_scroll(&scroll)
-                .p_3()
+                .p_4()
                 .flex()
                 .flex_col()
                 .gap_4()

@@ -109,9 +109,7 @@ fn action_strip(cx: &Context<Workspace>) -> impl IntoElement + use<> {
                 .h(px(NEW_TASK_H))
                 .justify_start()
                 .on_click(cx.listener(|workspace, _, _, cx| {
-                    if !workspace.on_new_session(cx) {
-                        workspace.on_open_project_dialog(cx);
-                    }
+                    workspace.on_new_session(cx);
                 }))
                 .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
                 .child(super::chat::new_task_label()),

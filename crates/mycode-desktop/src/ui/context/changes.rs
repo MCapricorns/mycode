@@ -56,12 +56,17 @@ pub(super) fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> 
             )
         })
         .when_some(git.note.clone(), |this, note| {
-            this.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(note),
-            )
+            this.child(div().text_xs().text_color(theme.muted_foreground).child(
+                if workspace.vm().project_dir.is_none() {
+                    t(
+                        "Open a project to review changes.",
+                        "打开项目后可查看文件改动。",
+                    )
+                    .to_owned()
+                } else {
+                    note
+                },
+            ))
         })
         .when(git.note.is_none() && git.files.is_empty(), |this| {
             this.child(

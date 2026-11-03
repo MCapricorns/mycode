@@ -84,15 +84,7 @@ impl Workspace {
         match command {
             PaletteCommand::NewSession => {
                 self.on_show_main_view(MainView::Chat, cx);
-                if !crate::view_model::has_open_folder(self.vm()) {
-                    self.push_toast(
-                        crate::i18n::t("Open a folder to get started.", "打开一个目录即可开始。"),
-                        crate::workspace::ToastKind::Info,
-                        cx,
-                    );
-                } else {
-                    self.on_new_session(cx);
-                }
+                self.on_new_session(cx);
             }
             PaletteCommand::OpenSession(session_id) => {
                 self.on_show_main_view(MainView::Chat, cx);

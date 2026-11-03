@@ -213,21 +213,39 @@ def render(graph: dict, files: dict[str, str]) -> str:
 
 
 def brand_assets() -> dict[Path, str]:
-    """Reuse the native mark verbatim; never maintain a second M polygon."""
+    """Share native paper-pixel artwork across the application and documentation."""
     icon = ICON.read_text(encoding="utf-8")
+    wordmark = ICON.with_name("wordmark.svg").read_text(encoding="utf-8")
     mark = icon.split(">", 1)[1].rsplit("</svg>", 1)[0]
-    banner = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="MYCode — Rust 原生编码代理">
-  <rect width="1280" height="360" rx="20" fill="#F3EDE2"/>
-  <rect x="12" y="12" width="1256" height="336" rx="12" fill="#FAF6EE"/>
-  <svg x="64" y="90" width="180" height="180" viewBox="0 0 256 256">{mark}</svg>
+    letters = wordmark.split(">", 1)[1].rsplit("</svg>", 1)[0]
+    banner = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="MYCode — 每次改动，有迹可循。">
+  <defs><linearGradient id="paper" x2="1" y2="1"><stop stop-color="#FFF9EF"/><stop offset="1" stop-color="#F3E6D7"/></linearGradient></defs>
+  <rect width="1280" height="400" rx="16" fill="#EADBC9"/>
+  <rect x="16" y="16" width="1240" height="368" rx="12" fill="#D7C4B1"/>
+  <rect x="8" y="8" width="1240" height="368" rx="12" fill="url(#paper)"/>
+  <svg x="48" y="78" width="208" height="208" viewBox="0 0 256 256">{mark}</svg>
+  <svg x="292" y="88" width="420" height="84" viewBox="0 0 350 70">{letters}</svg>
   <g font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
-    <text x="284" y="160" font-size="68" font-weight="650" letter-spacing="-2" fill="#14131B">MYCode</text>
-    <text x="288" y="212" font-size="26" fill="#14131B">每次改动，有迹可循。</text>
-    <text x="288" y="260" font-size="18" fill="#625D58">原生桌面编码代理 · Rust + GPUI</text>
+    <text x="292" y="228" font-size="30" font-weight="600" fill="#26232D">每次改动，有迹可循。</text>
+    <text x="294" y="274" font-size="19" fill="#625B64">对话 · 编码 · 子代理协作</text>
+    <text x="294" y="320" font-size="15" fill="#625B64">Rust + GPUI · Windows / macOS</text>
   </g>
+  <rect x="866" y="90" width="292" height="228" rx="8" fill="#C9B39F"/>
+  <rect x="850" y="74" width="292" height="228" rx="8" fill="#EAD6BF"/>
+  <rect x="834" y="58" width="292" height="228" rx="8" fill="#FFFBF4" stroke="#D8C8B8"/>
+  <path d="M1086 58v40h40" fill="#E97560"/>
+  <g font-family="Cascadia Code, Consolas, monospace" font-size="18">
+    <text x="862" y="112" fill="#C8373D">MYCode</text>
+    <text x="862" y="158" fill="#625B64">read  →  understand</text>
+    <text x="862" y="196" fill="#26232D">edit  →  build</text>
+    <text x="862" y="234" fill="#246B4F">check →  ship</text>
+  </g>
+  <g fill="#C8373D"><rect x="1180" y="294" width="12" height="12"/><rect x="1196" y="310" width="12" height="12"/><rect x="1180" y="326" width="12" height="12"/></g>
 </svg>
 '''
-    return {ROOT / "wiki/images/logo.svg": icon, ROOT / "wiki/images/banner.svg": banner}
+    return {ROOT / "wiki/images/logo.svg": icon,
+            ROOT / "wiki/images/wordmark.svg": wordmark,
+            ROOT / "wiki/images/banner.svg": banner}
 
 
 def main() -> int:

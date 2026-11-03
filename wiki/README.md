@@ -34,7 +34,10 @@ python -B -m unittest discover -s wiki/tests -v
 - scripts/wiki_shell.html：页面布局、导航、搜索和源码窗口。
 - wiki/graph.json：模块名称、说明、关联和源码路径。
 - wiki/architecture/：在线页面中的两篇说明。
-- crates/mycode-desktop/assets/icon.svg：品牌图标原稿，生成器据此更新 Wiki 的 logo.svg 和 banner.svg。
+- crates/mycode-desktop/assets/icon.svg 与 wordmark.svg：叠纸图标和像素字标原稿，生成器据此更新 Wiki 的 logo.svg、wordmark.svg 和 README banner。
+- [DESIGN.md](../DESIGN.md)：桌面、品牌和 Wiki 共用的颜色、材质、布局与交互规则。
+
+修改图标后先运行 `python scripts/make_icon.py`，再生成 Wiki。`python scripts/make_icon.py --check` 会验证 PNG、Windows ICO、macOS ICNS 和尺寸预览是否与原稿一致。
 
 Markdown 支持标题、段落、行内代码、代码块、链接、加粗、单层列表和表格。已有的独立空锚点用于保留旧链接，其余原始 HTML 会显示为文字。
 

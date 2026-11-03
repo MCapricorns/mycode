@@ -1,15 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="MYCode — Rust 原生编码代理">
-  <rect width="1280" height="360" rx="20" fill="#F3EDE2"/>
-  <rect x="12" y="12" width="1256" height="336" rx="12" fill="#FAF6EE"/>
-  <svg x="64" y="90" width="180" height="180" viewBox="0 0 256 256">
-  <title id="title">MYCode bracket M</title>
-  <desc id="desc">A paper M with square-bracket stems on a flat red stamp. The open central notch evokes code chevrons. The canvas outside the stamp is transparent.</desc>
-  <rect id="tile" x="16" y="16" width="224" height="224" rx="48" fill="#C72E38"/>
-  <polygon id="mark" fill="#FAF6EE" points="48,64 96,64 128,104 160,64 208,64 208,96 192,96 192,160 208,160 208,192 160,192 160,120 128,160 96,120 96,192 48,192 48,160 64,160 64,96 48,96"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="MYCode — 每次改动，有迹可循。">
+  <defs><linearGradient id="paper" x2="1" y2="1"><stop stop-color="#FFF9EF"/><stop offset="1" stop-color="#F3E6D7"/></linearGradient></defs>
+  <rect width="1280" height="400" rx="16" fill="#EADBC9"/>
+  <rect x="16" y="16" width="1240" height="368" rx="12" fill="#D7C4B1"/>
+  <rect x="8" y="8" width="1240" height="368" rx="12" fill="url(#paper)"/>
+  <svg x="48" y="78" width="208" height="208" viewBox="0 0 256 256">
+  <title id="title">MYCode paper-pixel M</title>
+  <desc id="desc">Three offset sheets of warm paper, a coral folded corner, and a pixel M. The outside canvas is transparent.</desc>
+  <rect x="48" y="52" width="184" height="184" rx="12" fill="#C6AC97"/>
+  <rect x="32" y="36" width="184" height="184" rx="12" fill="#EAD6BF"/>
+  <polygon points="16,20 184,20 224,60 224,204 16,204" fill="#FFF9EF"/>
+  <polygon points="184,20 184,60 224,60" fill="#E97560"/>
+  <polygon points="48,76 80,76 80,92 96,92 96,108 112,108 112,124 128,124 128,108 144,108 144,92 160,92 160,76 192,76 192,172 160,172 160,124 144,124 144,140 128,140 128,156 112,156 112,140 96,140 96,124 80,124 80,172 48,172" fill="#C8373D"/>
 </svg>
+  <svg x="292" y="88" width="420" height="84" viewBox="0 0 350 70"><defs><linearGradient id="palette-0" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#D54768"/><stop offset="50%" stop-color="#9960D8"/><stop offset="100%" stop-color="#3975DF"/></linearGradient><linearGradient id="palette-1" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#158F91"/><stop offset="50%" stop-color="#3975DF"/><stop offset="100%" stop-color="#9960D8"/></linearGradient><linearGradient id="palette-2" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#348949"/><stop offset="50%" stop-color="#158F91"/><stop offset="100%" stop-color="#3975DF"/></linearGradient><linearGradient id="palette-3" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#9B7928"/><stop offset="50%" stop-color="#D54768"/><stop offset="100%" stop-color="#9960D8"/></linearGradient><linearGradient id="palette-4" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#3975DF"/><stop offset="50%" stop-color="#9960D8"/><stop offset="100%" stop-color="#D54768"/></linearGradient><linearGradient id="palette-5" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#B86A25"/><stop offset="50%" stop-color="#158F91"/><stop offset="100%" stop-color="#9960D8"/></linearGradient></defs><g fill="url(#palette-0)"><rect x="0" y="0" width="10" height="10"/><rect x="40" y="0" width="10" height="10"/><rect x="0" y="10" width="10" height="10"/><rect x="10" y="10" width="10" height="10"/><rect x="30" y="10" width="10" height="10"/><rect x="40" y="10" width="10" height="10"/><rect x="0" y="20" width="10" height="10"/><rect x="20" y="20" width="10" height="10"/><rect x="40" y="20" width="10" height="10"/><rect x="0" y="30" width="10" height="10"/><rect x="20" y="30" width="10" height="10"/><rect x="40" y="30" width="10" height="10"/><rect x="0" y="40" width="10" height="10"/><rect x="40" y="40" width="10" height="10"/><rect x="0" y="50" width="10" height="10"/><rect x="40" y="50" width="10" height="10"/><rect x="0" y="60" width="10" height="10"/><rect x="40" y="60" width="10" height="10"/><rect x="60" y="0" width="10" height="10"/><rect x="100" y="0" width="10" height="10"/><rect x="60" y="10" width="10" height="10"/><rect x="100" y="10" width="10" height="10"/><rect x="70" y="20" width="10" height="10"/><rect x="90" y="20" width="10" height="10"/><rect x="80" y="30" width="10" height="10"/><rect x="80" y="40" width="10" height="10"/><rect x="80" y="50" width="10" height="10"/><rect x="80" y="60" width="10" height="10"/><rect x="130" y="0" width="10" height="10"/><rect x="140" y="0" width="10" height="10"/><rect x="150" y="0" width="10" height="10"/><rect x="160" y="0" width="10" height="10"/><rect x="120" y="10" width="10" height="10"/><rect x="120" y="20" width="10" height="10"/><rect x="120" y="30" width="10" height="10"/><rect x="120" y="40" width="10" height="10"/><rect x="120" y="50" width="10" height="10"/><rect x="130" y="60" width="10" height="10"/><rect x="140" y="60" width="10" height="10"/><rect x="150" y="60" width="10" height="10"/><rect x="160" y="60" width="10" height="10"/><rect x="190" y="20" width="10" height="10"/><rect x="200" y="20" width="10" height="10"/><rect x="210" y="20" width="10" height="10"/><rect x="180" y="30" width="10" height="10"/><rect x="220" y="30" width="10" height="10"/><rect x="180" y="40" width="10" height="10"/><rect x="220" y="40" width="10" height="10"/><rect x="180" y="50" width="10" height="10"/><rect x="220" y="50" width="10" height="10"/><rect x="190" y="60" width="10" height="10"/><rect x="200" y="60" width="10" height="10"/><rect x="210" y="60" width="10" height="10"/><rect x="280" y="0" width="10" height="10"/><rect x="280" y="10" width="10" height="10"/><rect x="250" y="20" width="10" height="10"/><rect x="260" y="20" width="10" height="10"/><rect x="270" y="20" width="10" height="10"/><rect x="280" y="20" width="10" height="10"/><rect x="240" y="30" width="10" height="10"/><rect x="280" y="30" width="10" height="10"/><rect x="240" y="40" width="10" height="10"/><rect x="280" y="40" width="10" height="10"/><rect x="240" y="50" width="10" height="10"/><rect x="280" y="50" width="10" height="10"/><rect x="250" y="60" width="10" height="10"/><rect x="260" y="60" width="10" height="10"/><rect x="270" y="60" width="10" height="10"/><rect x="280" y="60" width="10" height="10"/><rect x="310" y="20" width="10" height="10"/><rect x="320" y="20" width="10" height="10"/><rect x="330" y="20" width="10" height="10"/><rect x="300" y="30" width="10" height="10"/><rect x="340" y="30" width="10" height="10"/><rect x="300" y="40" width="10" height="10"/><rect x="310" y="40" width="10" height="10"/><rect x="320" y="40" width="10" height="10"/><rect x="330" y="40" width="10" height="10"/><rect x="340" y="40" width="10" height="10"/><rect x="300" y="50" width="10" height="10"/><rect x="310" y="60" width="10" height="10"/><rect x="320" y="60" width="10" height="10"/><rect x="330" y="60" width="10" height="10"/><rect x="340" y="60" width="10" height="10"/></g></svg>
   <g font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
-    <text x="284" y="160" font-size="68" font-weight="650" letter-spacing="-2" fill="#14131B">MYCode</text>
-    <text x="288" y="212" font-size="26" fill="#14131B">每次改动，有迹可循。</text>
-    <text x="288" y="260" font-size="18" fill="#625D58">原生桌面编码代理 · Rust + GPUI</text>
+    <text x="292" y="228" font-size="30" font-weight="600" fill="#26232D">每次改动，有迹可循。</text>
+    <text x="294" y="274" font-size="19" fill="#625B64">对话 · 编码 · 子代理协作</text>
+    <text x="294" y="320" font-size="15" fill="#625B64">Rust + GPUI · Windows / macOS</text>
   </g>
+  <rect x="866" y="90" width="292" height="228" rx="8" fill="#C9B39F"/>
+  <rect x="850" y="74" width="292" height="228" rx="8" fill="#EAD6BF"/>
+  <rect x="834" y="58" width="292" height="228" rx="8" fill="#FFFBF4" stroke="#D8C8B8"/>
+  <path d="M1086 58v40h40" fill="#E97560"/>
+  <g font-family="Cascadia Code, Consolas, monospace" font-size="18">
+    <text x="862" y="112" fill="#C8373D">MYCode</text>
+    <text x="862" y="158" fill="#625B64">read  →  understand</text>
+    <text x="862" y="196" fill="#26232D">edit  →  build</text>
+    <text x="862" y="234" fill="#246B4F">check →  ship</text>
+  </g>
+  <g fill="#C8373D"><rect x="1180" y="294" width="12" height="12"/><rect x="1196" y="310" width="12" height="12"/><rect x="1180" y="326" width="12" height="12"/></g>
 </svg>

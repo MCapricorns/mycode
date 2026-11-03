@@ -179,7 +179,7 @@ pub(crate) fn deepen(mut color: Hsla) -> Hsla {
 }
 
 /// Moves `from` toward `toward` by `amount` (0 keeps `from`, 1 is `toward`).
-fn soften(from: Hsla, toward: Hsla, amount: f32) -> Hsla {
+pub(super) fn soften(from: Hsla, toward: Hsla, amount: f32) -> Hsla {
     Hsla {
         h: from.h + (toward.h - from.h) * amount,
         s: from.s + (toward.s - from.s) * amount,
@@ -239,17 +239,17 @@ pub fn semantic_tokens(light: bool) -> SemanticTokens {
 
 fn dark_spec() -> Spec {
     Spec {
-        bg: 0x1A181D,
-        surface: 0x221F26,
-        card: 0x2B2730,
-        hover: 0x36313D,
-        ink: 0xF6F0E6,
-        dim: 0xBCB4AC,
-        faint: 0xA69E97,
-        reply: 0xECE5DA,
-        thinking: 0xBCB4AC,
-        line: 0x38333F,
-        line_strong: 0x827A84,
+        bg: 0x1B1B22,
+        surface: 0x22222B,
+        card: 0x2A2A34,
+        hover: 0x363640,
+        ink: 0xF7F1E8,
+        dim: 0xC2BBB2,
+        faint: 0xA9A29B,
+        reply: 0xEAE3D9,
+        thinking: 0xC2BBB2,
+        line: 0x40404A,
+        line_strong: 0x898690,
         accent: 0xF2786D,
         accent_ink: 0x1E1214,
         tint: 0x3E2628,
@@ -263,17 +263,17 @@ fn dark_spec() -> Spec {
 
 fn light_spec() -> Spec {
     Spec {
-        bg: 0xFBF7F0,
-        surface: 0xF3ECE0,
-        card: 0xFFFDF9,
-        hover: 0xEAE0D2,
-        ink: 0x1E1B22,
-        dim: 0x5B5662,
-        faint: 0x6F686A,
-        reply: 0x2B2730,
-        thinking: 0x645E68,
-        line: 0xE2D9CA,
-        line_strong: 0x8A7F75,
+        bg: 0xF8F3EA,
+        surface: 0xEFE6D9,
+        card: 0xFFFBF4,
+        hover: 0xE8DDCF,
+        ink: 0x26232D,
+        dim: 0x625B64,
+        faint: 0x716873,
+        reply: 0x38323D,
+        thinking: 0x69616A,
+        line: 0xDDD1C2,
+        line_strong: 0x8A7C73,
         accent: 0xC8373D,
         accent_ink: 0xFFFDF9,
         tint: 0xFBE6E3,
@@ -539,13 +539,11 @@ mod tests {
     fn semantic_tokens_keep_neutral_canvas_and_distinct_accessible_status_colors() {
         let dark = super::semantic_tokens(false);
         let light = super::semantic_tokens(true);
-        assert_eq!(dark.bg, super::hex(0x1A181D));
-        assert_eq!(dark.surface_1, super::hex(0x221F26));
-        assert_eq!(dark.surface_2, super::hex(0x2B2730));
-        assert_eq!(dark.surface_3, super::hex(0x36313D));
-        assert_eq!(light.bg, super::hex(0xFBF7F0));
-        assert_eq!(light.surface_1, super::hex(0xF3ECE0));
-        assert_eq!(light.surface_2, super::hex(0xFFFDF9));
+        assert_ne!(dark.bg, dark.surface_1);
+        assert_ne!(dark.surface_1, dark.surface_2);
+        assert_ne!(dark.surface_2, dark.surface_3);
+        assert_ne!(light.bg, light.surface_1);
+        assert_ne!(light.surface_1, light.surface_2);
 
         assert_ne!(
             dark.warning, dark.accent,

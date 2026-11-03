@@ -1,6 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
-  <title id="title">MYCode bracket M</title>
-  <desc id="desc">A paper M with square-bracket stems on a flat red stamp. The open central notch evokes code chevrons. The canvas outside the stamp is transparent.</desc>
-  <rect id="tile" x="16" y="16" width="224" height="224" rx="48" fill="#C72E38"/>
-  <polygon id="mark" fill="#FAF6EE" points="48,64 96,64 128,104 160,64 208,64 208,96 192,96 192,160 208,160 208,192 160,192 160,120 128,160 96,120 96,192 48,192 48,160 64,160 64,96 48,96"/>
+  <title id="title">MYCode paper-pixel M</title>
+  <desc id="desc">Three offset sheets of warm paper, a coral folded corner, and a pixel M. The outside canvas is transparent.</desc>
+  <rect x="48" y="52" width="184" height="184" rx="12" fill="#C6AC97"/>
+  <rect x="32" y="36" width="184" height="184" rx="12" fill="#EAD6BF"/>
+  <polygon points="16,20 184,20 224,60 224,204 16,204" fill="#FFF9EF"/>
+  <polygon points="184,20 184,60 224,60" fill="#E97560"/>
+  <polygon points="48,76 80,76 80,92 96,92 96,108 112,108 112,124 128,124 128,108 144,108 144,92 160,92 160,76 192,76 192,172 160,172 160,124 144,124 144,140 128,140 128,156 112,156 112,140 96,140 96,124 80,124 80,172 48,172" fill="#C8373D"/>
 </svg>

@@ -1,29 +1,44 @@
-//! Shared opaque surfaces, soft radii, and tactile paper-craft controls.
-//!
-//! Surface roles come from Desk. Layered paper cards carry a subtle tactile
-//! bottom rim and generous rounded corners; floating menus and dialogs add a
-//! soft paper shadow.
+//! Layered paper surfaces, pixel-scale geometry, and translucent panel elevation.
 use gpui_kit::component::theme::Theme;
 use gpui_kit::{
-    Background, BoxShadow, Div, Hsla, InteractiveElement as _, Stateful, Styled as _, div, hsla, px,
+    Background, BoxShadow, Div, Hsla, InteractiveElement as _, Stateful, Styled as _, div, hsla,
+    linear_color_stop, linear_gradient, px,
 };
 
-/// The reading surface is a single flat field.
+/// A subdued diagonal tint lets the native window material show through.
 pub(super) fn ambient(theme: &Theme) -> Background {
-    theme.background.into()
+    linear_gradient(
+        135.,
+        linear_color_stop(theme.background.opacity(0.94), 0.),
+        linear_color_stop(
+            super::desk::soften(theme.background, theme.primary, 0.07).opacity(0.92),
+            1.,
+        ),
+    )
 }
 
-/// Questions share the same opaque surface as other floating panels.
+/// Floating surfaces stay dense enough to keep underlying text from bleeding through.
+pub(super) fn panel_fill(theme: &Theme) -> Background {
+    linear_gradient(
+        155.,
+        linear_color_stop(theme.popover.opacity(0.99), 0.),
+        linear_color_stop(
+            super::desk::soften(theme.popover, theme.primary, 0.04).opacity(0.97),
+            1.,
+        ),
+    )
+}
+
 pub(super) fn ask_glass(theme: &Theme) -> Background {
-    theme.popover.into()
+    panel_fill(theme)
 }
 
 pub(super) fn glass(theme: &Theme) -> Hsla {
-    theme.title_bar
+    theme.title_bar.opacity(0.82)
 }
 
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
-    theme.sidebar
+    theme.sidebar.opacity(0.76)
 }
 
 pub(super) fn frost(theme: &Theme) -> Hsla {
@@ -68,23 +83,16 @@ pub(super) fn space(steps: u32) -> gpui_kit::Pixels {
     px(SPACE_PX * steps as f32)
 }
 
-/// Prose and tool output share the same gutter and maximum measure.
-pub(super) const PROSE_MAX_PX: f32 = 1200.;
-
-pub(super) fn prose_max() -> gpui_kit::Pixels {
-    px(PROSE_MAX_PX)
-}
-
 pub(super) fn radius_xs() -> gpui_kit::Pixels {
-    px(6.)
+    px(4.)
 }
 
 pub(super) fn radius_sm() -> gpui_kit::Pixels {
-    px(10.)
+    px(8.)
 }
 
 pub(super) fn radius_md() -> gpui_kit::Pixels {
-    px(18.)
+    px(12.)
 }
 
 pub(super) fn radius_card() -> gpui_kit::Pixels {
@@ -103,30 +111,25 @@ pub(super) fn border_strong(theme: &Theme) -> Hsla {
     theme.input
 }
 
-/// Soft layered-paper shadow for floating menus, toasts, and dialogs.
+/// A short contact shadow and a soft outer shadow separate floating surfaces.
 pub(super) fn elevation_shadow(theme: &Theme) -> Vec<BoxShadow> {
     let alpha = if theme.mode.is_dark() { 0.28 } else { 0.10 };
     vec![
-        BoxShadow::new(px(0.), px(2.), hsla(0., 0., 0., alpha * 0.7)).blur_radius(px(4.)),
-        BoxShadow::new(px(0.), px(8.), hsla(0., 0., 0., alpha)).blur_radius(px(20.)),
+        BoxShadow::new(px(0.), px(3.), hsla(0., 0., 0., alpha * 0.75)).blur_radius(px(2.)),
+        BoxShadow::new(px(0.), px(12.), hsla(0., 0., 0., alpha)).blur_radius(px(24.)),
     ]
 }
 
-/// Tactile paper-craft action button: primary buttons use a warm stamp fill
-/// with a deeper bottom lip; secondary controls sit on a soft paper card.
+/// One filled primary action; secondary controls stay neutral.
 pub(super) fn glass_button(
     id: impl Into<gpui_kit::ElementId>,
     emphasized: bool,
     theme: &Theme,
 ) -> Stateful<Div> {
     let (fill, ink, border) = if emphasized {
-        (
-            theme.primary,
-            theme.primary_foreground,
-            super::desk::deepen(theme.primary),
-        )
+        (theme.primary, theme.primary_foreground, theme.primary)
     } else {
-        (theme.popover, theme.foreground, border_subtle(theme))
+        (theme.transparent, theme.foreground, border_subtle(theme))
     };
     let hover = if emphasized {
         super::desk::deepen(fill)
@@ -144,7 +147,6 @@ pub(super) fn glass_button(
         .px(space(3))
         .rounded(radius_control())
         .border_1()
-        .border_b_2()
         .border_color(border)
         .bg(fill)
         .text_color(ink)
@@ -174,9 +176,8 @@ pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -
         .id(id)
         .rounded(radius_card())
         .border_1()
-        .border_b_2()
         .border_color(border_subtle(theme))
-        .bg(popover(theme))
+        .bg(panel_fill(theme))
         .shadow(elevation_shadow(theme))
         .text_color(theme.popover_foreground)
 }

@@ -18,6 +18,22 @@ impl gpui_kit::AssetSource for BrandAssets {
         if path == "brand/icon.ico" {
             return Ok(Some(Cow::Borrowed(include_bytes!("../assets/icon.ico"))));
         }
+        const WORDMARKS: [&[u8]; 6] = [
+            include_bytes!("../assets/wordmark-0.png"),
+            include_bytes!("../assets/wordmark-1.png"),
+            include_bytes!("../assets/wordmark-2.png"),
+            include_bytes!("../assets/wordmark-3.png"),
+            include_bytes!("../assets/wordmark-4.png"),
+            include_bytes!("../assets/wordmark-5.png"),
+        ];
+        if let Some(bytes) = path
+            .strip_prefix("brand/wordmark-")
+            .and_then(|path| path.strip_suffix(".png"))
+            .and_then(|index| index.parse::<usize>().ok())
+            .and_then(|index| WORDMARKS.get(index))
+        {
+            return Ok(Some(Cow::Borrowed(*bytes)));
+        }
         gpui_kit::assets::AllAssets.load(path)
     }
 
