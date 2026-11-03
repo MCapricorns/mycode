@@ -1,7 +1,6 @@
 //! Session ledger reads and writes: listing summaries, branch projections,
 //! model-facing replay history, message commits, recalls, and deletion.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -437,19 +436,14 @@ pub(crate) async fn send_message_with(
         branch.clone(),
         expected_head.clone(),
     );
-    // A plain prompt borrows its bytes: the writer copies them into the
-    // request once, so materializing a Vec here would copy them twice.
-    let (payload, display): (Cow<'_, [u8]>, String) = if attachments.is_empty() {
-        (Cow::Borrowed(text.as_bytes()), text.to_owned())
-    } else {
-        let stored = crate::core::StoredUserMessage {
-            prompt: text.to_owned(),
-            attachments: attachments.clone(),
-        };
-        let payload = stored.to_payload().map_err(|_| SessionError::Unavailable)?;
-        let display = stored.display_text();
-        (Cow::Owned(payload), display)
+    // Always tag user input: a pasted assistant JSON object, user envelope,
+    // or summary marker is literal text, never a different ledger record.
+    let stored = crate::core::StoredUserMessage {
+        prompt: text.to_owned(),
+        attachments: attachments.clone(),
     };
+    let payload = stored.to_payload().map_err(|_| SessionError::Unavailable)?;
+    let display = stored.display_text();
     let event_id = writer.write(EventKind::Message, &payload).await?;
     Ok((
         event_id.clone(),

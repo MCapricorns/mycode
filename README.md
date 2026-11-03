@@ -155,6 +155,8 @@ cargo build --release -p mycode-desktop --locked
 
 Debug 构建跳过 Windows 自安装；直接运行 release binary 时，设置 `MYCODE_NO_INSTALL=1` 可留在构建目录运行。
 
+Linux 本地测试先运行 `bash .github/scripts/install_linux_deps.sh` 安装开发库，再执行下方检查。真实窗口视觉走查需要 X11/Wayland 会话及 Vulkan/OpenGL 驱动；无显示器环境可使用 Xvfb、窗口管理器和 Mesa 软件渲染。`test-support` 布局测试不需要显示服务，但不能替代真实字体与像素检查。
+
 提交前执行：
 
 ```sh
@@ -168,7 +170,7 @@ python scripts/build_wiki.py --check
 python -B -m unittest discover -s wiki/tests -v
 ```
 
-CI 在 Windows x64、Windows ARM64、macOS Apple Silicon 原生运行测试，Windows x64 运行 Clippy。带 `[release]` 的 main 推送在全部检查与构建成功后发版。版本号由发布脚本统一更新两个 package，发布失败不会提前推进 main。
+CI 在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Ubuntu 24.04 x64 原生运行测试，Windows x64 和 Linux x64 运行 Clippy 与桌面布局测试。Linux 仅作为开发验证平台，不生成 Release 安装包。带 `[release]` 的 main 推送须先在 `CHANGELOG.md` 的 `Unreleased`（或手动指定的新版本条目）写入具体更新说明，空条目和占位说明会被 CI 拒绝；全部检查与构建成功后发版。版本号由发布脚本统一更新两个 package，发布失败不会提前推进 main。
 
 代码入口、消息处理和停止行为见 [MYCode 如何运行](wiki/architecture/runtime.md)；批量工具调用见 [CodeMode 使用说明](wiki/architecture/code-mode-engine.md)；测量结果见 [性能记录](wiki/memory-report.md)；更新文档的方法见 [Wiki 维护说明](wiki/README.md)。
 

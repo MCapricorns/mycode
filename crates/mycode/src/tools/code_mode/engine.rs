@@ -41,6 +41,8 @@ pub const MAX_SCRIPT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_LOG_BYTES: usize = 4 * 1024 * 1024;
 /// Bounds queued empty/tiny logs and their retained journal entries as well.
 pub const MAX_LOG_ENTRIES: usize = 1024;
+/// Yield requests also occupy the native queue and retained journal.
+pub const MAX_YIELD_REQUESTS: usize = 1024;
 
 /// Runs one script; no QuickJS value or runtime crosses a thread boundary.
 pub(crate) fn evaluate(
@@ -257,6 +259,8 @@ fn register_host_functions<'js>(
         )?,
     )?;
 
+    let yields = Rc::new(Cell::new(0_usize));
+    let yield_usage = Rc::clone(&yields);
     let budget_cell = Arc::clone(&cell);
     ctx.globals().set(
         "budget",
@@ -273,6 +277,8 @@ fn register_host_functions<'js>(
                     "max_logs": MAX_LOG_ENTRIES,
                     "log_bytes_used": log_budget.get().1,
                     "max_log_bytes": MAX_LOG_BYTES,
+                    "yields_used": yield_usage.get(),
+                    "max_yields": MAX_YIELD_REQUESTS,
                 })
                 .to_string(),
             )
@@ -306,9 +312,14 @@ fn register_host_functions<'js>(
 
     ctx.globals().set(
         "yield_control",
-        Function::new(ctx.clone(), move || {
+        Function::new(ctx.clone(), move |ctx: Ctx<'js>| -> rquickjs::Result<()> {
+            if yields.get() >= MAX_YIELD_REQUESTS {
+                return Err(stop_evaluation(&ctx, "yield budget exhausted"));
+            }
+            yields.set(yields.get() + 1);
             let seq = cell.next_seq();
             let _ = host_tx.send(HostRequest::Yield { seq });
+            Ok(())
         })?,
     )?;
     Ok(())

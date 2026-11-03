@@ -15,6 +15,10 @@ use mycode::core::MAX_IMAGE_BYTES;
 
 use crate::i18n::t;
 
+// Native clipboard screenshots are uncompressed (a 4K BMP is about 32 MiB).
+// Bound their decoding separately from the encoded attachment sent to a model.
+const MAX_CLIPBOARD_BITMAP_BYTES: usize = 64 * 1024 * 1024;
+
 /// One picture read out of the clipboard or a pasted path.
 pub(super) struct ClipboardPicture {
     /// Encoded bytes in the format `mime` names.
@@ -64,27 +68,33 @@ fn clipboard_picture(item: &ClipboardItem) -> Result<Option<ClipboardPicture>, S
         let ClipboardEntry::Image(image) = entry else {
             continue;
         };
-        if image.bytes.len() > MAX_IMAGE_BYTES {
-            return Err(t("image is larger than 3.75 MB", "图片超过 3.75 MB").to_owned());
-        }
-        if let Some(mime) = mycode::core::image_media_type(&image.bytes) {
-            return Ok(Some(ClipboardPicture {
-                bytes: image.bytes.clone(),
-                mime,
-            }));
-        }
-        if matches!(image.format, ImageFormat::Bmp | ImageFormat::Tiff)
-            && let Some(bytes) = reencoded_as_png(&image.bytes)
-        {
-            return Ok(Some(ClipboardPicture {
-                bytes,
-                mime: "image/png",
-            }));
+        if let Some(picture) = picture_bytes(&image.bytes, &image.format)? {
+            return Ok(Some(picture));
         }
         unusable = true;
     }
     if unusable {
         return Err(t("unsupported image type", "不支持这种图片格式").to_owned());
+    }
+    Ok(None)
+}
+
+fn picture_bytes(bytes: &[u8], format: &ImageFormat) -> Result<Option<ClipboardPicture>, String> {
+    if let Some(mime) = mycode::core::image_media_type(bytes) {
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err(t("image is larger than 3.75 MB", "图片超过 3.75 MB").to_owned());
+        }
+        return Ok(Some(ClipboardPicture {
+            bytes: bytes.to_vec(),
+            mime,
+        }));
+    }
+    if matches!(format, ImageFormat::Bmp | ImageFormat::Tiff) {
+        let bytes = reencoded_as_png(bytes)?;
+        return Ok(Some(ClipboardPicture {
+            bytes,
+            mime: "image/png",
+        }));
     }
     Ok(None)
 }
@@ -120,17 +130,38 @@ fn picture_at(text: &str) -> Result<Option<ClipboardPicture>, String> {
     Ok(Some(ClipboardPicture { bytes, mime }))
 }
 
-/// Re-encodes a bitmap or a TIFF as PNG. `None` when the bytes are not a
-/// picture the decoder can read.
-fn reencoded_as_png(bytes: &[u8]) -> Option<Vec<u8>> {
+/// Re-encodes a bitmap or TIFF within a bounded decode budget, then applies
+/// the attachment limit to the PNG that will actually be sent.
+fn reencoded_as_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Cursor;
 
-    let picture = image::load_from_memory(bytes).ok()?;
+    let decode_error = || {
+        t(
+            "clipboard picture is invalid or too large to decode",
+            "剪贴板图片无效或过大，无法解码",
+        )
+        .to_owned()
+    };
+    if bytes.len() > MAX_CLIPBOARD_BITMAP_BYTES {
+        return Err(decode_error());
+    }
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| decode_error())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(MAX_CLIPBOARD_BITMAP_BYTES as u64);
+    reader.limits(limits);
+    let picture = reader.decode().map_err(|_| decode_error())?;
     let mut png = Vec::new();
     picture
         .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
-        .ok()?;
-    Some(png)
+        .map_err(|_| decode_error())?;
+    if png.len() > MAX_IMAGE_BYTES {
+        return Err(t("image is larger than 3.75 MB", "图片超过 3.75 MB").to_owned());
+    }
+    Ok(png)
 }
 
 /// The local path a pasted path or `file://` URL names.
@@ -180,7 +211,7 @@ fn file_url_path(rest: &str) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{local_path, picture_at, reencoded_as_png};
+    use super::{local_path, picture_at, picture_bytes, reencoded_as_png};
 
     /// The leading bytes are all the path reader checks; the picture itself
     /// is never decoded.
@@ -320,5 +351,35 @@ mod tests {
         let png = reencoded_as_png(&tiny_bmp()).expect("png");
         assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
         assert_eq!(mycode::core::image_media_type(&png), Some("image/png"));
+    }
+
+    #[test]
+    fn a_native_screenshot_is_limited_after_png_conversion() {
+        let screenshot = image::RgbImage::from_pixel(1200, 1200, image::Rgb([30, 40, 50]));
+        let mut bmp = Vec::new();
+        screenshot
+            .write_to(&mut std::io::Cursor::new(&mut bmp), image::ImageFormat::Bmp)
+            .expect("encode screenshot");
+        assert!(bmp.len() > mycode::core::MAX_IMAGE_BYTES);
+        let picture = picture_bytes(&bmp, &gpui_kit::ImageFormat::Bmp)
+            .expect("native screenshot")
+            .expect("picture");
+        assert_eq!(picture.mime, "image/png");
+        assert!(picture.bytes.len() < mycode::core::MAX_IMAGE_BYTES);
+    }
+
+    #[test]
+    fn oversized_native_dimensions_are_rejected_before_decoding() {
+        let mut bmp = tiny_bmp();
+        bmp[18..22].copy_from_slice(&100_000_i32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&100_000_i32.to_le_bytes());
+        assert!(reencoded_as_png(&bmp).is_err());
+    }
+
+    #[test]
+    fn encoded_clipboard_images_still_obey_the_attachment_cap() {
+        let mut png = vec![0; mycode::core::MAX_IMAGE_BYTES + 1];
+        png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        assert!(picture_bytes(&png, &gpui_kit::ImageFormat::Png).is_err());
     }
 }

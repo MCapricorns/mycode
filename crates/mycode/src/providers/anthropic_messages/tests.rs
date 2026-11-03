@@ -40,6 +40,32 @@ fn done(events: Vec<crate::core::StreamEvent>) -> AssistantMessage {
 }
 
 #[test]
+fn malformed_tool_arguments_do_not_dispatch_as_an_empty_object() {
+    let mut reducer = MessagesReducer::new();
+    reducer.feed(r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_1","name":"read","input":{}}}"#);
+    reducer.feed(r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}"#);
+    reducer.feed(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#);
+    let message = done(reducer.feed(r#"{"type":"message_stop"}"#));
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert!(message.text().contains("not valid JSON"));
+}
+
+#[test]
+fn unknown_explicit_tool_index_never_modifies_the_current_call() {
+    let mut reducer = MessagesReducer::new();
+    reducer.feed(r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_1","name":"read","input":{}}}"#);
+    assert!(reducer.feed(r#"{"type":"content_block_delta","index":99,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"wrong.rs\"}"}}"#).is_empty());
+    reducer.feed(r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"right.rs\"}"}}"#);
+    reducer.feed(r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#);
+    let message = done(reducer.feed(r#"{"type":"message_stop"}"#));
+    assert_eq!(message.stop_reason, StopReason::ToolUse);
+    let ContentBlock::ToolCall(call) = &message.blocks[0] else {
+        panic!("expected original call");
+    };
+    assert_eq!(call.arguments["path"], "right.rs");
+}
+
+#[test]
 fn a_streamed_xml_code_example_does_not_become_tool_use() {
     let tail = concat!(
         "``xml\n",

@@ -1,15 +1,16 @@
 # Pull requests and main pushes validate the whole workspace on Windows x64,
-# Windows ARM64 and macOS Apple Silicon. ARM64 jobs run natively on GitHub,
-# not through a developer-machine cross compiler. Windows x64 also runs clippy.
+# Windows ARM64, macOS Apple Silicon, and Linux x64. ARM64 jobs run natively
+# on GitHub. Windows x64 and Linux x64 also run clippy and layout tests.
 #
 # Only a main push containing [release] in a new commit subject publishes.
 # release-plan selects or bumps the workspace version on a temporary ref;
-# release-build packages all three native targets with warnings denied.
+# release-build packages the three supported targets with warnings denied.
 # release-publish waits for every check and build, creates the tag and assets,
 # then advances main without force. A failed run cleans its temporary ref.
 #
 # Published archives: Windows x64/ARM64 zip, macOS Apple Silicon zip and dmg,
-# each accompanied by SHA-256. Linux and Intel macOS are not supported.
+# each accompanied by SHA-256. Linux is tested but not published; Intel macOS
+# is unsupported.
 #   mycode-desktop-<tag>-x86_64-pc-windows-msvc.zip
 #   mycode-desktop-<tag>-aarch64-pc-windows-msvc.zip
 #   mycode-desktop-<tag>-aarch64-apple-darwin.zip
@@ -90,13 +91,21 @@ jobs:
             os: macos-latest
           - platform: windows-arm64
             os: windows-11-arm
+          - platform: linux-x64
+            os: ubuntu-24.04
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
 
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: bash .github/scripts/install_linux_deps.sh
+
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: cargo test --workspace
         shell: bash
@@ -106,7 +115,35 @@ jobs:
           RUSTFLAGS: "-Dwarnings"
         run: cargo test --workspace --locked
 
+      - name: Linux headless desktop layout tests
+        if: runner.os == 'Linux'
+        env:
+          RUSTFLAGS: "-Dwarnings"
+        run: cargo test -p mycode-desktop --features test-support --locked
+
+      - name: Linux cargo clippy --workspace --all-targets
+        if: runner.os == 'Linux'
+        env:
+          RUSTFLAGS: "-Dwarnings"
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  check-release:
+    name: check-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Release and packaging regression tests
+        run: |
+          python3 .github/scripts/release_plan.py --self-test
+          python3 .github/scripts/advance_main.py --self-test
+          python3 .github/scripts/release_notes.py --self-test
+          bash .github/scripts/cargo_release_build.sh --self-test
+          python3 -B -m unittest discover -s scripts/tests -v
+
   release-plan:
+    needs: check-release
     # github-actions[bot] is the GITHUB_TOKEN pusher. Ignore it so the
     # version bump that lands on main cannot plan another patch release.
     if: "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'"
@@ -134,14 +171,6 @@ jobs:
           # brings, which starts at github.event.before.
           fetch-depth: 0
 
-      - name: Check release planner
-        run: |
-          python3 .github/scripts/release_plan.py --self-test
-          python3 .github/scripts/advance_main.py --self-test
-          python3 .github/scripts/release_notes.py --self-test
-          bash .github/scripts/cargo_release_build.sh --self-test
-          python3 -B -m unittest discover -s scripts/tests -v
-
       - name: Choose a new release tag
         id: plan
         env:
@@ -149,6 +178,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git fetch --tags origin
           git ls-remote --tags origin 'refs/tags/v*' > /tmp/remote-tags.txt
           gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
             --jq '.[].tag_name' > /tmp/release-tags.txt
@@ -340,8 +370,8 @@ jobs:
           if-no-files-found: error
 
   release-publish:
-    needs: [release-plan, release-build, check, check-platforms]
-    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success' && needs.check.result == 'success' && needs.check-platforms.result == 'success'
+    needs: [release-plan, release-build, check, check-platforms, check-release]
+    if: needs.release-plan.result == 'success' && needs.release-plan.outputs.publish == 'true' && needs.release-build.result == 'success' && needs.check.result == 'success' && needs.check-platforms.result == 'success' && needs.check-release.result == 'success'
     name: release-publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -362,6 +392,7 @@ jobs:
           echo "tag=${{ needs.release-plan.outputs.tag }} workspace=${version} head=${head}"
           test "${{ needs.release-plan.outputs.tag }}" = "v${version}"
           test "${head}" = "${{ needs.release-plan.outputs.sha }}"
+          python3 .github/scripts/release_plan.py --validate-version "${version}"
 
       - name: Download assets
         uses: actions/download-artifact@v8

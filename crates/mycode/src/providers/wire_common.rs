@@ -346,9 +346,17 @@ pub(crate) fn join_thinking(blocks: &[ContentBlock]) -> String {
     joined
 }
 
+/// Empty argument fragments represent a no-argument call on some gateways.
+/// Nonempty fragments must parse before a completed stream can dispatch them;
+/// replacing a truncated JSON object with `{}` changes the requested operation.
+pub(crate) fn valid_tool_arguments(arguments: &str) -> bool {
+    arguments.trim().is_empty() || serde_json::from_str::<Value>(arguments).is_ok()
+}
+
 /// Assembles terminal content blocks: optional thinking, optional text, then
-/// one tool-call block per stitched call. Arguments parse as JSON and default
-/// to an empty object when a vendor streams an invalid fragment.
+/// one tool-call block per stitched call. Empty arguments become an empty
+/// object. Reducers validate nonempty fragments before dispatch and mark a
+/// malformed call's message as an error; its display placeholder is also `{}`.
 pub(crate) fn assemble_blocks<'a>(
     thinking: &str,
     text: &str,

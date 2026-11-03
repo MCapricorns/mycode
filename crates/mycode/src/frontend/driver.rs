@@ -122,6 +122,12 @@ pub(crate) enum ReplyScope {
     /// probe starts after editing the field while this request is in flight.
     ProxyTest(String),
     Open(String),
+    /// A create keeps its original project and may open only while current.
+    Create {
+        request: u64,
+        project: Option<String>,
+        welcome: Option<sends::FailedSendDraft>,
+    },
     /// A send owns its lifecycle even after its conversation leaves the screen.
     Send,
     /// Start acknowledgement for the original send, not the current view.
@@ -228,7 +234,8 @@ impl ReplyScope {
             | Self::Settings { .. }
             | Self::CatalogRefresh
             | Self::Send
-            | Self::SentTurn { .. } => true,
+            | Self::SentTurn { .. }
+            | Self::Create { .. } => true,
             Self::Open(session) => pending_open == Some(session.as_str()),
             Self::ProxyTest(proxy) => vm
                 .settings
@@ -341,6 +348,8 @@ pub struct FrontendDriver {
     home: HomeLayout,
     /// Session created to carry [`WorkspaceState::pending_welcome_send`].
     welcome_send_session: Option<String>,
+    /// Creation request holding the welcome text and attachments.
+    welcome_create: Option<u64>,
     /// Attachments that ride the held welcome draft. They are not in the
     /// view model, so they live beside the session that will carry them.
     welcome_attachments: crate::core::Attachments,
@@ -350,8 +359,10 @@ pub struct FrontendDriver {
     /// Session whose conversation-open is in flight. Conversation replies
     /// for anything else are dropped, so a parked desk stays parked.
     pending_open: Option<String>,
-    /// Project the next created session binds to.
-    pending_project: Option<String>,
+    /// Monotonic identity for session creation requests.
+    create_generation: u64,
+    /// Only this create may replace the current conversation.
+    pending_create: Option<u64>,
     /// Draft restored by edit-and-resend or a slash insert, applied by the
     /// frontend's next composer paint (the widget needs a window on GPUI).
     pending_composer_prefill: Option<String>,
@@ -476,10 +487,12 @@ impl FrontendDriver {
             vm: WorkspaceState::default(),
             home,
             welcome_send_session: None,
+            welcome_create: None,
             welcome_attachments: crate::core::Attachments::default(),
             welcome_send_is_note: false,
             pending_open: None,
-            pending_project: None,
+            create_generation: 0,
+            pending_create: None,
             pending_composer_prefill: None,
             conversation_at_tail: true,
             scroll_hold_pending: false,
@@ -617,12 +630,12 @@ impl FrontendDriver {
         if self.magpie_prompted || !self.ui_state_loaded {
             return;
         }
-        let active = self
-            .vm
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.magpie.is_active());
-        if active {
+        // Bootstrap loads these documents independently. An absent settings
+        // reply says nothing about whether a gateway binding exists yet.
+        let Some(settings) = self.vm.settings.as_ref() else {
+            return;
+        };
+        if settings.magpie.is_active() {
             return;
         }
         self.magpie_prompted = true;

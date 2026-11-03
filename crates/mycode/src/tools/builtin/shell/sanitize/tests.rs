@@ -30,6 +30,15 @@ fn clixml_error_node_strips_embedded_ansi() {
 }
 
 #[test]
+fn clixml_warnings_survive_without_an_error_record() {
+    let raw = "#< CLIXML\n<Objs><S S=\"Warning\">first warning_x000D__x000A_</S><S S=\"Warning\">second &amp; last</S></Objs>";
+    assert_eq!(
+        sanitize_captured_shell_text(raw),
+        "first warning\nsecond & last"
+    );
+}
+
+#[test]
 fn ordinary_text_and_cr_lf_tab_decoding_still_work() {
     assert_eq!(sanitize_captured_shell_text("plain text"), "plain text");
     assert_eq!(

@@ -222,6 +222,13 @@ impl ResponsesReducer {
 
     fn assemble(&mut self) -> StreamEvent {
         self.terminal_sent = true;
+        if self.function_calls.iter().any(|call| {
+            !call.id.is_empty()
+                && !call.name.is_empty()
+                && !crate::providers::wire_common::valid_tool_arguments(&call.arguments)
+        }) {
+            self.begin_interrupt("tool call arguments are not valid JSON");
+        }
         if let Some(detail) = self.interrupt.as_deref() {
             append_interruption(&mut self.text, detail);
         }
@@ -260,7 +267,8 @@ impl ResponsesReducer {
 
 impl ResponsesReducer {
     /// Resolves the target function call for an event by `call_id`, `item_id`,
-    /// or `output_index`, falling back to the last call.
+    /// or `output_index`, falling back to the last call only for unlabelled
+    /// events. An unknown explicit identity must never modify another call.
     fn call_index_for(&self, event: &Value, item: Option<&Value>) -> Option<usize> {
         let call_id = item
             .and_then(|item| item["call_id"].as_str())
@@ -294,7 +302,11 @@ impl ResponsesReducer {
         {
             return Some(pos);
         }
-        self.function_calls.len().checked_sub(1)
+        if call_id.is_some() || item_id.is_some() || event.get("output_index").is_some() {
+            None
+        } else {
+            self.function_calls.len().checked_sub(1)
+        }
     }
 
     /// Sets the full argument string on a call whose deltas never arrived.
@@ -525,6 +537,47 @@ mod tests {
 
     use super::ResponsesReducer;
     use crate::providers::driver::FrameReducer;
+
+    #[test]
+    fn malformed_tool_arguments_do_not_dispatch_as_an_empty_object() {
+        let mut reducer = ResponsesReducer::new();
+        reducer.feed(r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"read"}}"#);
+        reducer.feed(r#"{"type":"response.function_call_arguments.delta","delta":"{\"path\":"}"#);
+        let events = reducer.feed(r#"{"type":"response.completed","response":{}}"#);
+        let [crate::core::StreamEvent::Done { message }] = events.as_slice() else {
+            panic!("expected a terminal message");
+        };
+        assert_eq!(message.stop_reason, StopReason::Error);
+        assert!(message.text().contains("not valid JSON"));
+    }
+
+    #[test]
+    fn unknown_explicit_call_identities_never_modify_the_last_call() {
+        for identity in [
+            serde_json::json!({"call_id": "unknown"}),
+            serde_json::json!({"item_id": "unknown"}),
+            serde_json::json!({"output_index": 99}),
+        ] {
+            let mut reducer = ResponsesReducer::new();
+            reducer.feed(r#"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read"}}"#);
+            let mut event = identity;
+            event["type"] = serde_json::json!("response.function_call_arguments.delta");
+            event["delta"] = serde_json::json!("{\"path\":\"wrong.rs\"}");
+            assert!(reducer.feed(&event.to_string()).is_empty());
+            event["type"] = serde_json::json!("response.function_call_arguments.done");
+            event["arguments"] = event["delta"].clone();
+            assert!(reducer.feed(&event.to_string()).is_empty());
+            reducer.feed(r#"{"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\"path\":\"right.rs\"}"}"#);
+            let events = reducer.feed(r#"{"type":"response.completed","response":{}}"#);
+            let [crate::core::StreamEvent::Done { message }] = events.as_slice() else {
+                panic!("expected a terminal message");
+            };
+            let ContentBlock::ToolCall(call) = &message.blocks[0] else {
+                panic!("expected the original call");
+            };
+            assert_eq!(call.arguments["path"], "right.rs");
+        }
+    }
 
     #[test]
     fn an_incomplete_response_never_dispatches_its_partial_tool_calls() {

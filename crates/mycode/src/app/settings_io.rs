@@ -3,8 +3,7 @@
 //! quarantined and reset by the repair layer rather than edited here.
 
 use crate::config::{
-    AppSettings, AuthorityRevision, DocumentRepair, HomeLayout, MAX_AUTHORITY_DOCUMENT_BYTES,
-    SETTINGS_FORMAT_VERSION, SETTINGS_PATH, read_app_settings_with_repair, read_owned_file,
+    AppSettings, AuthorityRevision, DocumentRepair, HomeLayout, read_app_settings_snapshot,
     read_provider_secrets_with_repair, replace_app_settings, update_provider_key,
 };
 
@@ -17,68 +16,13 @@ pub(crate) struct LoadedSettings {
     pub repairs: Vec<DocumentRepair>,
 }
 
-/// Why a stored revision header could not be decoded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RevisionHeaderError {
-    /// The bytes are not the expected JSON header shape.
-    Unreadable,
-    /// The stored format version differs from the expected one.
-    UnknownFormat,
-    /// The revision counter is out of range.
-    BadRevision,
-}
-
-/// Decodes the `{formatVersion, revision}` header shared by the settings and
-/// secrets documents.
-pub(crate) fn revision_header(
-    bytes: &[u8],
-    format_version: u32,
-) -> Result<AuthorityRevision, RevisionHeaderError> {
-    #[derive(serde::Deserialize)]
-    struct Header {
-        #[serde(rename = "formatVersion")]
-        format_version: u32,
-        revision: u64,
-    }
-    let header: Header =
-        serde_json::from_slice(bytes).map_err(|_| RevisionHeaderError::Unreadable)?;
-    if header.format_version != format_version {
-        return Err(RevisionHeaderError::UnknownFormat);
-    }
-    AuthorityRevision::new(header.revision).map_err(|_| RevisionHeaderError::BadRevision)
-}
-
-/// Reads the stored revision of one authority document; an absent document
-/// is [`AuthorityRevision::ABSENT`].
-fn stored_revision(
-    home: &HomeLayout,
-    path: &str,
-    max_bytes: usize,
-    format_version: u32,
-    label: &str,
-) -> Result<AuthorityRevision, String> {
-    read_owned_file(home, path, max_bytes)
-        .map_err(|error| render_config_error(&error))?
-        .map(|bytes| revision_header(bytes.as_slice(), format_version))
-        .transpose()
-        .map_err(|_| format!("stored {label} failed validation"))
-        .map(|revision| revision.unwrap_or(AuthorityRevision::ABSENT))
-}
-
 pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String> {
     let mut repairs = Vec::new();
-    let (settings, settings_repair) =
-        read_app_settings_with_repair(home).map_err(|error| render_config_error(&error))?;
+    let (settings, revision, settings_repair) =
+        read_app_settings_snapshot(home).map_err(|error| render_config_error(&error))?;
     if let Some(repair) = settings_repair {
         repairs.push(repair);
     }
-    let revision = stored_revision(
-        home,
-        SETTINGS_PATH,
-        MAX_AUTHORITY_DOCUMENT_BYTES,
-        SETTINGS_FORMAT_VERSION,
-        "settings",
-    )?;
     let (secrets, secrets_repair) =
         read_provider_secrets_with_repair(home).map_err(|error| render_config_error(&error))?;
     if let Some(repair) = secrets_repair {

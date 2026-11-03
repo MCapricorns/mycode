@@ -122,6 +122,11 @@ struct Lexer<'a> {
     pending: Option<TokenKind>,
     /// Only whitespace since the last newline.
     line_start: bool,
+    /// Next `}` or newline (or EOF) found while scanning `${...}`. Reuse
+    /// failures so many unclosed variables do not rescan the same suffix.
+    braced_variable_terminator: Option<usize>,
+    #[cfg(test)]
+    braced_variable_scanned_bytes: usize,
 }
 
 impl<'a> Lexer<'a> {
@@ -134,6 +139,9 @@ impl<'a> Lexer<'a> {
             tokens: Vec::new(),
             pending: None,
             line_start: true,
+            braced_variable_terminator: None,
+            #[cfg(test)]
+            braced_variable_scanned_bytes: 0,
         }
     }
 
@@ -342,10 +350,7 @@ impl<'a> Lexer<'a> {
             }
             b'$' if self.spec.sigils => {
                 let end = match next {
-                    Some(b'{') => self.src[start..]
-                        .find('}')
-                        .filter(|at| !self.src[start..start + at].contains('\n'))
-                        .map_or(start + 1, |at| start + at + 1),
+                    Some(b'{') => self.braced_variable_end(start),
                     Some(byte) if is_ident_start(byte) => {
                         let mut end = ident_end(self.bytes, start + 1, false);
                         // PowerShell scopes: `$env:PATH`, `$script:count`.
@@ -380,6 +385,30 @@ impl<'a> Lexer<'a> {
                 true
             }
             _ => false,
+        }
+    }
+
+    fn braced_variable_end(&mut self, start: usize) -> usize {
+        let from = start + 2;
+        let terminator = match self.braced_variable_terminator {
+            Some(at) if at >= from => at,
+            _ => {
+                let at = self.src[from..]
+                    .find(['}', '\n'])
+                    .map_or(self.bytes.len(), |offset| from + offset);
+                self.braced_variable_terminator = Some(at);
+                #[cfg(test)]
+                {
+                    self.braced_variable_scanned_bytes +=
+                        at - from + usize::from(at < self.bytes.len());
+                }
+                at
+            }
+        };
+        if self.bytes.get(terminator) == Some(&b'}') {
+            terminator + 1
+        } else {
+            start + 1
         }
     }
 

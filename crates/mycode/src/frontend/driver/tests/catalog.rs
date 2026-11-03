@@ -98,6 +98,56 @@ fn loaded(settings: AppSettings, revision: u64) -> BridgeReply {
     }))
 }
 
+#[test]
+fn magpie_install_notice_waits_for_both_startup_documents() {
+    for active in [false, true] {
+        for ui_first in [false, true] {
+            let (mut driver, root) = scratch_driver("magpie-startup-order");
+            let mut settings = AppSettings::default();
+            if active {
+                settings.magpie.enabled = true;
+                settings.magpie.base_url = "http://127.0.0.1:3425/v1".to_owned();
+                settings.magpie.api_key = "fixture-key".to_owned();
+                settings.magpie.model = "provider/model".to_owned();
+            }
+            let ui = BridgeReply::UiState(Ok((crate::config::UiState::default(), Vec::new())));
+            let settings = loaded(settings, 0);
+            let [first, second] = if ui_first {
+                [ui, settings]
+            } else {
+                [settings, ui]
+            };
+            let mut out = Vec::new();
+            driver.on_reply(ReplyScope::Global, first, &mut out);
+            assert!(!driver.magpie_prompted);
+            assert!(
+                !out.iter()
+                    .any(|effect| matches!(effect, Effect::Toast { .. }))
+            );
+
+            driver.on_reply(ReplyScope::Global, second, &mut out);
+            assert_eq!(driver.magpie_prompted, !active);
+            assert_eq!(
+                out.iter()
+                    .filter(|effect| matches!(
+                        effect,
+                        Effect::Toast {
+                            kind: ToastKind::Warning,
+                            ..
+                        }
+                    ))
+                    .count(),
+                usize::from(!active)
+            );
+            out.clear();
+            driver.prompt_magpie_install(&mut out);
+            assert!(out.is_empty(), "the notice is shown only once");
+            driver.shutdown();
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+}
+
 fn poll_until(
     driver: &mut FrontendDriver,
     out: &mut Vec<Effect>,

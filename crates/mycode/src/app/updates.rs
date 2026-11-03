@@ -223,17 +223,18 @@ fn resolve_asset_for(
         return Ok(None);
     }
     // The `.sha256` sidecar shares the prefix and must not be selected.
-    let asset = assets.iter().find(|asset| {
-        asset.name.starts_with(ASSET_PREFIX)
-            && asset.name.ends_with(suffix)
-            && !asset.name.ends_with(".sha256")
-    });
+    let version = tag.strip_prefix('v').unwrap_or(tag);
+    let expected_name = format!("{ASSET_PREFIX}{version}{suffix}");
+    let asset = assets.iter().find(|asset| asset.name == expected_name);
     let Some(asset) = asset else {
         return Err(format!(
             "update check failed: release has no {ASSET_PREFIX}*{suffix} asset"
         ));
     };
-    if !is_release_download(&asset.browser_download_url) {
+    let expected_url = format!("{RELEASE_DOWNLOAD_PREFIX}{tag}/{expected_name}");
+    if !is_release_download(&asset.browser_download_url)
+        || asset.browser_download_url != expected_url
+    {
         return Err("update check failed: asset is not a MYCode release download".to_owned());
     }
     let version = tag.trim_start_matches('v').to_owned();
@@ -458,6 +459,11 @@ fn extract_binary(asset: &Path, stage_dir: &Path) -> Result<PathBuf, String> {
             });
         if malicious {
             return Err("archive entry path is unsafe".to_owned());
+        }
+        // Archives may include other executables (for example a helper).
+        // Never install the first arbitrary .exe as the application.
+        if base != ASSET_FAMILY && base != format!("{ASSET_FAMILY}.exe") {
+            continue;
         }
         if entry.size() > MAX_BINARY_BYTES {
             return Err("archive entry oversized".to_owned());

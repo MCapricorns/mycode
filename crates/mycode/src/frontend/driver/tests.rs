@@ -3,6 +3,7 @@ use crate::app::ActiveConversation;
 use crate::frontend::view_model::{FrontendAction, WorkspaceState, reduce};
 
 mod catalog;
+mod creation;
 mod recall;
 mod runtime_guards;
 mod scroll;

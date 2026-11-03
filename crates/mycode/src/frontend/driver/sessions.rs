@@ -69,12 +69,116 @@ impl FrontendDriver {
         self.pending_open = None;
         // New sessions inherit the active project so the sidebar grouping
         // and the tool working directory follow the project switcher.
-        self.pending_project = self.vm.project_dir.clone();
-        self.dispatch(BridgeCommand::CreateSession {
-            project: self.pending_project.clone(),
-        });
+        self.create_session(self.vm.project_dir.clone());
         let _ = out;
         true
+    }
+
+    /// Captures the project with the request, so overlapping creates cannot
+    /// consume one another's binding or replace a newer navigation intent.
+    pub(crate) fn create_session(&mut self, project: Option<String>) {
+        self.create_session_with_welcome(project, None);
+    }
+
+    pub(super) fn create_session_with_welcome(
+        &mut self,
+        project: Option<String>,
+        welcome: Option<super::sends::FailedSendDraft>,
+    ) {
+        self.create_generation = self.create_generation.wrapping_add(1);
+        let request = self.create_generation;
+        self.pending_create = Some(request);
+        if welcome.is_some() {
+            self.welcome_create = Some(request);
+        }
+        self.pending_open = None;
+        self.dispatch_scoped(
+            BridgeCommand::CreateSession {
+                project: project.clone(),
+            },
+            ReplyScope::Create {
+                request,
+                project,
+                welcome,
+            },
+        );
+    }
+
+    /// Resolve the create against the intent and payload captured at dispatch.
+    pub(super) fn finish_create(
+        &mut self,
+        request: u64,
+        project: Option<String>,
+        welcome: Option<super::sends::FailedSendDraft>,
+        reply: BridgeReply,
+        out: &mut Vec<Effect>,
+    ) {
+        let BridgeReply::Created(result) = reply else {
+            return;
+        };
+        let current = self.pending_create == Some(request);
+        if current {
+            self.pending_create = None;
+        }
+        if self.welcome_create == Some(request) {
+            self.welcome_create = None;
+            self.welcome_attachments = crate::core::Attachments::default();
+            self.welcome_send_is_note = false;
+            self.act(FrontendAction::WelcomeSendConsumed, out);
+        }
+        match result {
+            Ok(summary) => {
+                let session_id = summary.session_id.clone();
+                // The core already created the session in this directory.
+                // Even a stale reply must preserve its own durable binding.
+                if let Some(project) = project {
+                    self.act(
+                        FrontendAction::SessionProjectBound {
+                            session_id: session_id.clone(),
+                            project,
+                        },
+                        out,
+                    );
+                    self.persist_ui_state();
+                }
+                if current {
+                    self.act(FrontendAction::SessionCreated(summary), out);
+                    if let Some(draft) = welcome {
+                        self.welcome_send_is_note =
+                            draft.text.trim().is_empty() && !draft.attachments.is_empty();
+                        let text = if self.welcome_send_is_note {
+                            draft.attachments.transcript_note()
+                        } else {
+                            draft.text
+                        };
+                        self.welcome_attachments = draft.attachments;
+                        self.act(FrontendAction::WelcomeSendHeld(text), out);
+                        self.welcome_send_session = Some(session_id.clone());
+                    }
+                    self.request_open_session(&session_id);
+                } else if let Some(draft) = welcome {
+                    // Keep an accepted first message with its original chat.
+                    // Opening another chat must not overwrite its newer draft.
+                    self.failed_send_drafts.insert(session_id, draft);
+                }
+                self.dispatch(BridgeCommand::ListSessions);
+            }
+            Err(message) => {
+                if let Some(draft) = welcome {
+                    // No session was created to retain the draft. Restore it
+                    // above any newer text without replacing that text.
+                    if !draft.text.is_empty() && self.vm.composer_draft != draft.text {
+                        self.restore_above_draft(draft.text, out);
+                    }
+                    if !draft.attachments.is_empty() {
+                        out.push(Effect::AttachmentsRestored(draft.attachments));
+                    }
+                }
+                if current {
+                    self.act(FrontendAction::Failed(message), out);
+                }
+            }
+        }
     }
 
     /// Opens one session and ignores any conversation reply that is not it.
@@ -82,6 +186,7 @@ impl FrontendDriver {
         let Some(parsed) = SessionId::parse(session_id) else {
             return;
         };
+        self.pending_create = None;
         self.pending_open = Some(session_id.to_owned());
         self.dispatch(BridgeCommand::OpenSession(parsed));
     }

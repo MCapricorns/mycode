@@ -9,7 +9,7 @@ const CLIXML_MARKER: &str = "#< CLIXML";
 /// are `_xHHHH_` escapes (`_x001B_` is ESC), and the message may still carry
 /// ANSI SGR codes. Escapes are decoded for every captured string, including
 /// fragments with no `#< CLIXML` marker. When the marker is present and an
-/// `<S S="Error">` node exists, those error nodes and any warning nodes are
+/// error or warning nodes exist, those messages are
 /// extracted; otherwise the CLIXML header/footer is dropped and the remaining
 /// text is decoded. ANSI/VT sequences are stripped from the result.
 #[must_use]
@@ -18,13 +18,12 @@ pub(crate) fn sanitize_captured_shell_text(text: &str) -> String {
         return text.to_owned();
     }
     let readable = if text.contains(CLIXML_MARKER) {
-        let errors = extract_clixml_s_nodes(text, "Error");
-        if errors.is_empty() {
+        let mut messages = extract_clixml_s_nodes(text, "Error");
+        messages.extend(extract_clixml_s_nodes(text, "Warning"));
+        if messages.is_empty() {
             decode_clixml_char_escapes(&strip_clixml_header(text))
         } else {
-            let mut lines = errors;
-            lines.extend(extract_clixml_s_nodes(text, "Warning"));
-            lines.join("\n")
+            messages.join("\n")
         }
     } else {
         decode_clixml_char_escapes(text)

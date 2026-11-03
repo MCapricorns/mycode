@@ -21,6 +21,8 @@ mod settings;
 mod subagents;
 mod ui_state;
 
+pub(crate) use settings::read_app_settings_snapshot;
+
 #[doc(inline)]
 pub use authority::AuthorityRevision;
 #[doc(inline)]

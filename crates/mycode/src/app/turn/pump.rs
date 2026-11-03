@@ -357,9 +357,15 @@ impl LedgerPump {
     /// precede it or the ledger order flips.
     async fn commit_steer(&self, text: String, held: Option<Arc<Message>>) -> Result<(), String> {
         self.commit_held_step(held).await?;
+        let payload = crate::core::StoredUserMessage {
+            prompt: text.clone(),
+            attachments: crate::core::Attachments::default(),
+        }
+        .to_payload()
+        .map_err(|_| "steer could not be encoded".to_owned())?;
         let event_id = self
             .writer
-            .write(EventKind::Message, text.as_bytes())
+            .write(EventKind::Message, &payload)
             .await
             .map_err(render_error)?;
         self.send(BridgeEvent::SteerCommitted {
@@ -581,6 +587,60 @@ pub(super) fn plain_user_text(user: &UserMessage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn literal_json_steers_keep_their_user_role_when_reopened() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-pump-literal-{}-{}",
+            std::process::id(),
+            crate::core::unix_now().as_nanos()
+        ));
+        let home = crate::config::HomeLayout::from_root(&root).unwrap();
+        let service = crate::agent::session::SessionService::new(&home);
+        let created = service.create(None).await.unwrap();
+        let writer = HeadWriter::new(
+            service.clone(),
+            created.session_id.clone(),
+            created.branch_id.clone(),
+            crate::agent::session::HeadStamp::Empty,
+        );
+        let (events, _frontend) = mpsc::unbounded_channel();
+        let pump = LedgerPump {
+            events,
+            writer,
+            session_id: Arc::from(created.session_id.as_str()),
+            deferred: DeferredSummaries::default(),
+            cancel: CancellationToken::new(),
+            usage_model: "test".into(),
+            started: std::time::Instant::now(),
+        };
+        let prompt = r#"{"$mycodeUser":{"prompt":"quoted data"}}"#;
+        pump.commit_steer(prompt.to_owned(), None).await.unwrap();
+        let history = crate::app::ledger::ledger_history(
+            &service,
+            &created.session_id,
+            &created.branch_id,
+            &pump.writer.stamp().await,
+        )
+        .await
+        .unwrap();
+        let [message] = history.as_slice() else {
+            panic!("missing steer")
+        };
+        let Message::User(user) = message.as_ref() else {
+            panic!("steer changed roles")
+        };
+        assert_eq!(user.content, UserMessage::text(prompt).content);
+        drop(pump);
+        service.shutdown().await;
+        for _ in 0..100 {
+            if std::fs::remove_dir_all(&root).is_ok() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("temporary session store remained open");
+    }
 
     #[tokio::test]
     async fn dropping_the_pump_queue_releases_its_bus_receiver() {

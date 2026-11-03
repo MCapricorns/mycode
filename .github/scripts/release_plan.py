@@ -18,6 +18,7 @@ import argparse
 import os
 import re
 import secrets
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,16 +26,15 @@ from pathlib import Path
 REPO_URL = "https://github.com/MCapricorns/mycode"
 ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_PACKAGES = ("mycode", "mycode-desktop")
-# Used only when a patch bump has nowhere else to take notes from.
-# Commit history is intentionally not rendered into the release body.
-DEFAULT_NOTES = "### Changed\n\n- 带 `[release]` 标记的 `main` 推送发布。\n"
+# Historical placeholder, retained only to reject old empty release notes.
+EMPTY_RELEASE_NOTE = "带 `[release]` 标记的 `main` 推送发布。"
 STABLE_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
 BUMP_SUBJECT = "chore(release): bump to {version}"
 # A push publishes only when one of its new commit subjects carries this
-# marker. The replayed bump subject above is exempt so a replayed
-# version commit can still publish.
+# marker. An unpublished prepared bump may resume its original release;
+# a replayed or already tagged bump must never create another patch.
 RELEASE_MARKER = "[release]"
 
 
@@ -104,13 +104,13 @@ def choose_release(
     head_subject: str,
     head_sha: str,
     subjects: list[str] | None = None,
+    released_sources: set[str] | None = None,
 ) -> ReleaseChoice:
     """Pick a tag this push can create.
 
     ``subjects`` are the commit subjects of this push; only the head
-    subject is scanned when they are not given. Asset file names are
-    deliberately absent. A complete upload for the current workspace
-    version still yields a new tag.
+    subject is scanned when they are not given. A new marked source gets
+    a free tag, while rerunning an already released source does not bump.
     """
 
     current = parse_stable(workspace)
@@ -128,6 +128,8 @@ def choose_release(
         if parsed not in stable or stable[parsed] is None:
             stable[parsed] = sha.lower() if sha else None
 
+    if head in (released_sources or set()) or head in stable.values():
+        return ReleaseChoice(False, workspace, f"v{workspace}", False, "source already released")
     prepared = head_subject == BUMP_SUBJECT.format(version=workspace)
     scanned = subjects if subjects is not None else [head_subject]
     if not prepared and not any(RELEASE_MARKER in subject for subject in scanned):
@@ -135,17 +137,13 @@ def choose_release(
             False, workspace, f"v{workspace}", False, "no release marker"
         )
     higher = any(parsed > current for parsed in stable)
-    existing = stable.get(current)
-    if prepared and not higher:
+    if prepared:
         tag = f"v{workspace}"
-        if existing is not None and existing == head:
-            # This commit is already the tagged bump. Another patch would
-            # loop if the bump push itself starts a workflow.
+        if current in stable or higher:
             return ReleaseChoice(
-                False, workspace, tag, False, "already tagged release bump"
+                False, workspace, tag, False, "release bump version already reserved"
             )
-        if current not in stable:
-            return ReleaseChoice(True, workspace, tag, False, "publish prepared bump")
+        return ReleaseChoice(True, workspace, tag, False, "publish prepared bump")
 
     candidate = current
     for parsed in stable:
@@ -240,6 +238,29 @@ def _unreleased_span(text: str) -> tuple[int, int, int]:
     return match.start(), match.end(), body_end
 
 
+def validate_notes(notes: str, context: str = "release changelog") -> None:
+    """Require actual release content, not headings, comments or a placeholder."""
+
+    visible = re.sub(r"<!--.*?(?:-->|\Z)", "", notes, flags=re.DOTALL)
+    meaningful = []
+    for line in visible.splitlines():
+        line = line.strip()
+        if not line or re.match(r"^#{1,6}(?:\s|$)", line):
+            continue
+        if re.match(r"^\[[^\]]+\]:\s*\S+", line):
+            continue
+        if line.startswith("**Full Changelog**:"):
+            continue
+        line = re.sub(r"^(?:[-*+]\s*|\d+[.)]\s+)", "", line).strip()
+        if line and line != EMPTY_RELEASE_NOTE and re.search(r"\w", line):
+            meaningful.append(line)
+    if not meaningful:
+        raise SystemExit(
+            f"{context} has no meaningful changes; add release notes to "
+            "CHANGELOG.md before using [release]"
+        )
+
+
 def rewrite_changelog(text: str, version: str, date: str) -> tuple[str, str]:
     """Insert ``version`` and return ``(changelog, release notes)``."""
 
@@ -252,9 +273,11 @@ def rewrite_changelog(text: str, version: str, date: str) -> tuple[str, str]:
     promoted = text[unreleased_body_start:unreleased_body_end].strip()
     if existing:
         notes = existing
+        validate_notes(notes, f"CHANGELOG.md [{version}]")
         updated = text
     else:
-        notes = promoted if promoted else DEFAULT_NOTES.strip()
+        notes = promoted
+        validate_notes(notes, "CHANGELOG.md [Unreleased]")
         block = notes.strip() + "\n"
         heading = re.search(rf"(?m)^## \[{re.escape(version)}\][^\n]*\n", text)
         if heading:
@@ -323,9 +346,13 @@ def apply_bump(root: Path, version: str, date: str) -> str:
     cargo = cargo_path.read_text(encoding="utf-8")
     lock = lock_path.read_text(encoding="utf-8")
     changelog = changelog_path.read_text(encoding="utf-8")
-    cargo_path.write_text(rewrite_workspace_version(cargo, version), encoding="utf-8")
-    lock_path.write_text(rewrite_lock(lock, version), encoding="utf-8")
+    # Validate every rewrite before touching any file: a rejected changelog
+    # must not leave partially bumped manifests behind.
+    rewritten_cargo = rewrite_workspace_version(cargo, version)
+    rewritten_lock = rewrite_lock(lock, version)
     updated, notes = rewrite_changelog(changelog, version, date)
+    cargo_path.write_text(rewritten_cargo, encoding="utf-8")
+    lock_path.write_text(rewritten_lock, encoding="utf-8")
     changelog_path.write_text(updated, encoding="utf-8")
     return notes
 
@@ -335,8 +362,7 @@ def release_notes_for_existing(root: Path, version: str) -> str:
         (root / "CHANGELOG.md").read_text(encoding="utf-8"),
         version,
     )
-    if not notes:
-        raise SystemExit(f"CHANGELOG.md has no notes for {version}")
+    validate_notes(notes, f"CHANGELOG.md [{version}]")
     return notes
 
 
@@ -359,6 +385,8 @@ def write_github_output(
         raise SystemExit(f"refusing unexpected sha {sha}")
     if cleanup_ref and not re.fullmatch(r"ci/release-\d+\.\d+\.\d+-\d+", cleanup_ref):
         raise SystemExit(f"refusing unexpected cleanup ref {cleanup_ref}")
+    if publish == "true":
+        validate_notes(notes)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(f"publish={publish}\n")
         handle.write(f"tag={tag}\n")
@@ -366,8 +394,6 @@ def write_github_output(
         handle.write(f"cleanup_ref={cleanup_ref}\n")
         if publish != "true":
             return
-        if not notes.strip():
-            raise SystemExit("release notes are empty")
         delimiter = "NOTES_" + _token()
         handle.write(f"notes<<{delimiter}\n")
         handle.write(notes)
@@ -405,6 +431,33 @@ def _read_lines(path: Path | None) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
+def released_source_shas(root: Path, tags: dict[str, str | None], workspace: str) -> set[str]:
+    """Identify original pushes already published by a CI bump commit.
+
+    On rerun the checkout is the original push, not the bump added by CI.
+    A bump has exactly one parent: the source commit that was built.
+    """
+
+    current = parse_stable(workspace)
+    if current is None:
+        raise SystemExit(f"workspace version is not MAJOR.MINOR.PATCH: {workspace}")
+    sources: set[str] = set()
+    for tag, sha in tags.items():
+        version = parse_stable(tag[1:]) if tag.startswith("v") else None
+        if not sha or version is None or version < current:
+            continue
+        result = subprocess.run(
+            ["git", "show", "-s", "--format=%s%n%P", sha],
+            cwd=root, text=True, encoding="utf-8", capture_output=True, check=False,
+        )
+        if result.returncode:
+            raise SystemExit(f"cannot inspect release tag {tag}; fetch all tags before planning")
+        subject, _, parents = result.stdout.strip().partition("\n")
+        if subject == BUMP_SUBJECT.format(version=tag[1:]) and SHA_RE.fullmatch(parents):
+            sources.add(parents.lower())
+    return sources
+
+
 def plan_from_args(args: argparse.Namespace) -> tuple[ReleaseChoice, str]:
     if not SHA_RE.fullmatch(args.head_sha):
         raise SystemExit(f"head sha is not 40 hex digits: {args.head_sha}")
@@ -419,7 +472,10 @@ def plan_from_args(args: argparse.Namespace) -> tuple[ReleaseChoice, str]:
     subjects = _read_lines(Path(args.subjects_file) if args.subjects_file else None)
     if not subjects:
         subjects = [args.head_subject]
-    choice = choose_release(workspace, tags, args.head_subject, args.head_sha, subjects)
+    choice = choose_release(
+        workspace, tags, args.head_subject, args.head_sha, subjects,
+        released_source_shas(ROOT, tags, workspace),
+    )
     print(
         f"{choice.reason}: publish={choice.publish} tag={choice.tag} bump={choice.bump}",
         flush=True,
@@ -510,7 +566,7 @@ def _expect_choice() -> None:
         BUMP_SUBJECT.format(version="0.7.3"),
         "a" * 40,
     )
-    _expect(reserved.publish and reserved.bump and reserved.version == "0.7.4", str(reserved))
+    _expect(not reserved.publish and not reserved.bump, str(reserved))
 
     already = choose_release(
         "0.7.3",
@@ -526,7 +582,7 @@ def _expect_choice() -> None:
         BUMP_SUBJECT.format(version="0.7.3"),
         "a" * 40,
     )
-    _expect(elsewhere.publish and elsewhere.version == "0.7.4", str(elsewhere))
+    _expect(not elsewhere.publish and not elsewhere.bump, str(elsewhere))
 
     # v0.7.3 is published. The next marked push of that workspace version
     # must take the following free patch, not reuse v0.7.3.
@@ -617,16 +673,18 @@ def _expect_changelog() -> None:
         original,
         count=1,
     )
-    empty_notes = rewrite_changelog(emptied, version, "2026-10-04")[1]
-    _expect(RELEASE_MARKER in empty_notes, empty_notes)
+    try:
+        rewrite_changelog(emptied, version, "2026-10-04")
+    except SystemExit as exc:
+        _expect("meaningful changes" in str(exc), str(exc))
+    else:
+        raise SystemExit("self-test failed: empty changelog was accepted")
     live_body = section_body_unreleased(original)
-    live_notes = rewrite_changelog(original, version, "2026-10-04")[1]
     if live_body:
+        live_notes = rewrite_changelog(original, version, "2026-10-04")[1]
         _expect(live_body in live_notes, live_body)
         if RELEASE_MARKER not in live_body:
             _expect(RELEASE_MARKER not in live_notes, live_notes)
-    else:
-        _expect(RELEASE_MARKER in live_notes, live_notes)
     again, again_notes = rewrite_changelog(updated, version, "2026-10-05")
     _expect(again_notes == notes, "existing section was rewritten")
     _expect(again.count(f"## [{version}]") == 1, "duplicate heading")
@@ -780,8 +838,8 @@ def _expect_workflow_contract() -> None:
     release_build = _yaml_job(workflow, "release-build")
     _expect("windows-11-arm" in release_build, "Windows ARM64 release runner missing")
     _expect(
-        "os: ubuntu-latest" not in release_build,
-        "a Linux product compile is back on ubuntu-latest",
+        "os: ubuntu-" not in release_build,
+        "Linux must be tested without publishing a product build",
     )
     for target in release_targets:
         _expect(target in release_build, f"missing release platform {target}")
@@ -791,10 +849,10 @@ def _expect_workflow_contract() -> None:
         )
     build_sh = (ROOT / ".github/scripts/cargo_release_build.sh").read_text(encoding="utf-8")
     _expect("-p mycode-desktop" in build_sh, "desktop release build missing")
-    _expect("Package (Linux)" not in release_build, "Linux packaging is back")
+    _expect("Package (Linux)" not in release_build, "Linux packaging is not supported")
     _expect(
-        workflow.count("runs-on: ubuntu-latest") == 3,
-        "release-plan, release-publish, and release-cleanup should be the only literal ubuntu-latest jobs",
+        workflow.count("runs-on: ubuntu-latest") == 4,
+        "release checks, plan, publish, and cleanup should run on ubuntu-latest",
     )
     plan = _yaml_job(workflow, "release-plan")
     _expect(
@@ -828,8 +886,8 @@ def _expect_workflow_contract() -> None:
         "platform builds do not check out the planned commit",
     )
     _expect(
-        "release_plan.py --self-test" in plan,
-        "release planner self-test missing from release-plan",
+        "release_plan.py --self-test" in _yaml_job(workflow, "check-release"),
+        "release planner self-test missing from check-release",
     )
     _expect(
         "github.actor != 'github-actions[bot]'" in plan,
@@ -941,6 +999,7 @@ def _expect_single_workflow(workflow: str) -> None:
         == [
             "check",
             "check-platforms",
+            "check-release",
             "release-plan",
             "release-build",
             "release-publish",
@@ -952,7 +1011,7 @@ def _expect_single_workflow(workflow: str) -> None:
     build = _yaml_job(workflow, "release-build")
     _expect(re.search(r"(?m)^    if:", build), "release build job has no job-level if")
     _expect(re.search(r"(?m)^    needs:", build), "release build job does not wait for the plan")
-    _expect("ubuntu-latest" not in build, "a release Linux runner is back")
+    _expect("ubuntu-" not in build, "Linux release runner is not supported")
     _expect("windows-11-arm" in build, "Windows ARM64 release runner missing")
     for target in (
         "x86_64-pc-windows-msvc",
@@ -960,15 +1019,17 @@ def _expect_single_workflow(workflow: str) -> None:
         "aarch64-apple-darwin",
     ):
         _expect(target in build, f"missing release platform {target}")
-    _expect("Package (Linux)" not in build, "Linux packaging step is back in release builds")
-    _expect("libxkbcommon-dev" not in build, "Linux GPUI packages are back in release builds")
+    _expect("Package (Linux)" not in build, "Linux packaging step is not supported")
     check = _yaml_job(workflow, "check")
     _expect("runs-on: windows-latest" in check, "workspace check is not on windows-latest")
     platforms = _yaml_job(workflow, "check-platforms")
     _expect("runs-on: ${{ matrix.os }}" in platforms, "native checks do not use the runner matrix")
-    for runner in ("macos-latest", "windows-11-arm"):
+    for runner in ("macos-latest", "windows-11-arm", "ubuntu-24.04"):
         _expect(f"os: {runner}" in platforms, f"missing native check on {runner}")
     _expect("fail-fast: false" in platforms, "one native failure cancels the other check")
+    _expect("install_linux_deps.sh" in platforms, "Linux check dependencies missing")
+    _expect("--features test-support" in platforms, "Linux headless layout tests missing")
+    _expect("cargo clippy --workspace --all-targets" in platforms, "Linux clippy missing")
     _expect(
         "cargo test --workspace --locked" in platforms,
         "native checks do not test the locked workspace",
@@ -985,8 +1046,8 @@ def _expect_single_workflow(workflow: str) -> None:
     _expect("cargo test --workspace" in check, "workspace check does not test")
     _expect("components: clippy" in check, "workspace check does not install clippy")
     _expect(
-        "mycode-desktop-<tag>-x86_64-unknown-linux-gnu.zip" not in workflow,
-        "Linux zip is back in the workflow",
+        "x86_64-unknown-linux-gnu" not in build,
+        "Linux release target is not supported",
     )
     for job in ("core", "desktop"):
         _expect(f"\n  {job}:\n" not in workflow, f"{job} job is back")
@@ -1008,6 +1069,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--emit-output", action="store_true")
     parser.add_argument("--sha", default="")
     parser.add_argument("--cleanup-ref", default="")
+    parser.add_argument("--validate-version", default="")
     return parser
 
 
@@ -1015,6 +1077,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.self_test:
         self_test()
+        return 0
+    if args.validate_version:
+        if parse_stable(args.validate_version) is None:
+            raise SystemExit("version must be MAJOR.MINOR.PATCH")
+        release_notes_for_existing(ROOT, args.validate_version)
         return 0
     if args.emit_output:
         emit_saved_plan(args)

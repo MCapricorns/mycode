@@ -28,6 +28,14 @@ impl FrontendDriver {
         };
         let catalog_refresh = matches!(scope, ReplyScope::CatalogRefresh);
         match scope {
+            ReplyScope::Create {
+                request,
+                project,
+                welcome,
+            } => {
+                self.finish_create(request, project, welcome, reply, out);
+                return;
+            }
             ReplyScope::SentTurn { session, branch } => {
                 self.finish_sent_turn_start(&session, &branch, reply, out);
                 return;
@@ -79,49 +87,6 @@ impl FrontendDriver {
         match reply {
             BridgeReply::Sessions(Ok(sessions)) => {
                 self.act(FrontendAction::SessionsLoaded(sessions), out);
-            }
-            BridgeReply::Created(Ok(summary)) => {
-                let session_id = summary.session_id.clone();
-                self.act(FrontendAction::SessionCreated(summary), out);
-                if self.vm.pending_welcome_send.is_some() {
-                    self.welcome_send_session = Some(session_id.clone());
-                }
-                // An explicit open requested after the create wins: the late
-                // reply must not steal the view from what the user clicked.
-                let opening = self.pending_open.is_none();
-                if opening {
-                    self.request_open_session(&session_id);
-                } else if self.welcome_send_session.as_deref() == Some(session_id.as_str()) {
-                    self.welcome_send_session = None;
-                    // Keep the held text as a draft instead of dropping it.
-                    if let Some(text) = self.vm.pending_welcome_send.clone() {
-                        self.pending_composer_prefill = Some(text.clone());
-                        out.push(Effect::ComposerSet { text, focus: true });
-                    }
-                    if !self.welcome_attachments.is_empty() {
-                        // The compose text comes back above; its files and
-                        // pictures come back with it, not into a toast.
-                        self.return_welcome_attachments(out);
-                    }
-                    self.act(FrontendAction::WelcomeSendConsumed, out);
-                }
-                if let Some(project) = self.pending_project.take() {
-                    if opening {
-                        self.attach_project(&session_id, &project, out);
-                    } else {
-                        // The session was still created for this folder; bind
-                        // it without moving the view's project back.
-                        self.act(
-                            FrontendAction::SessionProjectBound {
-                                session_id: session_id.clone(),
-                                project,
-                            },
-                            out,
-                        );
-                        self.persist_ui_state();
-                    }
-                }
-                self.dispatch(BridgeCommand::ListSessions);
             }
             BridgeReply::Conversation(Ok(conversation)) => {
                 let session_id = conversation.session_id.clone();
@@ -543,12 +508,7 @@ impl FrontendDriver {
                 self.dispatch(BridgeCommand::ListSessions);
                 self.dispatch(BridgeCommand::LoadUiState);
             }
-            BridgeReply::Created(Err(message)) => {
-                self.welcome_send_session = None;
-                self.return_welcome_attachments(out);
-                self.act(FrontendAction::WelcomeSendConsumed, out);
-                self.act(FrontendAction::Failed(message), out);
-            }
+            BridgeReply::Created(_) => {}
             BridgeReply::Conversation(Err(message)) => {
                 // A failed open still ends the wait: a stale pending_open
                 // would scope-drop the next explicit open's reply.

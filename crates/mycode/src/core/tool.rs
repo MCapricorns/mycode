@@ -19,6 +19,37 @@ pub struct ToolSpec {
 
 /// How deep `$ref` expansion may go before a cycle is closed.
 const SCHEMA_REF_DEPTH: usize = 32;
+const MAX_EXPANDED_NODES: usize = 16_384;
+const MAX_EXPANDED_BYTES: usize = 1024 * 1024;
+
+type Definitions<'a> = std::collections::BTreeMap<&'a str, &'a serde_json::Value>;
+
+struct ExpansionBudget {
+    nodes: usize,
+    bytes: usize,
+}
+
+impl ExpansionBudget {
+    fn bytes(&mut self, count: usize) -> Option<()> {
+        self.bytes = self.bytes.checked_sub(count)?;
+        Some(())
+    }
+
+    fn node(&mut self, node: &serde_json::Value) -> Option<()> {
+        self.nodes = self.nodes.checked_sub(1)?;
+        // Container syntax and separators are charged conservatively;
+        // scalar strings include their actual JSON escape cost.
+        let bytes = match node {
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => 2,
+            _ => crate::core::encoded_json_len(node)?,
+        };
+        self.bytes(bytes.saturating_add(1))
+    }
+
+    fn key(&mut self, key: &str) -> Option<()> {
+        self.bytes(crate::core::encoded_json_len(key)?.saturating_add(2))
+    }
+}
 
 /// Inlines local `$ref`s and drops `$defs` / `definitions`.
 ///
@@ -29,17 +60,26 @@ const SCHEMA_REF_DEPTH: usize = 32;
 /// ("infinite recursion" at `operations.items`). Every provider gets the
 /// expanded schema instead. A reference that is already on the stack, or
 /// deeper than `SCHEMA_REF_DEPTH`, becomes `{type: object}` so a real cycle
-/// cannot recurse.
+/// cannot recurse. A cumulative node/byte budget also bounds branching
+/// expansion. If it is exhausted, the original schema and its references
+/// remain intact: validation keeps its constraints, and a provider that does
+/// not support refs can reject the schema instead of exhausting the process.
 pub fn inline_schema_refs(schema: &mut serde_json::Value) {
     // Builtin specs arrive already inlined; providers call this per request,
     // so a schema with nothing to expand is left untouched instead of copied.
     if !has_schema_refs(schema) {
         return;
     }
-    let mut defs = serde_json::Map::new();
+    let mut defs = Definitions::new();
     collect_defs(schema, &mut defs);
     let mut stack = Vec::new();
-    *schema = expand(schema, &defs, &mut stack);
+    let mut budget = ExpansionBudget {
+        nodes: MAX_EXPANDED_NODES,
+        bytes: MAX_EXPANDED_BYTES,
+    };
+    if let Some(expanded) = expand(schema, &defs, &mut stack, &mut budget) {
+        *schema = expanded;
+    }
 }
 
 fn has_schema_refs(value: &serde_json::Value) -> bool {
@@ -55,7 +95,7 @@ fn has_schema_refs(value: &serde_json::Value) -> bool {
     }
 }
 
-fn collect_defs(value: &serde_json::Value, defs: &mut serde_json::Map<String, serde_json::Value>) {
+fn collect_defs<'a>(value: &'a serde_json::Value, defs: &mut Definitions<'a>) {
     match value {
         serde_json::Value::Array(items) => {
             for item in items {
@@ -68,7 +108,7 @@ fn collect_defs(value: &serde_json::Value, defs: &mut serde_json::Map<String, se
                     continue;
                 };
                 for (name, schema) in bucket {
-                    defs.entry(name.clone()).or_insert_with(|| schema.clone());
+                    defs.entry(name.as_str()).or_insert(schema);
                     collect_defs(schema, defs);
                 }
             }
@@ -85,87 +125,80 @@ fn collect_defs(value: &serde_json::Value, defs: &mut serde_json::Map<String, se
 
 fn expand(
     node: &serde_json::Value,
-    defs: &serde_json::Map<String, serde_json::Value>,
+    defs: &Definitions<'_>,
     stack: &mut Vec<String>,
-) -> serde_json::Value {
+    budget: &mut ExpansionBudget,
+) -> Option<serde_json::Value> {
+    budget.node(node)?;
     let serde_json::Value::Object(object) = node else {
         return match node {
-            serde_json::Value::Array(items) => serde_json::Value::Array(
-                items.iter().map(|item| expand(item, defs, stack)).collect(),
-            ),
-            other => other.clone(),
+            serde_json::Value::Array(items) => items
+                .iter()
+                .map(|item| expand(item, defs, stack, budget))
+                .collect::<Option<Vec<_>>>()
+                .map(serde_json::Value::Array),
+            other => Some(other.clone()),
         };
     };
     if let Some(reference) = object.get("$ref").and_then(serde_json::Value::as_str) {
         if stack.iter().any(|seen| seen == reference) || stack.len() >= SCHEMA_REF_DEPTH {
-            return terminated(object);
+            budget.bytes(32)?;
+            let mut terminated = serde_json::json!({"type": "object"});
+            keep_description(object, &mut terminated, budget)?;
+            return Some(terminated);
         }
         if let Some(target) = resolve_ref(reference, defs) {
             stack.push(reference.to_owned());
-            let mut expanded = expand(target, defs, stack);
+            let expanded = expand(target, defs, stack, budget);
             stack.pop();
-            keep_description(object, &mut expanded);
-            return expanded;
+            let mut expanded = expanded?;
+            keep_description(object, &mut expanded, budget)?;
+            return Some(expanded);
         }
-        let mut without = object.clone();
-        without.remove("$ref");
-        return expand(&serde_json::Value::Object(without), defs, stack);
     }
     let mut out = serde_json::Map::new();
     for (key, value) in object {
-        if key == "$defs" || key == "definitions" {
+        if key == "$defs" || key == "definitions" || key == "$ref" {
             continue;
         }
+        budget.key(key)?;
         let expanded = match value {
-            // Keys of a property map are parameter names, not keywords: a
-            // parameter called `definitions` must survive the expansion.
+            // Property names are not schema keywords.
             serde_json::Value::Object(properties)
                 if key == "properties" || key == "patternProperties" =>
             {
-                serde_json::Value::Object(
-                    properties
-                        .iter()
-                        .map(|(name, schema)| (name.clone(), expand(schema, defs, stack)))
-                        .collect(),
-                )
+                budget.node(value)?;
+                let mut expanded = serde_json::Map::new();
+                for (name, schema) in properties {
+                    budget.key(name)?;
+                    expanded.insert(name.clone(), expand(schema, defs, stack, budget)?);
+                }
+                serde_json::Value::Object(expanded)
             }
-            _ => expand(value, defs, stack),
+            _ => expand(value, defs, stack, budget)?,
         };
         out.insert(key.clone(), expanded);
     }
-    serde_json::Value::Object(out)
-}
-
-fn terminated(object: &serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
-    let mut out = serde_json::Map::new();
-    out.insert(
-        "type".to_owned(),
-        serde_json::Value::String("object".to_owned()),
-    );
-    if let Some(description) = object.get("description").filter(|value| value.is_string()) {
-        out.insert("description".to_owned(), description.clone());
-    }
-    serde_json::Value::Object(out)
+    Some(serde_json::Value::Object(out))
 }
 
 fn keep_description(
     source: &serde_json::Map<String, serde_json::Value>,
     expanded: &mut serde_json::Value,
-) {
-    let Some(description) = source.get("description").filter(|value| value.is_string()) else {
-        return;
-    };
-    if let Some(object) = expanded.as_object_mut() {
-        object
-            .entry("description".to_owned())
-            .or_insert_with(|| description.clone());
+    budget: &mut ExpansionBudget,
+) -> Option<()> {
+    if let Some(description) = source.get("description").filter(|value| value.is_string())
+        && let Some(object) = expanded.as_object_mut()
+        && !object.contains_key("description")
+    {
+        budget.key("description")?;
+        budget.node(description)?;
+        object.insert("description".to_owned(), description.clone());
     }
+    Some(())
 }
 
-fn resolve_ref<'a>(
-    reference: &str,
-    defs: &'a serde_json::Map<String, serde_json::Value>,
-) -> Option<&'a serde_json::Value> {
+fn resolve_ref<'a>(reference: &str, defs: &Definitions<'a>) -> Option<&'a serde_json::Value> {
     let pointer = reference.strip_prefix("#/")?;
     let mut parts = pointer.split('/');
     let bucket = parts.next()?;
@@ -173,7 +206,7 @@ fn resolve_ref<'a>(
         return None;
     }
     let name = unescape_pointer(parts.next()?);
-    let mut current = defs.get(&name)?;
+    let mut current = *defs.get(name.as_str())?;
     for part in parts {
         let part = unescape_pointer(part);
         current = match current {
@@ -215,6 +248,50 @@ mod tests {
 
     fn text_of(value: &serde_json::Value) -> String {
         value.to_string()
+    }
+
+    #[test]
+    fn branching_refs_keep_the_original_constraints_when_expansion_exceeds_budget() {
+        let mut defs = serde_json::Map::new();
+        defs.insert(
+            "level32".into(),
+            json!({"type": "string", "enum": ["allowed"]}),
+        );
+        for level in (0..32).rev() {
+            let reference = format!("#/$defs/level{}", level + 1);
+            defs.insert(
+                format!("level{level}"),
+                json!({
+                    "type": "object",
+                    "properties": {"left": {"$ref": reference}, "right": {"$ref": reference}},
+                    "required": ["left", "right"],
+                    "additionalProperties": false
+                }),
+            );
+        }
+        let original = json!({"$defs": defs, "$ref": "#/$defs/level0"});
+        assert!(original.to_string().len() < 10_000);
+        let mut expanded = original.clone();
+        inline_schema_refs(&mut expanded);
+        assert_eq!(
+            expanded, original,
+            "never replace the constraints with an unrestricted schema"
+        );
+    }
+
+    #[test]
+    fn repeated_large_values_exhaust_the_byte_budget_before_the_node_budget() {
+        let mut properties = serde_json::Map::new();
+        for index in 0..256 {
+            properties.insert(format!("value{index}"), json!({"$ref": "#/$defs/Long"}));
+        }
+        let original = json!({
+            "$defs": {"Long": {"type": "string", "const": "x".repeat(8192)}},
+            "type": "object", "properties": properties,
+        });
+        let mut expanded = original.clone();
+        inline_schema_refs(&mut expanded);
+        assert_eq!(expanded, original);
     }
 
     #[test]

@@ -121,9 +121,15 @@ impl IgnoreStack {
             names_to_cwd.insert(0, child_name);
             match probe_git_entry(&parent) {
                 Ok(Some(kind)) => {
-                    if let Err(error) =
-                        apply_git_root(self, &parent, kind, &names_to_cwd, limiter, cancel)
-                    {
+                    if let Err(error) = apply_git_root(
+                        self,
+                        &parent,
+                        kind,
+                        Path::new(""),
+                        &names_to_cwd,
+                        limiter,
+                        cancel,
+                    ) {
                         if is_mount_traversal(&error) {
                             return Ok(());
                         }
@@ -164,7 +170,9 @@ impl IgnoreStack {
                     // exclude at this boundary. `.ignore` layers keep stacking.
                     self.git_head = None;
                 }
-                if let Err(error) = apply_git_root(self, dir, kind, &[], limiter, cancel) {
+                if let Err(error) =
+                    apply_git_root(self, dir, kind, allowed_rel, &[], limiter, cancel)
+                {
                     // A gitdir/commondir on another mount is not a reason to
                     // fail the search. Local `.gitignore` / `.ignore` still load.
                     if !is_mount_traversal(&error) {
@@ -368,6 +376,7 @@ fn apply_git_root(
     stack: &mut IgnoreStack,
     worktree: &File,
     kind: GitEntryKind,
+    base: &Path,
     names_to_cwd: &[OsString],
     limiter: &WalkLimiter,
     cancel: &CancellationToken,
@@ -383,7 +392,7 @@ fn apply_git_root(
         GitEntryKind::File => open_gitdir_from_file(worktree, limiter, cancel)?,
     };
     let common = resolve_common_dir(&git_dir, limiter, cancel)?;
-    ingest_exclude_from_common(stack, &common, names_to_cwd, limiter, cancel)
+    ingest_exclude_from_common(stack, &common, base, names_to_cwd, limiter, cancel)
 }
 
 fn open_gitdir_from_file(
@@ -494,6 +503,7 @@ fn open_git_metadata_dir(base: &File, path: &Path) -> io::Result<File> {
 fn ingest_exclude_from_common(
     stack: &mut IgnoreStack,
     common: &File,
+    base: &Path,
     names_to_cwd: &[OsString],
     limiter: &WalkLimiter,
     cancel: &CancellationToken,
@@ -510,7 +520,7 @@ fn ingest_exclude_from_common(
     };
     if let Some(text) = read_child_text(&info, "exclude", limiter, cancel)? {
         stack.push_layer(
-            PathBuf::new(),
+            base.to_path_buf(),
             names_to_path(names_to_cwd),
             &text,
             IgnoreFileKind::GitExclude,
@@ -630,4 +640,40 @@ fn stopped_error(limiter: &WalkLimiter) -> io::Error {
         io::ErrorKind::Interrupted,
         limiter.stopped_reason().unwrap_or("search stopped"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::builtin::fs_search::{Limits, open_allowed_root};
+
+    #[test]
+    fn git_excludes_are_relative_to_their_nested_worktree() {
+        let root = std::env::temp_dir().join(format!("mycode-exclude-{}", uuid::Uuid::new_v4()));
+        let nested = root.join("nested");
+        std::fs::create_dir_all(nested.join(".git/info")).unwrap();
+        std::fs::write(
+            nested.join(".git/info/exclude"),
+            "/generated.txt\n/output/\n",
+        )
+        .unwrap();
+        let dir = open_allowed_root(&nested).unwrap();
+        let limiter = WalkLimiter::new(&Limits::default());
+        let mut stack = IgnoreStack::default();
+        stack
+            .ingest(
+                &dir.file,
+                Path::new("nested"),
+                &limiter,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        assert!(stack.is_ignored(Path::new(""), Path::new("nested/generated.txt"), false));
+        assert!(stack.is_ignored(Path::new("nested"), Path::new("generated.txt"), false));
+        assert!(stack.is_ignored(Path::new(""), Path::new("nested/output"), true));
+        assert!(!stack.is_ignored(Path::new(""), Path::new("generated.txt"), false));
+        assert!(!stack.is_ignored(Path::new(""), Path::new("nested/visible.txt"), false));
+        drop(dir);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

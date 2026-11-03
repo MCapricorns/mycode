@@ -14,9 +14,10 @@ pub(super) struct SubmittedTurn {
     pub(super) cancelled: bool,
 }
 
-pub(super) struct FailedSendDraft {
-    text: String,
-    attachments: Attachments,
+#[derive(Debug)]
+pub(crate) struct FailedSendDraft {
+    pub(super) text: String,
+    pub(super) attachments: Attachments,
 }
 
 impl FrontendDriver {

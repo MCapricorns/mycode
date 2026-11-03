@@ -12,6 +12,8 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::Stdio;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -54,7 +56,7 @@ pub struct StdioChannel {
     timeout: Duration,
     /// Process-group id captured at spawn. Shutdown signals the group.
     #[cfg(unix)]
-    group_id: Option<i32>,
+    group_id: AtomicI32,
 }
 
 impl StdioChannel {
@@ -82,7 +84,7 @@ impl StdioChannel {
         })?;
         let mut child = launch_stdio_process(&program, args, env)?;
         #[cfg(unix)]
-        let group_id = child.id().map(|pid| pid as i32);
+        let group_id = AtomicI32::new(child.id().map_or(0, |pid| pid as i32));
         let stdin = child
             .stdin
             .take()
@@ -119,7 +121,21 @@ impl StdioChannel {
         let mut child = self.child.lock().await;
         let _ = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await;
         #[cfg(unix)]
-        if let Some(group_id) = self.group_id {
+        self.kill_process_group();
+        #[cfg(windows)]
+        {
+            let _ = child.terminate_job();
+        }
+        let _ = child.kill().await;
+    }
+
+    /// A pool replacement or failed/cancelled handshake drops the channel
+    /// without calling `shutdown`. Child.kill_on_drop only kills the launcher,
+    /// so the group must also be released on that path.
+    #[cfg(unix)]
+    fn kill_process_group(&self) {
+        let group_id = self.group_id.swap(0, Ordering::Relaxed);
+        if group_id > 0 {
             // SAFETY: `group_id` is the child's pid, and `configure_command`
             // placed that pid in its own process group. `killpg` signals
             // every member, including grandchildren the parent spawned.
@@ -127,11 +143,6 @@ impl StdioChannel {
                 libc::killpg(group_id, libc::SIGKILL);
             }
         }
-        #[cfg(windows)]
-        {
-            let _ = child.terminate_job();
-        }
-        let _ = child.kill().await;
     }
 
     /// Reads one stdout line. The Unix shutdown test uses this to observe a
@@ -247,6 +258,13 @@ impl StdioChannel {
         let line =
             serde_json::to_vec(&reply).map_err(|error| McpError::protocol(error.to_string()))?;
         self.write_line(&line).await
+    }
+}
+
+impl Drop for StdioChannel {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        self.kill_process_group();
     }
 }
 
@@ -687,6 +705,42 @@ mod tests {
         let line = channel.read_stdout_line().await.unwrap();
         let grandchild: i32 = line.trim().parse().unwrap();
         channel.shutdown().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if let Ok(status) = std::fs::read_to_string(format!("/proc/{grandchild}/status")) {
+            let state = status
+                .lines()
+                .find(|line| line.starts_with("State:"))
+                .unwrap_or("");
+            assert!(
+                state.contains('Z'),
+                "grandchild {grandchild} still running: {state}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn dropping_a_channel_kills_the_process_group() {
+        let channel = StdioChannel::spawn(
+            "/bin/sh",
+            &[
+                "-c".to_owned(),
+                "sleep 120 & echo $!; exec sleep 120".to_owned(),
+            ],
+            &[],
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        let grandchild: i32 = channel
+            .read_stdout_line()
+            .await
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // Handshake cancellation and pool replacement use Drop, not shutdown.
+        drop(channel);
         tokio::time::sleep(Duration::from_millis(200)).await;
         if let Ok(status) = std::fs::read_to_string(format!("/proc/{grandchild}/status")) {
             let state = status

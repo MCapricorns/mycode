@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from release_plan import REPO_URL, format_version, parse_ls_remote, parse_stable
+from release_plan import REPO_URL, format_version, parse_ls_remote, parse_stable, validate_notes
 
 PULL_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+)")
 MERGE_PR_RE = re.compile(r"\bMerge pull request #(\d+)\b")
@@ -161,8 +161,7 @@ def compose_release_body(
     """Changelog section, then linked pull requests, then fixed issues."""
 
     notes = changelog.strip()
-    if not notes:
-        raise SystemExit("changelog section is empty")
+    validate_notes(notes, "changelog section")
     linked = changes.strip()
     issue_block = render_fixed_issues(issues, linked)
     if issue_block and linked:
@@ -546,7 +545,7 @@ def _expect_compose() -> None:
     try:
         compose_release_body("  \n", generated, [])
     except SystemExit as exc:
-        _expect("empty" in str(exc), str(exc))
+        _expect("meaningful changes" in str(exc), str(exc))
     else:
         raise SystemExit("self-test failed: empty changelog was accepted")
 

@@ -139,12 +139,17 @@ pub(crate) fn message_title(kind: EventKind, payload: &[u8]) -> Option<String> {
     if serde_json::from_slice::<crate::core::AssistantMessage>(payload).is_ok() {
         return None;
     }
-    let text = String::from_utf8_lossy(payload);
+    let stored = crate::core::StoredUserMessage::from_payload(payload);
+    let text = match &stored {
+        Some(stored) => std::borrow::Cow::Owned(stored.display_text()),
+        None => String::from_utf8_lossy(payload),
+    };
     // The summary card starts with `COMPACTION SUMMARY` (the app's
     // `display_summary_text`); older ledgers used the XML-style marker.
     let start = text.trim_start();
-    if start.starts_with("COMPACTION SUMMARY\n")
-        || start.starts_with("<compaction_summary display=\"true\">")
+    if stored.is_none()
+        && (start.starts_with("COMPACTION SUMMARY\n")
+            || start.starts_with("<compaction_summary display=\"true\">"))
     {
         return None;
     }
@@ -288,5 +293,28 @@ pub(crate) fn kind_from_label(label: &str) -> Option<EventKind> {
         "usage" => Some(EventKind::Usage),
         "task" => Some(EventKind::Task),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn user_envelopes_supply_plain_titles_including_literal_summary_markers() {
+        for prompt in ["Review the code", "COMPACTION SUMMARY\nexplain this"] {
+            let stored = crate::core::StoredUserMessage {
+                prompt: prompt.to_owned(),
+                attachments: crate::core::Attachments::default(),
+            };
+            assert_eq!(
+                message_title(EventKind::Message, &stored.to_payload().unwrap()),
+                Some(prompt.split_whitespace().collect::<Vec<_>>().join(" ")),
+            );
+        }
+        assert_eq!(
+            message_title(EventKind::Message, b"COMPACTION SUMMARY\nactual summary"),
+            None
+        );
     }
 }

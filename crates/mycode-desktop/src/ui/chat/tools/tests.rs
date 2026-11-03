@@ -260,6 +260,20 @@ fn diff_lines_are_numbered_from_the_first_change() {
 }
 
 #[test]
+fn tool_diff_line_numbers_advance_past_a_large_hunk_start() {
+    let numbered = super::number_diff(&[
+        "@@ -4294967295,2 +4294967295,2 @@",
+        "  retained",
+        "- previous",
+        "+ replacement",
+    ]);
+    assert_eq!(numbered[1].old, Some(u64::from(u32::MAX)));
+    assert_eq!(numbered[1].new, Some(u64::from(u32::MAX)));
+    assert_eq!(numbered[2].old, Some(u64::from(u32::MAX) + 1));
+    assert_eq!(numbered[3].new, Some(u64::from(u32::MAX) + 1));
+}
+
+#[test]
 fn unfinished_tool_calls_report_in_progress_only_while_a_turn_runs() {
     assert_eq!(tool_status("read", None, true), "in progress");
     assert_eq!(tool_status("read", None, false), "interrupted");

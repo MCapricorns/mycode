@@ -82,6 +82,49 @@ fn shell_variables_flags_and_word_start_comments() {
 }
 
 #[test]
+fn braced_variables_preserve_first_closing_brace_and_newline_rules() {
+    let code = "${} ${name} ${中文} ${outer${inner} ${carriage\rreturn}\n${unclosed\n} ${last";
+    for lang in ["bash", "pwsh", "php"] {
+        let variables: Vec<_> = spans(code, lang)
+            .into_iter()
+            .filter_map(|(text, kind)| (kind == TokenKind::Variable).then_some(text))
+            .collect();
+        assert_eq!(
+            variables,
+            [
+                "${}",
+                "${name}",
+                "${中文}",
+                "${outer${inner}",
+                "${carriage\rreturn}",
+                "$",
+                "$",
+            ],
+            "{lang}"
+        );
+    }
+}
+
+#[test]
+fn malformed_braced_variables_scan_each_suffix_once() {
+    let count = 8_192;
+    let code = format!("{}\n}}\n{}", "${".repeat(count), "${".repeat(count));
+    let mut lexer = super::Lexer::new(&code, &super::specs::SHELL);
+    for (start, _) in code.match_indices("${") {
+        assert_eq!(lexer.braced_variable_end(start), start + 1);
+    }
+    assert!(lexer.braced_variable_scanned_bytes <= code.len());
+
+    let tokens = highlight(&code, Some("bash"));
+    assert_eq!(tokens.len(), count * 2);
+    assert!(
+        tokens
+            .iter()
+            .all(|(range, kind)| { *kind == TokenKind::Variable && &code[range.clone()] == "$" })
+    );
+}
+
+#[test]
 fn powershell_keeps_backslash_paths_inside_their_strings() {
     let code = "Get-ChildItem -Path \"C:\\temp\\\" -Recurse | ForEach-Object { $env:PATH }";
     use TokenKind::*;

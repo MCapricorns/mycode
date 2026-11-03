@@ -412,12 +412,13 @@ impl FrontendDriver {
                 // has a title; the durable message adds the note itself.
                 self.welcome_send_is_note = draft.trim().is_empty() && !attachments.is_empty();
                 self.act(FrontendAction::WelcomeSendHeld(text), out);
-                if !self.new_session(out) {
-                    self.welcome_send_is_note = false;
-                    self.welcome_attachments = crate::core::Attachments::default();
-                    self.act(FrontendAction::WelcomeSendConsumed, out);
-                    return Some(attachments);
-                }
+                self.create_session_with_welcome(
+                    self.vm.project_dir.clone(),
+                    Some(super::sends::FailedSendDraft {
+                        text: draft.to_owned(),
+                        attachments,
+                    }),
+                );
                 None
             }
             crate::frontend::view_model::ComposerSubmit::Send

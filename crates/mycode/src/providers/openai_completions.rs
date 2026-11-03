@@ -557,6 +557,13 @@ impl CompletionsReducer {
                 self.text.push_str(&text);
             }
         }
+        if self.tool_calls.iter().any(|call| {
+            call.id.as_deref().is_some_and(|id| !id.is_empty())
+                && !call.name.is_empty()
+                && !crate::providers::wire_common::valid_tool_arguments(&call.arguments)
+        }) {
+            self.begin_interrupt("tool call arguments are not valid JSON");
+        }
         if let Some(detail) = self.interrupt.as_deref() {
             append_interruption(&mut self.text, detail);
         }

@@ -494,21 +494,21 @@ pub(super) enum DiffKind {
 }
 
 pub(super) struct NumberedLine {
-    pub(super) old: Option<u32>,
-    pub(super) new: Option<u32>,
+    pub(super) old: Option<u64>,
+    pub(super) new: Option<u64>,
     pub(super) text: String,
     pub(super) kind: DiffKind,
 }
 
 pub(super) fn number_diff(lines: &[&str]) -> Vec<NumberedLine> {
-    let mut old_n = 1u32;
-    let mut new_n = 1u32;
+    let mut old_n = 1u64;
+    let mut new_n = 1u64;
     let mut started = false;
     let mut out = Vec::with_capacity(lines.len());
     for line in lines {
         if let Some((old, new)) = parse_diff_hunk_header(line) {
-            old_n = old;
-            new_n = new;
+            old_n = u64::from(old);
+            new_n = u64::from(new);
             started = true;
             out.push(NumberedLine {
                 old: None,
@@ -659,7 +659,7 @@ pub(super) fn diff_preview(lines: &[&str], theme: &Theme) -> impl IntoElement {
         })
 }
 
-pub(super) fn line_number(number: Option<u32>, theme: &Theme) -> impl IntoElement {
+pub(super) fn line_number(number: Option<u64>, theme: &Theme) -> impl IntoElement {
     div()
         .w(px(36.))
         .flex_shrink_0()

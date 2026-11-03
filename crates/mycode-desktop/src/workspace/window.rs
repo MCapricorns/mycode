@@ -79,6 +79,8 @@ pub(super) const TRAFFIC_LIGHTS: gpui_kit::Point<Pixels> = gpui_kit::point(px(16
 ///   Min, max, and close still go through `WindowControlArea`.
 /// - macOS: `appears_transparent` and `app_owns_titlebar_drag` drop the system
 ///   title bar and its drag/double-click. Native traffic lights stay visible.
+/// - Linux: request client decorations; the title bar follows the actual
+///   decoration mode if the compositor falls back to server decorations.
 pub(super) fn client_window_options(
     bounds: Bounds<Pixels>,
     min_size: gpui_kit::Size<Pixels>,
@@ -87,6 +89,10 @@ pub(super) fn client_window_options(
     options.window_bounds = Some(WindowBounds::Windowed(bounds));
     options.window_min_size = Some(min_size);
     options.app_owns_titlebar_drag = true;
+    #[cfg(target_os = "linux")]
+    {
+        options.window_decorations = Some(gpui_kit::WindowDecorations::Client);
+    }
     let titlebar = options
         .titlebar
         .get_or_insert_with(gpui_kit::component::TitleBar::title_bar_options);

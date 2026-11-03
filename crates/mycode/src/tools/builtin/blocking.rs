@@ -110,6 +110,10 @@ where
         )));
     }
     let worker_cancel = cancel.child_token();
+    // Startup itself awaits the blocking pool. If the caller disappears while
+    // that task is queued, cancel before its eventual worker can pass the
+    // admission check, rather than waiting for InterruptibleWorker's Drop.
+    let _cancel_on_drop = worker_cancel.clone().drop_guard();
     let function_cancel = worker_cancel.clone();
     let (tx, rx) = tokio::sync::oneshot::channel();
     // The spawn handshake (`startup_rx.recv`) is a blocking wait on the
@@ -614,4 +618,49 @@ fn duplicate_current_thread() -> io::Result<SendHandle> {
         return Err(io::Error::last_os_error());
     }
     Ok(SendHandle { handle })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn dropping_queued_startup_does_not_run_the_worker() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let ran = Arc::new(AtomicBool::new(false));
+        runtime.block_on(async {
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let (release, blocked) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = started.send(());
+                let _ = blocked.recv();
+            });
+            ready.await.unwrap();
+            let observed = Arc::clone(&ran);
+            let task = tokio::spawn(async move {
+                super::run_blocking_supervised(
+                    "queued",
+                    &tokio_util::sync::CancellationToken::new(),
+                    move |_| {
+                        observed.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                )
+                .await
+            });
+            tokio::task::yield_now().await;
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            // The sole blocking worker consumes the abandoned startup first.
+            tokio::task::spawn_blocking(|| ()).await.unwrap();
+        });
+        assert!(!ran.load(Ordering::SeqCst));
+    }
 }

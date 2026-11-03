@@ -270,10 +270,7 @@ impl FrontendDriver {
         self.act(FrontendAction::ProjectOpened(project.to_owned()), out);
         let Some(session_id) = self.open_session_id() else {
             self.pending_open = None;
-            self.pending_project = Some(project.to_owned());
-            self.dispatch(BridgeCommand::CreateSession {
-                project: Some(project.to_owned()),
-            });
+            self.create_session(Some(project.to_owned()));
             self.refresh_skills(out);
             self.persist_ui_state();
             return;
@@ -338,10 +335,7 @@ impl FrontendDriver {
             self.request_open_session(&session_id);
         } else {
             self.park_conversation(out);
-            self.pending_project = Some(project.to_owned());
-            self.dispatch(BridgeCommand::CreateSession {
-                project: Some(project.to_owned()),
-            });
+            self.create_session(Some(project.to_owned()));
         }
         self.refresh_skills(out);
         self.persist_ui_state();
@@ -386,6 +380,7 @@ impl FrontendDriver {
     /// reply scope drop any in-flight open: the parked desk must not be
     /// replaced by a conversation the user already left.
     pub fn park_conversation(&mut self, out: &mut Vec<Effect>) {
+        self.pending_create = None;
         self.pending_open = None;
         self.mention_query = None;
         self.pending_composer_prefill = Some(String::new());

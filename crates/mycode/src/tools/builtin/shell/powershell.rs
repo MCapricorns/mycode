@@ -196,6 +196,10 @@ pub(super) fn scan_ps_balanced(text: &str, start: usize, open: char, close: char
             index += slice.find('\n')? + 1;
             continue;
         }
+        if let Some(after_here) = skip_ps_here_string(text, index) {
+            index = after_here;
+            continue;
+        }
         if matches!(ch, '\'' | '"') {
             index = skip_ps_quoted_string(text, index);
             continue;
@@ -421,5 +425,27 @@ pub(super) fn powershell_unix_command_advice(word: &str) -> Option<&'static str>
         // pager; the captured, input-less process has nobody to page it.
         "man" => Some("`man` runs the paging `help` function; use `Get-Help <cmdlet>`"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{POWERSHELL_UTF8_PRELUDE, powershell_script_for};
+
+    #[test]
+    fn param_here_strings_keep_quotes_and_delimiters_before_the_prelude() {
+        for (quote, line_end, content) in [
+            ('\'', "\n", "can't ) ] # literal"),
+            ('"', "\r\n", "a \"quoted\" ) ] # literal"),
+        ] {
+            let prologue =
+                format!("param($Text = @{quote}{line_end}{content}{line_end}{quote}@){line_end}");
+            let body = "Write-Output $Text";
+            let script = powershell_script_for(&format!("{prologue}{body}"));
+            assert_eq!(
+                script,
+                format!("{prologue}{POWERSHELL_UTF8_PRELUDE}\n{body}")
+            );
+        }
     }
 }

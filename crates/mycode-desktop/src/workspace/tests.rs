@@ -51,6 +51,11 @@ fn client_chrome_hides_the_system_title_bar() {
         WINDOW_SIZE,
     );
     assert!(options.app_owns_titlebar_drag);
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        options.window_decorations,
+        Some(gpui_kit::WindowDecorations::Client)
+    );
     let titlebar = options.titlebar.expect("custom title bar");
     assert!(titlebar.appears_transparent);
     assert_eq!(titlebar.title.as_ref().map(AsRef::as_ref), Some("MYCode"));

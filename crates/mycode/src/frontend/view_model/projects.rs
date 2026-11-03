@@ -72,13 +72,16 @@ pub fn task_surface_visible(state: &WorkspaceState) -> bool {
     else {
         return false;
     };
-    let Some(project) = state.project_dir.as_deref() else {
-        return false;
-    };
-    state
-        .session_projects
-        .iter()
-        .any(|(id, bound)| id == session_id && same_project_path(bound, project))
+    match (
+        state.project_dir.as_deref(),
+        project_of_session(&state.session_projects, session_id),
+    ) {
+        // A scratch chat has no explicit project, but its agent/workflow
+        // detail cards still belong to the conversation on screen.
+        (None, None) => true,
+        (Some(project), Some(bound)) => same_project_path(bound, project),
+        _ => false,
+    }
 }
 
 /// Whether a folder is open, so a new session has a working directory.
@@ -132,6 +135,31 @@ pub fn newest_session_in_project<'a>(
 mod tests {
     use super::{has_open_folder, open_session_is_empty};
     use crate::frontend::view_model::WorkspaceState;
+
+    #[test]
+    fn scratch_chat_task_details_are_visible_only_in_their_own_project_view() {
+        let mut state = WorkspaceState::default();
+        assert!(!super::task_surface_visible(&state));
+        state.active = Some(crate::app::ActiveConversation {
+            session_id: "scratch-chat".into(),
+            branch_id: "branch".into(),
+            head: "empty".into(),
+            entries: Vec::new(),
+            older_before: None,
+            streaming: None,
+            running: false,
+            compacting: false,
+            context_used: 0,
+            context_cache: 0,
+        });
+        assert!(super::task_surface_visible(&state));
+        state.project_dir = Some("/other".into());
+        assert!(!super::task_surface_visible(&state));
+        state.session_projects = vec![("scratch-chat".into(), "/other".into())];
+        assert!(super::task_surface_visible(&state));
+        state.project_dir = None;
+        assert!(!super::task_surface_visible(&state));
+    }
 
     #[test]
     fn session_rows_pair_each_summary_with_its_project() {

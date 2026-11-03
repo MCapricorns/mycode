@@ -399,6 +399,9 @@ impl MessagesReducer {
                     if id.is_empty() || name.is_empty() {
                         continue;
                     }
+                    if !crate::providers::wire_common::valid_tool_arguments(&arguments) {
+                        self.begin_interrupt("tool call arguments are not valid JSON");
+                    }
                     let arguments =
                         serde_json::from_str::<Value>(&arguments).unwrap_or_else(|_| json!({}));
                     blocks.push(ContentBlock::ToolCall(crate::core::ToolCall::new(
@@ -545,8 +548,19 @@ impl MessagesReducer {
     }
 
     fn apply_delta(&mut self, event: &Value) -> Vec<StreamEvent> {
-        let target = self.slot_for(event);
         let delta = &event["delta"];
+        // Text-only gateways may omit content_block_start, but an explicitly
+        // unknown tool/signature index must not fall back to the current block.
+        if matches!(
+            delta["type"].as_str(),
+            Some("input_json_delta" | "signature_delta")
+        ) && event["index"]
+            .as_u64()
+            .is_some_and(|index| !self.block_slots.contains_key(&index))
+        {
+            return Vec::new();
+        }
+        let target = self.slot_for(event);
         match delta["type"].as_str().unwrap_or_default() {
             "text_delta" => {
                 self.apply_text_delta(target, delta["text"].as_str().unwrap_or_default())

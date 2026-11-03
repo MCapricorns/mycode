@@ -549,6 +549,40 @@ fn unsupported_platforms_have_no_asset() {
 }
 
 #[test]
+fn update_asset_must_match_the_release_version_and_download_path() {
+    let mut assets = release_assets();
+    assert!(super::resolve_asset_for("windows", "x86_64", "v0.9.19", "", &assets).is_err());
+    for asset in &mut assets {
+        asset.browser_download_url = asset
+            .browser_download_url
+            .replace("download/v0.9.18/", "download/v0.9.17/");
+    }
+    assert!(super::resolve_asset_for("windows", "x86_64", "v0.9.18", "", &assets).is_err());
+}
+
+#[test]
+fn archive_helpers_are_not_installed_as_the_application() {
+    use std::io::Write as _;
+    let dir = scratch("archive-helpers");
+    let asset = dir.join("asset.zip");
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(&asset).unwrap());
+    for (name, bytes) in [
+        ("helper.exe", b"helper".as_slice()),
+        ("mycode-desktop.exe", b"application".as_slice()),
+    ] {
+        writer
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(bytes).unwrap();
+    }
+    writer.finish().unwrap();
+    let binary = super::extract_binary(&asset, &dir).unwrap();
+    assert_eq!(binary.file_name().unwrap(), "mycode-desktop.exe");
+    assert_eq!(std::fs::read(binary).unwrap(), b"application");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn persisting_a_new_payload_resets_the_previous_retry_budget() {
     let root = scratch("pending-budget");
     let home = crate::config::HomeLayout::from_root(root.join("home")).unwrap();

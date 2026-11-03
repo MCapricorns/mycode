@@ -236,6 +236,32 @@ pub fn read_app_settings_with_repair(
     Ok((settings, loaded.repair))
 }
 
+/// Loads a settings editor snapshot with a revision from the same bytes.
+/// The repair/import pass may publish a new document; re-read its complete
+/// snapshot so a concurrent writer cannot attach a new revision to old values.
+pub(crate) fn read_app_settings_snapshot(
+    home: &crate::config::HomeLayout,
+) -> Result<
+    (
+        AppSettings,
+        AuthorityRevision,
+        Option<crate::config::DocumentRepair>,
+    ),
+    ConfigError,
+> {
+    let (_, repair) = read_app_settings_with_repair(home)?;
+    let snapshot =
+        crate::config::read_owned_file(home, SETTINGS_PATH, MAX_AUTHORITY_DOCUMENT_BYTES)?;
+    let parsed = match snapshot {
+        Some(bytes) => decode_settings(&bytes)?,
+        None => ParsedSettings {
+            settings: AppSettings::default(),
+            revision: AuthorityRevision::ABSENT,
+        },
+    };
+    Ok((parsed.settings, parsed.revision, repair))
+}
+
 /// The plugin's SetJSON first-create writes binding keys but no envelope.
 /// Direct AppSettings decoding rejects every envelope field (including a
 /// partial or wrong envelope), unknown key, malformed value, and duplicate
@@ -557,6 +583,73 @@ mod tests {
                 "model": "fixture/model-0"
             }
         })
+    }
+
+    #[test]
+    fn settings_snapshot_keeps_values_and_revision_together_during_writes() {
+        let (_guard, home) = settings_home("snapshot");
+        let (settings, revision, repair) = super::read_app_settings_snapshot(&home).unwrap();
+        assert_eq!(settings, AppSettings::default());
+        assert_eq!(revision, AuthorityRevision::ABSENT);
+        assert!(repair.is_none());
+
+        let mut settings = AppSettings::default();
+        settings.appearance.theme = "light".to_owned();
+        let initial = super::replace_app_settings(&home, revision, &settings).unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut revision = initial;
+                for next in 2..=100 {
+                    settings.appearance.theme =
+                        if next % 2 == 0 { "dark" } else { "light" }.to_owned();
+                    revision = super::replace_app_settings(&home, revision, &settings).unwrap();
+                    std::thread::yield_now();
+                }
+            });
+            for _ in 0..100 {
+                let (loaded, revision, repair) = super::read_app_settings_snapshot(&home).unwrap();
+                assert!(repair.is_none());
+                assert_eq!(
+                    loaded.appearance.theme,
+                    if revision.get() % 2 == 0 {
+                        "dark"
+                    } else {
+                        "light"
+                    },
+                    "the editor must not pair stale values with a newer revision"
+                );
+                std::thread::yield_now();
+            }
+        });
+        let stale =
+            super::replace_app_settings(&home, initial, &AppSettings::default()).unwrap_err();
+        assert_eq!(
+            stale.kind(),
+            crate::config::ConfigErrorKind::RevisionConflict
+        );
+    }
+
+    #[test]
+    fn settings_snapshot_reports_the_revision_published_by_import_and_repair() {
+        let (_guard, home) = settings_home("snapshot-repair");
+        let bootstrap = serde_json::to_vec(&bootstrap_fixture()).unwrap();
+        crate::config::write_owned_test_bytes(&home, "settings.json", &bootstrap).unwrap();
+        let (settings, revision, repair) = super::read_app_settings_snapshot(&home).unwrap();
+        assert!(settings.magpie.is_active());
+        assert_eq!(revision.get(), 1);
+        assert!(repair.is_none());
+        crate::config::locked_update_owned_file(
+            &home,
+            "settings.json",
+            super::MAX_AUTHORITY_DOCUMENT_BYTES,
+            |_| Ok(b"{".to_vec()),
+        )
+        .unwrap();
+        let (settings, revision, repair) = super::read_app_settings_snapshot(&home).unwrap();
+        assert_eq!(settings, AppSettings::default());
+        assert_eq!(revision.get(), 1);
+        assert!(repair.is_some());
+        assert!(super::replace_app_settings(&home, revision, &settings).is_ok());
     }
 
     #[test]

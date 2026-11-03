@@ -93,7 +93,8 @@ impl Tool for RunCodeTool {
          progress; `complete(value)` ends the script and returns \
          value, cancelling outstanding calls; await required work first. Only registered tools are reachable; \
          the script cannot add capabilities. Logs have a cumulative 4 MiB / 1024-entry budget; \
-         exhausting either limit stops the script. A long script returns a cell id to continue \
+         exhausting either limit stops the script. yield_control is limited to 1024 requests per script. \
+         A long script returns a cell id to continue \
          with wait_code."
     }
 

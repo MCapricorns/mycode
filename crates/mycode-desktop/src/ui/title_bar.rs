@@ -2,8 +2,8 @@
 //!
 //! The system title bar is hidden when the window opens. This strip is the
 //! only chrome: it is draggable, a double-click on the empty area toggles
-//! zoom, and on Windows minimize / zoom / close sit on the right. macOS keeps
-//! its native traffic lights.
+//! zoom, and on Windows and client-decorated Linux windows minimize / zoom /
+//! close sit on the right. macOS keeps its native traffic lights.
 //!
 //! On Windows the first `window_control_area` hitbox that contains the
 //! pointer wins, and a parent `Drag` region is inserted before its children.
@@ -27,7 +27,7 @@ use crate::view_model::{MainView, UpdateState};
 use crate::workspace::Workspace;
 
 pub(super) const BAR_HEIGHT: f32 = 40.;
-/// Caption hit target on Windows.
+/// Caption hit target.
 const CONTROL_HIT: f32 = 46.;
 /// Fixed caption glyph size. These icons are window chrome, so they stay a
 /// constant pixel size instead of tracking the UI font scale.
@@ -227,6 +227,14 @@ fn title_controls(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
+    // A Linux compositor may insist on its own decorations. Do not
+    // duplicate its controls when it does.
+    let show_captions = cfg!(target_os = "windows")
+        || (cfg!(target_os = "linux")
+            && matches!(
+                window.window_decorations(),
+                gpui_kit::Decorations::Client { .. }
+            ));
     div()
         .id("title-controls")
         .flex()
@@ -235,11 +243,9 @@ fn title_controls(
         .h_full()
         .flex_shrink_0()
         .gap_2()
-        // Windows caption buttons sit flush on the window's right edge;
-        // other platforms keep the usual inset on this strip.
-        .when(cfg!(not(target_os = "windows")), |this| {
-            this.pr(px(TITLE_INSET))
-        })
+        // Caption buttons sit flush on the window's right edge; native
+        // decorations keep the usual inset on this strip.
+        .when(!show_captions, |this| this.pr(px(TITLE_INSET)))
         // The drag strip is a sibling, and a normal hitbox does not block it.
         // On Windows the first `window_control_area` that contains the pointer
         // wins, so a Drag region under this strip becomes HTCAPTION. On macOS
@@ -280,8 +286,7 @@ fn title_controls(
                     .child(div().size(skin::space(2)).rounded_full().bg(color)),
             )
         })
-        // macOS paints native traffic lights; only Windows gets captions.
-        .when(cfg!(target_os = "windows"), |this| {
+        .when(show_captions, |this| {
             this.child(window_controls(window, cx))
         })
 }
@@ -326,11 +331,10 @@ fn inspector_toggle_button(
         .test_support()
 }
 
-/// Windows caption buttons: contiguous and flush on the window's right
-/// edge, like the native chrome.
+/// Caption buttons: contiguous and flush on the window's right edge.
 fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
-    let [minimize, zoom, close] = caption_buttons(window.is_maximized());
+    let supported = window.window_controls();
     div()
         .id("window-controls")
         .flex()
@@ -338,23 +342,39 @@ fn window_controls(window: &mut Window, cx: &mut Context<Workspace>) -> impl Int
         .items_center()
         .h_full()
         .flex_shrink_0()
-        .child(caption_button(
-            minimize.id,
-            minimize.icon,
-            minimize.area,
-            minimize.close,
-            theme,
-        ))
-        .child(caption_button(
-            zoom.id, zoom.icon, zoom.area, zoom.close, theme,
-        ))
-        .child(caption_button(
-            close.id,
-            close.icon,
-            close.area,
-            close.close,
-            theme,
-        ))
+        .children(
+            caption_buttons(window.is_maximized())
+                .into_iter()
+                .filter(|button| {
+                    // Tiling compositors may support neither minimizing nor zooming.
+                    !cfg!(target_os = "linux")
+                        || match button.area {
+                            WindowControlArea::Min => supported.minimize,
+                            WindowControlArea::Max => supported.maximize,
+                            _ => true,
+                        }
+                })
+                .map(|button| {
+                    let area = button.area;
+                    caption_button(
+                        button.id,
+                        button.icon,
+                        button.area,
+                        button.close,
+                        theme,
+                        cx.listener(move |workspace, _, window, cx| match area {
+                            WindowControlArea::Min => window.minimize_window(),
+                            WindowControlArea::Max => window.zoom_window(),
+                            // remove_window bypasses the native close callback,
+                            // so preserve the running-task confirmation here.
+                            WindowControlArea::Close if workspace.on_close_request(window, cx) => {
+                                window.remove_window();
+                            }
+                            _ => {}
+                        }),
+                    )
+                }),
+        )
 }
 
 /// Hover background and glyph color for a caption button. Close paints the
@@ -379,6 +399,7 @@ fn caption_button(
     area: WindowControlArea,
     close: bool,
     theme: &gpui_kit::component::theme::Theme,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
 ) -> impl IntoElement {
     let (hover_bg, hover_fg) = caption_hover_colors(close, theme);
     div()
@@ -391,8 +412,21 @@ fn caption_button(
         .flex_shrink_0()
         .text_color(theme.muted_foreground)
         .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
-        .window_control_area(area)
+        .when(cfg!(target_os = "windows"), |this| {
+            this.window_control_area(area)
+        })
+        .when(cfg!(target_os = "linux"), |this| {
+            this.on_mouse_down(MouseButton::Left, |_, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+            })
+            .on_click(move |event, window, cx| {
+                cx.stop_propagation();
+                on_click(event, window, cx);
+            })
+        })
         .child(Icon::new(icon).with_size(px(CAPTION_ICON_PX)))
+        .test_support()
 }
 
 #[cfg(test)]
@@ -540,5 +574,62 @@ mod hit_test {
         assert!(presses.opened);
         assert!(!presses.drag_press);
         assert!(!presses.ancestor_press);
+    }
+
+    #[cfg(target_os = "linux")]
+    struct CaptionProbe {
+        presses: Rc<Cell<Presses>>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Render for CaptionProbe {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let ancestor = self.presses.clone();
+            let clicked = self.presses.clone();
+            div()
+                .w(px(super::CONTROL_HIT))
+                .h(px(super::BAR_HEIGHT))
+                .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                    let mut presses = ancestor.get();
+                    presses.ancestor_press = true;
+                    ancestor.set(presses);
+                })
+                .child(super::caption_button(
+                    "close",
+                    super::IconName::WindowClose,
+                    gpui_kit::WindowControlArea::Close,
+                    true,
+                    cx.theme(),
+                    move |_, _, _| {
+                        let mut presses = clicked.get();
+                        presses.opened = true;
+                        clicked.set(presses);
+                    },
+                ))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui_kit::test]
+    fn linux_caption_dispatches_click_without_starting_a_drag(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let presses = Rc::new(Cell::new(Presses::default()));
+        let flags = presses.clone();
+        let handle = cx.open_window(size(px(200.), px(100.)), move |_, _| CaptionProbe {
+            presses: flags,
+        });
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.click("close", cx);
+        })
+        .unwrap();
+        assert!(
+            presses.get().opened,
+            "Linux captions must handle clicks directly"
+        );
+        assert!(
+            !presses.get().ancestor_press,
+            "a caption press must not start dragging"
+        );
     }
 }

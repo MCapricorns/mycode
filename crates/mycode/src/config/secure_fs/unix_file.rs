@@ -25,6 +25,11 @@ pub(in crate::config::secure_fs) fn read_file(
     let Some((parent, name)) = open_existing_parent(root, components)? else {
         return Ok(None);
     };
+    // A transactional rename unlinks the old inode. Keep its name and link
+    // count stable through validation and reading, using the same directory
+    // lock as writers; otherwise a healthy concurrent save looks like damage.
+    File::lock_shared(&parent)
+        .map_err(|error| ConfigError::new(ConfigErrorKind::Lock).with_io_kind(error.kind()))?;
     let Some(file) = open_existing_regular(&parent, name, true)? else {
         return Ok(None);
     };
@@ -316,6 +321,12 @@ fn verify_regular_owner(file: &File) -> Result<rfs::Stat, ConfigError> {
     if rfs::FileType::from_raw_mode(stat.st_mode) != rfs::FileType::RegularFile {
         return Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(io::ErrorKind::InvalidData));
     }
+    if stat.st_nlink == 0 {
+        // An external atomic writer may not take our advisory lock. Its
+        // retired inode is a transient race, not a link escape: reporting
+        // damage here could quarantine the new, healthy document by name.
+        return Err(ConfigError::new(ConfigErrorKind::Io).with_io_kind(io::ErrorKind::Interrupted));
+    }
     if stat.st_nlink != 1 {
         return Err(ConfigError::new(ConfigErrorKind::LinkEscape));
     }
@@ -408,5 +419,24 @@ impl Drop for TemporaryName<'_> {
         if self.armed {
             let _ = rfs::unlinkat(self.parent.as_fd(), &self.name, AtFlags::empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retired_inode_is_not_reported_as_document_damage() {
+        let path = std::env::temp_dir().join(format!(
+            "mycode-retired-settings-{}-{}",
+            std::process::id(),
+            crate::core::unix_now().as_nanos()
+        ));
+        let file = File::create(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let error = verify_regular_owner(&file).unwrap_err();
+        assert_eq!(error.kind(), ConfigErrorKind::Io);
+        assert_eq!(error.io_kind(), Some(io::ErrorKind::Interrupted));
     }
 }

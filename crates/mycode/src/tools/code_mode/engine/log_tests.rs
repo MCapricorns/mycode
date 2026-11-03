@@ -112,3 +112,23 @@ for (let i = 0; i < {}; i++) log(nested);
     assert!(message.contains("log budget exhausted (entry limit)"));
     assert_eq!(run.logs.len(), MAX_LOG_ENTRIES);
 }
+
+#[test]
+fn yield_requests_cannot_bypass_native_queue_and_journal_budgets() {
+    let cell = CodeCells::new().create("yields", 1024);
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let script = format!(
+        "try {{ for (let i = 0; i < {}; i++) yield_control(); }} catch (_) {{ log('escaped'); }}",
+        super::MAX_YIELD_REQUESTS + 1,
+    );
+    let outcome = evaluate(&script, sender, cell, CancellationToken::new());
+    assert!(
+        matches!(outcome, ScriptOutcome::Failed(message) if message.contains("yield budget exhausted"))
+    );
+    let mut count = 0;
+    while let Ok(request) = receiver.try_recv() {
+        assert!(matches!(request, HostRequest::Yield { seq } if seq == count));
+        count += 1;
+    }
+    assert_eq!(count as usize, super::MAX_YIELD_REQUESTS);
+}

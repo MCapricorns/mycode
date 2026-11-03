@@ -40,6 +40,26 @@ fn take_done(events: Vec<crate::core::StreamEvent>) -> AssistantMessage {
 }
 
 #[test]
+fn malformed_tool_arguments_do_not_dispatch_as_an_empty_object() {
+    for arguments in ["{\"path\":", "{oops}"] {
+        let mut reducer = CompletionsReducer::new();
+        reducer.feed(
+            &serde_json::json!({
+                "choices": [{"delta": {"content": "Working", "tool_calls": [{
+                    "index": 0, "id": "call_1", "type": "function",
+                    "function": {"name": "read", "arguments": arguments}
+                }]}, "finish_reason": "tool_calls"}]
+            })
+            .to_string(),
+        );
+        let message = take_done(reducer.feed("[DONE]"));
+        assert_eq!(message.stop_reason, StopReason::Error);
+        assert!(message.text().contains("Working"));
+        assert!(message.text().contains("not valid JSON"));
+    }
+}
+
+#[test]
 fn minimax_xml_ask_user_arrives_as_a_typed_tool_call() {
     let mut reducer = CompletionsReducer::new();
     let xml = concat!(

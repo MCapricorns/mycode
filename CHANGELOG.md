@@ -2,17 +2,44 @@
 
 日期为发布日（UTC）。0.12.0 是第一个正式版本；之前的预览版本及其 Release 已移除，历史可在 git 记录中查看。
 
-只有提交主题带 `[release]` 标记的 main 推送才会发布。pull request 不发版。pull request 和普通推送在 Windows x64、Windows ARM64 与 macOS Apple Silicon 原生执行 `cargo test --workspace --locked`，Windows x64 另跑 `cargo clippy --workspace --all-targets --locked -- -D warnings`。检查使用 dev/test profile，fat LTO 只用于发布构建。发版使用同一提交构建三个平台，所有检查与构建成功后创建标签、上传 zip / dmg 与 SHA-256。已有版本标签时，release-plan 自动提升补丁版本，将 Unreleased 条目归入新版本；版本提交先放在临时引用，发布成功后再写回 main，不强制推送。产物未做开发者证书签名。目标为 Windows x64 `x86_64-pc-windows-msvc`、Windows ARM64 `aarch64-pc-windows-msvc` 和 macOS Apple Silicon `aarch64-apple-darwin`。
+只有提交主题带 `[release]` 标记的 main 推送才会发布。pull request 不发版。pull request 和普通推送在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Linux x64 原生执行 `cargo test --workspace --locked`，Windows x64 与 Linux x64 另跑 `cargo clippy --workspace --all-targets --locked -- -D warnings`。检查使用 dev/test profile，fat LTO 只用于发布构建。发版使用同一提交构建三个平台，所有检查与构建成功后创建标签、上传 zip / dmg 与 SHA-256。已有版本标签时，release-plan 自动提升补丁版本，将 Unreleased 条目归入新版本；版本提交先放在临时引用，发布成功后再写回 main，不强制推送。产物未做开发者证书签名。目标为 Windows x64 `x86_64-pc-windows-msvc`、Windows ARM64 `aarch64-pc-windows-msvc` 和 macOS Apple Silicon `aarch64-apple-darwin`。
 
-发布说明包含该版本条目、自上一个标签以来的 pull request、关联 issue 与比较链接。发布计划跳过 `github-actions[bot]` 的版本写回，避免重复发版。
+发布说明包含该版本条目、自上一个标签以来的 pull request、关联 issue 与比较链接。发布必须先在 `Unreleased`（或手动指定的新版本条目）写入具体更新说明；空内容、只有标题或占位说明会使 CI 失败，不再自动填充发布占位文案。发布计划跳过 `github-actions[bot]` 的版本写回及已发布提交的重跑，避免重复发版。
 
 ## [Unreleased]
+
+### Added
+
+- 增加 Ubuntu 24.04 x64 的 CI 编译、测试、桌面布局与 Clippy 检查，并补齐 Linux 测试窗口控制；Linux 仅用于开发和视觉验证，不发布安装包。
+
+### Fixed
+
+- 发布 CI 在改版本号和创建 Release 前强制校验具体更新说明，拒绝空条目、只有标题/注释及旧占位文案；已发布源提交和版本写回提交的重跑不再额外 bump。发布与打包回归检查同时覆盖普通推送及 pull request。
+- 修复新建会话与切换项目/会话的异步竞争，按请求保留项目归属和待发送草稿，过期回复不再覆盖当前会话；默认工作区中的子代理和工作流详情正常显示。
+- 设置内容与修订号从同一事务快照读取，避免并发保存覆盖新配置；Unix 读取与原子替换协同，避免将已被替换的文件误判为损坏并隔离正常配置。
+- 普通消息和回合引导使用明确的用户记录格式保存，粘贴助手 JSON、用户消息 JSON 或压缩摘要标记后，重放仍保留原文和用户身份；侧栏标题正确解析用户记录。
+- Windows 剪贴板的 BMP/TIFF 截图先在受限内存中转为 PNG，再检查附件大小，避免拒绝可压缩到上限内的普通截图；工具差异预览的大行号不再溢出。
+- 工具 schema 的引用展开同时限制累计节点和字节数，超限保留原始引用与约束，避免小型重复引用文档导致指数内存膨胀。
+- 损坏的非空工具调用 JSON 返回协议错误，不再被当作空参数执行；带未知调用标识/索引的流事件不再串入其他工具调用。
+- MCP stdio 连接初始化失败、取消或被替换时清理 Unix 子进程组；MCP Library 的实际文件读取也受 256 KiB 上限约束。
+- 嵌套 Git 仓库的 `.git/info/exclude` 从正确的仓库根目录匹配，文件搜索遵循其中的锚定忽略规则。
+- 已取消且仍在等待启动的阻塞工具不再执行；CodeMode 对 yield 请求设置累计预算，避免绕过日志限制挤满队列和记录。
+- 子代理记录完整隐藏包含空格、标点和转义引号的密钥值；PowerShell 仅包含 Warning 的 CLIXML 输出不再丢失，参数默认值中的 here-string 不再导致 UTF-8 初始化代码插入错误位置。
+- 自动更新严格匹配当前 Release 的版本、下载地址和应用程序文件名，避免选中其他版本或打包内的辅助程序。
+- 启动时等待网关设置与界面状态都加载完成，再判断是否显示安装提示，避免异步返回顺序导致误提示；未闭合变量表达式的代码高亮改为线性扫描，避免长代码块阻塞界面。
+- 离线 Wiki 对未知路由使用自有键校验，避免 `constructor` 等 URL 参数导致页面异常；补全 0.12.41 的更新说明。
+
+### Tests
+
+- 为发布门禁、异步会话、并发设置、用户记录、工具参数、进程清理、截图、执行取消及输出边界增加回归测试。
 
 ## [0.12.41] - 2026-11-03
 
 ### Changed
 
-- 带 `[release]` 标记的 `main` 推送发布。
+- 重设计纸张像素风工作区与品牌：恢复全宽欢迎界面、透明横幅和每次启动随机渐变字标，统一输入框、详情、设置与工作流面板及原生窗口材质；对话内容随窗口扩展，恢复代码块高亮。
+- 桌面图标、README 与响应式离线 Wiki 统一使用新视觉样式。
+- 未选择项目时可创建和恢复默认工作区中的对话；明确子代理主动委派规则，并展示工作流专用状态标签。
 
 ## [0.12.40] - 2026-11-03
 

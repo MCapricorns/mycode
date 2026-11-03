@@ -222,12 +222,11 @@ impl Attachments {
     }
 }
 
-/// Durable form of one user message that carries attachments.
+/// Durable form of one user message, with optional attachments.
 ///
-/// Plain prompts keep their raw UTF-8 bytes, as every older session does.
-/// This envelope is only written when attachments exist, and its
-/// `$mycodeUser` key makes it unambiguous: a prompt that is itself JSON is
-/// never mistaken for one.
+/// New prompts always use this envelope so literal JSON cannot become an
+/// assistant record or another user envelope on replay. Older plain-text
+/// payloads remain readable for compatibility.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoredUserMessage {
@@ -247,8 +246,7 @@ struct StoredEnvelope {
 }
 
 impl StoredUserMessage {
-    /// Reads the envelope; `None` means the payload is a plain-text prompt.
-    /// The `$mycodeUser` key must be present, so JSON a user typed stays text.
+    /// Reads the envelope; `None` means another record or a legacy plain prompt.
     #[must_use]
     pub fn from_payload(payload: &[u8]) -> Option<Self> {
         serde_json::from_slice::<StoredEnvelope>(payload)

@@ -34,14 +34,30 @@ fn read_mcp_file(file: &Path, label: &str) -> Result<Vec<McpServerSettings>, Str
     if metadata.len() > MAX_PROJECT_MCP_BYTES {
         return Err(format!("{label} MCP config is larger than 256 KiB"));
     }
-    let text = std::fs::read_to_string(file)
+    // Bound the actual read too: the Library writer can replace or grow the
+    // file after the metadata check. Never allocate an unbounded document.
+    let file = std::fs::File::open(file)
         .map_err(|error| format!("{label} MCP config unreadable: {error}"))?;
+    let text = read_mcp_text(file, label)?;
     // The import parser already refuses a stdio command that is a shell
     // string, so every row it returns is safe to spawn.
     Ok(parse_mcp_library(&text)?
         .into_iter()
         .map(|server| server.server)
         .collect())
+}
+
+fn read_mcp_text(reader: impl std::io::Read, label: &str) -> Result<String, String> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_PROJECT_MCP_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("{label} MCP config unreadable: {error}"))?;
+    if bytes.len() as u64 > MAX_PROJECT_MCP_BYTES {
+        return Err(format!("{label} MCP config is larger than 256 KiB"));
+    }
+    String::from_utf8(bytes).map_err(|_| format!("{label} MCP config is not UTF-8"))
 }
 
 #[cfg(test)]
@@ -58,6 +74,21 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let home = HomeLayout::from_root(&root).unwrap();
         (root, home)
+    }
+
+    #[test]
+    fn actual_mcp_reads_are_bounded_even_when_metadata_is_stale() {
+        use std::io::Read as _;
+        // This source never reaches EOF; the read must stop at cap + 1.
+        let mut source = std::io::repeat(b' ').take(u64::MAX);
+        let error = super::read_mcp_text(&mut source, "magpie").unwrap_err();
+        assert!(error.contains("larger than 256 KiB"));
+        assert_eq!(source.limit(), u64::MAX - super::MAX_PROJECT_MCP_BYTES - 1);
+        let text = " ".repeat(super::MAX_PROJECT_MCP_BYTES as usize);
+        assert_eq!(
+            super::read_mcp_text(text.as_bytes(), "magpie").unwrap(),
+            text
+        );
     }
 
     #[test]

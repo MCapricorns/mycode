@@ -519,7 +519,7 @@ function highlight(text) {
 
 
 function openCode(path, line) {
-  if (!(path in FILES)) return;
+  if (!Object.hasOwn(FILES, path)) return;
   fileTrigger = document.activeElement; currentFile = path;
   $("codePath").textContent = path;
   const lines = highlight(FILES[path]);
@@ -549,7 +549,7 @@ $("codeCopy").addEventListener("click", async () => {
   } catch { $("codeCopy").textContent = "复制失败"; }
 });
 function setView(view) {
-  currentView = DOCS[view] ? view : "graph";
+  currentView = Object.hasOwn(DOCS, view) ? view : "graph";
   $("graphView").hidden = currentView !== "graph"; $("docView").hidden = currentView === "graph";
   document.querySelectorAll("[data-view]").forEach((link) => { if (link.dataset.view === currentView) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); });
   const title = currentView === "graph" ? "架构图谱" : DOCS[currentView].title;
@@ -576,7 +576,7 @@ function readHash() {
   const params = new URLSearchParams(location.hash.slice(1));
   setView(params.get("v") || "graph");
   if (params.get("n") && byId.has(params.get("n"))) select(params.get("n"), mobile.matches);
-  if (params.get("f") && FILES[params.get("f")]) openCode(params.get("f"));
+  if (params.get("f") && Object.hasOwn(FILES, params.get("f"))) openCode(params.get("f"));
   else closeCode();
   const section = params.get("s");
   if (section && currentView !== "graph") requestAnimationFrame(() => document.getElementById(section)?.scrollIntoView());
