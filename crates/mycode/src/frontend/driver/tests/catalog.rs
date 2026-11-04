@@ -256,7 +256,23 @@ fn settings_reload_refreshes_library_without_opening_settings() {
 
 #[test]
 fn library_changes_refresh_skills_and_servers_without_navigation() {
-    let (mut driver, root) = scratch_driver("library-live");
+    let (driver, root) = scratch_driver("library-live");
+    assert_live_library_refreshes(driver, root);
+}
+
+#[cfg(unix)]
+#[test]
+fn library_watches_follow_a_symlinked_home_ancestor_and_new_skill_directories() {
+    let (mut driver, root) = scratch_driver("library-live-alias");
+    let alias = root.with_extension("alias");
+    std::os::unix::fs::symlink(root.parent().unwrap(), &alias).unwrap();
+    driver.home =
+        crate::config::HomeLayout::from_root(alias.join(root.file_name().unwrap())).unwrap();
+    assert_live_library_refreshes(driver, root);
+    std::fs::remove_file(alias).unwrap();
+}
+
+fn assert_live_library_refreshes(mut driver: FrontendDriver, root: std::path::PathBuf) {
     let mut out = Vec::new();
     driver.watch_library();
     assert!(driver.library_watcher.is_some());

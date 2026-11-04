@@ -675,7 +675,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[cfg(unix)]
     #[tokio::test]
     async fn tool_list_notifications_are_consumed_without_losing_the_reply() {
         use super::JsonRpcChannel as _;
@@ -701,6 +700,7 @@ read next
         channel.shutdown().await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn request_deadline_includes_blocked_stdin() {
         use crate::app::mcp_client::{JsonRpcChannel, McpError};
