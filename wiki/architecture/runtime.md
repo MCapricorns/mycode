@@ -61,32 +61,15 @@ sessions.db 保存会话索引和已提交记录的位置，sessions/ 保存消�
 | --- | --- | --- |
 | scout | 查找代码、文档和事实，附上位置或链接 | 不可以，也没有 shell |
 | artisan | 完成明确范围的修改并运行验证 | 可以，默认在独立 worktree 中工作 |
-| sentinel | 检查改动是否满足要求，报告具体缺陷 | 不可以，也没有 shell |
-| skeptic | 检查一个说法的依据，寻找反例 | 不可以，也没有 shell |
+| sentinel | 检查改动是否满足要求、报告具体缺陷，或对特定假设寻找反例 | 不可以，也没有 shell |
 
 角色提示来自内置 Markdown、全局 agents/ 和项目 .mycode/agents/。设置可以启停角色和指定模型。修改提示词不能给只读角色增加写入权限。需要执行命令的审查，必须由有执行权限的代理提供结果。
 
-普通 agent 调用按顺序执行；固定 workflow 可以同时运行互不依赖的节点。CodeMode 的 callAsync 也遵守工具的并发声明，不会把普通 agent 调用强行并发。活跃写入任务的路径或符号范围不能重叠；这用于避免任务互相覆盖，不是操作系统沙箱。
+agent 调用按顺序执行。活跃写入任务的路径或符号范围不能重叠；这用于避免任务互相覆盖，不是操作系统沙箱。
 
-agent_status 用于查看进度和结果，agent_stop 用于停止任务。关闭全部角色后，这两个工具仍可管理已有任务。agent_message 可以给运行中的任务补充说明；任务结束后，必须用摘要明确发起续接。续接会创建新的模型运行，写入任务复用原 worktree；已取消的任务不能续接。
+agent_status 用于查看进度和结果，agent_stop 用于停止任务。关闭全部角色后，这两个工具仍可管理已有任务。agent_message 可以给运行中的任务补充说明；任务结束后，可用摘要明确发起续接。续接会创建新的模型运行，写入任务复用原 worktree；已取消的任务不能续接。
 
-### 固定工作流程
-
-| 流程 | 执行顺序 |
-| --- | --- |
-| research | 同时收集三个方向的证据，合成结果，再由 sentinel 验收 |
-| code-review | sentinel 审查指定改动，再由另一位 sentinel 验收审查报告 |
-| migration | 两个 artisan 各做一部分，等待主代理整合，再运行检查和 sentinel 验收 |
-
-最终验收报告的最后一行必须精确为 WORKFLOW_ACCEPTANCE: PASS。对于 code-review，“审查任务完成”可以是已找到并说明缺陷，并不表示被审代码没有问题。
-
-migration 返回 waiting_integration 时，工作还没完成。主代理需要先检查并整合 worktree，再显式调用 resume 或 accept；后续检查针对的是整合后的父目录。依赖任务失败或取消时，不会继续启动下游任务。
-
-### 需要返工时
-
-revise 接收 workflow id、node_id、feedback 和 expected_revision。它会重新执行指定节点以及受影响的后续节点，保留旧报告和修改目录。revision 是返工轮次编号，用于避免迟到的旧进度覆盖新结果。
-
-每个会话在内存中最多保留 128 条子代理运行记录和 32 个 workflow，完整报告另存到 agent-results/。收到启动编号、running 状态或 CodeMode 的 yielded 状态，都需要继续收集到任务结束。
+每个会话在内存中最多保留 128 条子代理运行记录，完整报告另存到 agent-results/。收到启动编号、running 状态或 CodeMode 的 yielded 状态，都需要继续收集到任务结束。
 
 <a id="progressive-mcp"></a>
 
@@ -136,7 +119,6 @@ Windows 的命令、MCP 后台进程和更新助手通常不弹出控制台窗�
 - [模型与工具的一轮执行](../../crates/mycode/src/app/turn.rs)
 - [工具说明与模型调用规则](../../crates/mycode/src/agent/prompt.rs)
 - [子代理启动与控制](../../crates/mycode/src/app/subagent.rs)
-- [固定流程与验收](../../crates/mycode/src/tools/builtin/agent/workflow.rs)
 - [worktree 创建、保留和清理](../../crates/mycode/src/app/subagent/worktree.rs)
 - [流式文字的批量刷新](../../crates/mycode/src/frontend/stream.rs)
 

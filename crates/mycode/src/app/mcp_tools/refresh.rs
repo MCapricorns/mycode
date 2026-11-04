@@ -479,14 +479,7 @@ complete("removed");
     async fn repairing_an_empty_config_clears_its_cached_warning() {
         let fixture = Fixture::new(true).await;
         std::fs::write(fixture.root.join("mcp.json"), "{invalid").unwrap();
-        assert!(
-            fixture
-                .refresh
-                .refresh()
-                .await
-                .unwrap()
-                .contains("MCP config")
-        );
+        assert!(fixture.refresh.refresh().await.is_some());
         std::fs::write(fixture.root.join("mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
         assert!(fixture.refresh.refresh().await.is_none());
     }

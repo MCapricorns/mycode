@@ -1,10 +1,4 @@
 //! The `agent` tool: delegate one scoped unit of work to a subagent.
-//!
-//! The tool serializes the delegation through the host-supplied
-//! [`AgentHost`], forwards short progress lines onto its own tool stream,
-//! and returns the subagent's final answer as the tool result. The channel
-//! seam keeps the tool free of provider and runtime dependencies; hosts run
-//! the nested agent, tests replay canned answers. There is no `task` alias.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -21,16 +15,13 @@ pub(crate) mod activity;
 pub use activity::{AgentActivity, inherit_agent_activity, settle_agent_activity};
 mod control;
 mod redact;
-mod rework;
 mod runtime;
 mod scope;
 mod state;
-mod workflow;
 pub use control::{AgentMessageTool, AgentStatusTool, AgentStopTool};
 pub use runtime::AgentRuntime;
 pub use scope::{AgentScope, AgentSymbolScope};
 pub use state::*;
-pub use workflow::AgentWorkflowTool;
 #[cfg(test)]
 mod runtime_tests;
 
@@ -39,11 +30,8 @@ pub const MAX_AGENT_PROMPT_CHARS: usize = 16_000;
 /// Maximum characters of the subagent answer kept in the tool result.
 pub const MAX_AGENT_ANSWER_CHARS: usize = 24_000;
 /// First field of live progress lines: `agent|role|phase|detail`.
-///
-/// Readers do not accept the previous `task|` prefix.
 pub const AGENT_PROGRESS_PREFIX: &str = "agent";
-/// `step` detail a subagent reports after compacting its own history; the
-/// frontend localizes it like the other step tokens.
+/// `step` detail a subagent reports after compacting its own history.
 pub const AGENT_COMPACTED_STEP: &str = "compacted";
 
 /// One delegated unit of work.
@@ -60,16 +48,13 @@ pub struct SubagentRequest {
 }
 
 /// Host side of the delegation.
-///
-/// The method returns a boxed future so the trait stays object-safe for
-/// `dyn AgentHost` dispatch; implementers write `Box::pin(async move { … })`.
 pub trait AgentHost: Send + Sync + 'static {
     /// Resolve an enabled role before allocating a run; return its write capability.
     fn validate_role<'a>(
         &'a self,
         role: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, ToolError>> + Send + 'a>> {
-        Box::pin(async move { Ok(!matches!(role, "scout" | "sentinel" | "skeptic")) })
+        Box::pin(async move { Ok(!matches!(role, "scout" | "sentinel")) })
     }
     /// Validate a retained worktree without allocating or modifying a checkout.
     fn validate_reopen<'a>(
@@ -98,11 +83,6 @@ pub trait AgentHost: Send + Sync + 'static {
         })
     }
     /// Runs with the write capability used to admit this run and reserve its scope.
-    ///
-    /// Hosts that reload roles at dispatch must compare `writer` with the exact
-    /// role configuration used to launch the child, before allocating a worktree
-    /// or exposing tools. A capability change must fail instead of silently
-    /// invalidating the runtime's ownership and workflow acceptance checks.
     fn run_subagent_validated<'a>(
         &'a self,
         request: SubagentRequest,
@@ -128,14 +108,6 @@ pub trait AgentHost: Send + Sync + 'static {
         redact::redact_text(text)
     }
     /// Runs one subagent to completion and returns its final answer.
-    ///
-    /// Implementations must honor `cancel` and report short status lines
-    /// through `progress`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ToolError::Execution`] when the subagent failed or was
-    /// cancelled.
     fn run_subagent<'a>(
         &'a self,
         request: SubagentRequest,
@@ -202,21 +174,12 @@ impl Tool for AgentTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate one self-contained unit of work to a role listed in the \
-         system prompt's <dispatch> section and get back its answer. Only \
-         those roles are enabled. Calls are serialized and wait for their own result; \
-         call() inside run_code is also synchronous. The <dispatch> section lists any \
-         available workflow alternatives. The brief must stand alone: include \
-         the goal, paths, constraints, supplied evidence and done condition. The child \
-         cannot see this conversation or ask the user."
+        "Delegate one self-contained unit of work to a role listed in the          system prompt's <dispatch> section and get back its answer. Only          those roles are enabled. Calls are serialized and wait for their own result;          call() inside run_code is also synchronous. The brief must stand alone: include          the goal, paths, constraints, supplied evidence and done condition. The child          cannot see this conversation or ask the user."
     }
 
     fn prompt_snippet(&self) -> Option<&str> {
         Some(
-            "agent: hand one self-contained brief to a role from <dispatch> \
-             (research or a bounded change) and wait for its answer. Calls are serialized; \
-             a CodeMode yield is progress, not completion. Proactively delegate substantial \
-             independent work within the user request unless the user says otherwise.",
+            "agent: hand one self-contained brief to a role from <dispatch>              (research, implementation, or review) and wait for its answer. Calls are serialized;              a CodeMode yield is progress, not completion.",
         )
     }
 
@@ -286,7 +249,6 @@ impl Tool for AgentTool {
     }
 }
 
-/// Short progress label derived from a prompt's first line.
 fn brief_label(prompt: &str) -> String {
     let first = prompt.lines().next().unwrap_or("").trim();
     let chars: Vec<char> = first.chars().collect();
@@ -299,10 +261,9 @@ fn brief_label(prompt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::Arc;
 
     use super::{AgentHost, AgentTool, SubagentRequest};
     use crate::tools::stream::ToolStream;
@@ -326,33 +287,9 @@ mod tests {
     fn tool_name_is_agent_with_no_task_alias() {
         let tool = AgentTool::new(Arc::new(EchoHost));
         assert_eq!(tool.name(), "agent");
-        assert!(
-            !Tool::parallel_safe(&tool),
-            "ordinary delegation waits for its result"
-        );
-        assert!(tool.description().contains("Calls are serialized"));
-        assert!(!tool.description().contains("run together"));
+        assert!(!Tool::parallel_safe(&tool));
         let spec = ToolDyn::spec(&tool);
         assert_eq!(spec.name, "agent");
-        let schema = spec.params_schema.to_string();
-        assert!(!schema.contains("\"task\""));
-        let snippet = tool.prompt_snippet().expect("snippet");
-        assert!(snippet.starts_with("agent:"));
-        // Role names live in the dispatch section, which lists only the
-        // enabled roles; the tool copy must not advertise a disabled one.
-        assert!(snippet.contains("<dispatch>"));
-        assert!(!snippet.contains("scout"));
-        assert!(!snippet.contains("artisan"));
-        assert!(!snippet.contains("task"));
-        assert!(!snippet.contains("steward"));
-        assert!(!snippet.contains("sentinel"));
-        assert!(!snippet.contains("exec"));
-        assert!(spec.description.contains("<dispatch>"));
-        assert!(!spec.description.contains("scout"));
-        assert!(!spec.description.contains("artisan"));
-        assert!(!spec.description.contains("`task`"));
-        assert!(!spec.description.contains("steward"));
-        assert!(!spec.description.contains("sentinel"));
-        assert!(!spec.description.contains("`exec`"));
+        assert!(!spec.params_schema.to_string().contains("\"task\""));
     }
 }

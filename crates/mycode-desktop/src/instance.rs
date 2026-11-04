@@ -205,7 +205,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mycode-instance-{label}-{}-{}",
             std::process::id(),
-            crate::unix_now().as_nanos()
+            mycode::core::unix_now().as_nanos()
         ));
         let home = HomeLayout::from_root(&root).expect("home");
         (root, home)

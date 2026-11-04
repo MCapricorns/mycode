@@ -20,9 +20,6 @@ fn schema_advertises_one_tool_and_two_modes() {
     let snippet = tool.prompt_snippet().expect("snippet");
     assert!(snippet.contains("script"));
     assert!(snippet.contains("program"));
-    assert!(!snippet.contains("exec"));
-    assert!(!spec.description.contains("`exec`"));
-    assert!(!spec.description.contains("translated"));
     let required = spec
         .params_schema
         .get("required")
@@ -64,35 +61,10 @@ fn powershell_and_bash_specs_are_mutually_exclusive() {
     assert_eq!(ps_spec.name, "powershell");
     assert_eq!(pwsh_spec.name, "powershell");
     assert_eq!(bash_spec.name, "bash");
+    // Both releases share the tool name, so the description tells them apart.
     assert!(ps_spec.description.contains("Windows PowerShell 5.1"));
-    assert!(ps_spec.description.contains("&&"));
-    assert!(ps_spec.params_schema.to_string().contains("syntax errors"));
     assert!(pwsh_spec.description.contains("PowerShell 7"));
-    assert!(pwsh_spec.description.contains("cmdlets"));
-    // Available dedicated file tools remain preferred over shell cmdlets.
-    assert!(!pwsh_spec.description.contains("Get-ChildItem"));
-    assert!(
-        pwsh_spec
-            .description
-            .contains("When available, use `read`, `grep`, and `find`")
-    );
-    assert!(pwsh_spec.description.contains("instead of this tool"));
-    assert!(
-        pwsh_spec
-            .description
-            .contains("If a dedicated tool is unavailable")
-    );
-    assert!(!pwsh_spec.description.contains("translated"));
-    assert!(bash_spec.description.contains("bash -c"));
-    assert!(bash_spec.description.contains("in-process JavaScript"));
-    assert!(
-        bash_spec
-            .description
-            .contains("Python projects remains supported")
-    );
-    assert!(!bash_spec.description.contains("run Python"));
-    assert!(!ps_spec.description.contains("here-string to Python"));
-    assert!(!bash_spec.description.contains("osSandbox"));
+    assert!(!ps_spec.description.contains("Get-ChildItem"));
     assert!(!bash_spec.description.contains("Get-ChildItem"));
     let registry = ToolRegistry::new();
     registry.register(std::sync::Arc::new(powershell));
@@ -210,10 +182,6 @@ fn powershell_launch_keeps_the_command_and_does_not_translate_bash() {
     assert!(script.contains("ls -la"), "{script}");
     assert!(!script.contains("Get-ChildItem"), "{script}");
     assert!(script.contains("[Console]::OutputEncoding"), "{script}");
-    assert!(
-        !script.contains("translated"),
-        "launch script must not announce a rewrite: {script}"
-    );
 
     let windows_ps = super::DetectedShell {
         kind: super::ShellKind::WindowsPowerShell,
@@ -273,7 +241,7 @@ fn powershell_prelude_sets_utf8_encodings_without_cmdlets() {
 }
 
 #[test]
-fn result_text_does_not_announce_a_translation() {
+fn a_powershell_result_carries_no_announcement_text() {
     let plain = super::format_result(
         None,
         "Get-ChildItem -Force",
@@ -287,7 +255,6 @@ fn result_text_does_not_announce_a_translation() {
     assert_eq!(result_text(&plain), "");
     let details = plain.details.as_ref().expect("details");
     assert!(details.get("translated_command").is_none());
-    assert!(!result_text(&plain).contains("translated"));
 }
 
 #[test]

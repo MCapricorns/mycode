@@ -14,7 +14,7 @@ use std::sync::Arc;
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentStatusArgs {
-    /// Stable run/workflow id or actual host call_id; omit to list this session.
+    /// Stable run id or actual host call_id; omit to list this session.
     pub id: Option<String>,
 }
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -78,7 +78,7 @@ impl Tool for AgentStatusTool {
         "agent_status"
     }
     fn description(&self) -> &str {
-        "Query retained agent runs and workflows in this session, including completed results, errors and full-output artifact paths. Takes stable id or actual host call_id; omit id to list bounded retained records."
+        "Query retained agent runs in this session, including completed results, errors and full-output artifact paths. Takes stable id or actual host call_id; omit id to list bounded retained records."
     }
     async fn execute(
         &self,
@@ -96,7 +96,7 @@ impl Tool for AgentStopTool {
         "agent_stop"
     }
     fn description(&self) -> &str {
-        "Request cancellation of a run or workflow by stable id (or run call_id). Stopping runs retain scope until the child and worktree handoff settle. Stopped runs cannot resume. Use agent_status to observe the terminal state."
+        "Request cancellation of a run by stable id (or run call_id). Stopping runs retain scope until the child and worktree handoff settle. Stopped runs cannot resume. Use agent_status to observe the terminal state."
     }
     async fn execute(
         &self,
@@ -115,7 +115,7 @@ impl Tool for AgentMessageTool {
         "agent_message"
     }
     fn description(&self) -> &str {
-        "Steer a running agent at its next loop boundary. For a completed standalone run, start and synchronously await a NEW run with explicit retained summary context and artifact references. Writer continuation safely reopens the exact retained worktree and preserves dirty/untracked/ignored files; missing or unsupported retained worktrees fail without a HEAD fallback. This does not resume the original session or automatically integrate worktrees. Only mode=summary is supported. Cancelled, failed, settling and workflow-owned runs cannot be continued; workflow producers use explicit agent_workflow revise."
+        "Steer a running agent at its next loop boundary. For a completed run, start and synchronously await a NEW run with explicit retained summary context and artifact references. Writer continuation safely reopens the exact retained worktree and preserves dirty/untracked/ignored files; missing or unsupported retained worktrees fail without a HEAD fallback. This does not resume the original session or automatically integrate worktrees. Only mode=summary is supported. Cancelled, failed, and settling runs cannot be continued."
     }
     async fn execute(
         &self,
@@ -163,21 +163,15 @@ impl Tool for AgentMessageTool {
                 "only completed runs can continue; stopped/failed/settling runs cannot resume",
             ));
         }
-        if snapshot.workflow_id.is_some() {
-            return Err(error(
-                "workflow nodes cannot continue independently; use the workflow's explicit control action",
-            ));
-        }
-        let prompt=format!("Continue a completed task as a NEW run using summarized context only. Original role: {}. Previous worktree/path: {}. Full previous result artifact: {}. Previous edits have not been automatically integrated; inspect actual files and retained worktree before relying on them.
-
-Original brief:
-{}
-
-Retained result summary:
-{}
-
-New instruction:
-{}",snapshot.role,snapshot.path,snapshot.artifact_path.as_deref().unwrap_or("none"),clip(&request.prompt,3000),clip(snapshot.result.as_deref().unwrap_or(""),4000),message);
+        let prompt = format!(
+            "Continue a completed task as a NEW run using summarized context only. Original role: {}. Previous worktree/path: {}. Full previous result artifact: {}. Previous edits have not been automatically integrated; inspect actual files and retained worktree before relying on them.\n\nOriginal brief:\n{}\n\nRetained result summary:\n{}\n\nNew instruction:\n{}",
+            snapshot.role,
+            snapshot.path,
+            snapshot.artifact_path.as_deref().unwrap_or("none"),
+            clip(&request.prompt, 3000),
+            clip(snapshot.result.as_deref().unwrap_or(""), 4000),
+            message
+        );
         let run = self
             .runtime
             .run(

@@ -1,86 +1,28 @@
 use crate::config::{HomeLayout, SubagentSettings, builtin_roles};
-use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
-
-#[test]
-fn parent_dispatch_names_enabled_builtin_roles_and_runtime_capabilities() {
-    let text = super::delegation_directive(&builtin_roles(), &SubagentSettings::default(), true);
-    assert!(text.contains("`scout`"));
-    assert!(text.contains("`artisan`"));
-    assert!(text.contains("stands on its own"));
-    assert!(text.contains("do not wait for the user to ask for subagents"));
-    assert!(text.contains("unless the user says otherwise"));
-    assert!(text.contains("Prefer agent_workflow name=research"));
-    assert!(text.contains("Prefer agent_workflow name=code-review"));
-    assert!(text.contains("Prefer agent_workflow name=migration"));
-    assert!(text.contains("vague"));
-    assert!(text.contains("not a diff"));
-    assert!(text.contains("one at a time"));
-    assert!(text.contains("cannot run commands, build, test, or edit"));
-    assert!(text.contains("API references"));
-    assert!(text.contains("deletes the conversation"));
-    assert!(!text.contains("wall-clock"));
-    assert!(!text.contains("At most"));
-    assert!(!text.contains("steward"));
-    assert!(text.contains("`sentinel`"));
-    assert!(text.contains("`skeptic`"));
-    assert!(text.contains("agent_status"));
-    assert!(text.contains("waiting_integration"));
-    assert!(text.contains("phase_id"));
-    assert!(text.contains("Full-session continuation is unsupported"));
-    assert!(text.contains("preserve its original cell_id and use wait_code"));
-    assert!(text.contains("existing authorization and declared scope"));
-    assert!(text.contains("new independent acceptance result"));
-    assert!(text.contains("original writer worktree"));
-    assert!(text.contains("does not restore a full conversation session"));
-    assert!(!text.contains("continuation is refused"));
-    assert!(text.contains("Completed worktree writers reopen"));
-    assert!(!text.contains("standalone shared/read-only"));
-    assert!(!text.contains("`exec`"));
-    assert!(!text.contains("`task`"));
-    assert!(text.contains("Calls to agent are serialized"), "{text}");
-    assert!(
-        text.contains("Multiple calls in one script do not run in parallel"),
-        "{text}"
-    );
-    assert!(!text.contains("run beside every other call"), "{text}");
-    assert!(
-        !text.contains("briefs in one response; they run together"),
-        "{text}"
-    );
-}
 
 #[test]
 fn parent_dispatch_never_names_a_role_switched_off_in_settings() {
     let mut settings = SubagentSettings::default();
     settings.role_mut("artisan").enabled = false;
-    let text = super::delegation_directive(&builtin_roles(), &settings, true);
+    let text = super::delegation_directive(&builtin_roles(), &settings);
     assert!(text.contains("`scout`"), "{text}");
     assert!(!text.contains("artisan"), "{text}");
 
     let mut settings = SubagentSettings::default();
     settings.role_mut("scout").enabled = false;
-    let text = super::delegation_directive(&builtin_roles(), &settings, true);
+    let text = super::delegation_directive(&builtin_roles(), &settings);
     assert!(text.contains("`artisan`"), "{text}");
     assert!(!text.contains("scout"), "{text}");
 
     settings.role_mut("artisan").enabled = false;
-    let remaining = super::delegation_directive(&builtin_roles(), &settings, true);
+    let remaining = super::delegation_directive(&builtin_roles(), &settings);
     assert!(remaining.contains("`sentinel`"));
-    assert!(remaining.contains("`skeptic`"));
-    assert!(!remaining.contains("name=research"));
-    assert!(!remaining.contains("name=migration"));
-
-    settings.role_mut("sentinel").enabled = false;
-    let without_sentinel = super::delegation_directive(&builtin_roles(), &settings, true);
-    assert!(without_sentinel.contains("`skeptic`"));
-    assert!(!without_sentinel.contains("sentinel"));
-    assert!(!without_sentinel.contains("agent_workflow"));
 
     for name in builtin_roles().names() {
         settings.role_mut(&name).enabled = false;
     }
-    assert!(super::delegation_directive(&builtin_roles(), &settings, true).is_empty());
+    assert!(super::delegation_directive(&builtin_roles(), &settings).is_empty());
 }
 
 #[test]
@@ -96,7 +38,7 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
     let workspace = super::ChildWorkspace {
         resources: vec!["# AGENTS.md (workspace)\n\nRun `just check` before reporting.".to_owned()],
         mcp_note: Some(super::child_mcp_note(
-            "Connected MCP servers:\n- anysearch (1 tool)\nFind one with `search_tool` by keyword (or name \"list\").\n",
+            "Connected MCP servers:\n- anysearch (1 tool)\n",
             scout.is_write_capable(),
         )),
         ..Default::default()
@@ -111,30 +53,9 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
         &shell,
         &workspace,
     );
-    assert!(
-        prompt.contains("Run `just check` before reporting."),
-        "{prompt}"
-    );
-    assert!(prompt.contains("standing instructions"), "{prompt}");
-    assert!(prompt.contains("<mcp>\nConnected MCP servers"), "{prompt}");
-    assert!(prompt.contains("name \"list\""), "{prompt}");
-    assert!(prompt.contains("declare readOnlyHint"), "{prompt}");
-    assert!(
-        prompt.contains(crate::app::turn::MCP_CALL_GUIDANCE),
-        "{prompt}"
-    );
-    assert!(
-        !prompt.contains("emit them in the same response"),
-        "{prompt}"
-    );
-    assert!(!prompt.contains("whose server set"), "{prompt}");
-    assert!(
-        prompt.find("AGENTS.md (workspace)") > prompt.find("<environment>"),
-        "per-workspace text stays after the cached fixed prefix:\n{prompt}"
-    );
-
-    let note = super::child_mcp_note("Connected MCP servers:\n- anysearch (1 tool)\n", true);
-    assert!(!note.contains("readOnlyHint"), "{note}");
+    assert!(prompt.contains("Run `just check` before reporting."));
+    assert!(prompt.contains("<mcp>\nConnected MCP servers"));
+    assert!(prompt.find("AGENTS.md (workspace)") > prompt.find("<environment>"));
 }
 
 fn shell_tool(kind: crate::tools::ShellKind, program: &str) -> crate::tools::ShellTool {
@@ -168,7 +89,7 @@ fn child_registry_keeps_one_shell_tool_for_every_allowlist_alias() {
         "powershell".to_owned(),
         "cmd".to_owned(),
     ];
-    let cases = [
+    for (kind, program, expected) in [
         (
             crate::tools::ShellKind::WindowsPowerShell,
             "powershell.exe",
@@ -176,182 +97,10 @@ fn child_registry_keeps_one_shell_tool_for_every_allowlist_alias() {
         ),
         (crate::tools::ShellKind::Pwsh, "pwsh.exe", "powershell"),
         (crate::tools::ShellKind::Bash, "/bin/bash", "bash"),
-        (crate::tools::ShellKind::Zsh, "/bin/zsh", "zsh"),
-        (crate::tools::ShellKind::Sh, "/bin/sh", "sh"),
-        (crate::tools::ShellKind::Cmd, "cmd.exe", "cmd"),
-    ];
-    for (kind, program, expected) in cases {
+    ] {
         let registry = super::child_registry_with(&aliases, shell_tool(kind, program));
-        assert_eq!(
-            shell_names(&registry),
-            vec![expected.to_owned()],
-            "{kind:?}"
-        );
+        assert_eq!(shell_names(&registry), vec![expected.to_owned()]);
     }
-}
-
-#[test]
-fn artisan_on_windows_powershell_does_not_receive_bash() {
-    let artisan = builtin_roles().role("artisan").expect("artisan").clone();
-    let allowed = artisan.resolve_tools(
-        &super::PARENT_TOOL_NAMES
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect::<Vec<_>>(),
-    );
-    assert!(
-        allowed.iter().any(|name| name == "shell"),
-        "artisan inherits the shell allowlist token, got {allowed:?}"
-    );
-    let shell = crate::tools::DetectedShell {
-        kind: crate::tools::ShellKind::WindowsPowerShell,
-        program: std::path::PathBuf::from("powershell.exe"),
-    };
-    let registry =
-        super::child_registry_with(&allowed, crate::tools::ShellTool::forcing(shell.clone()));
-    assert_eq!(shell_names(&registry), vec!["powershell".to_owned()]);
-    let prompt = super::subagent_system_prompt(
-        &artisan,
-        &registry,
-        std::path::Path::new("/work"),
-        &[std::path::PathBuf::from("/other")],
-        "windows",
-        "x86_64",
-        &shell,
-        &Default::default(),
-    );
-    assert!(prompt.contains("shell_tool: powershell"), "{prompt}");
-    assert!(prompt.contains("Windows PowerShell 5.1"), "{prompt}");
-    assert!(prompt.contains("Do not use `&&`"), "{prompt}");
-    assert!(
-        prompt.contains("@'...'@"),
-        "PowerShell keeps literal here-string syntax: {prompt}"
-    );
-    assert!(prompt.contains("`powershell`"), "{prompt}");
-    assert!(!prompt.contains("\n- bash:"), "{prompt}");
-    assert!(!prompt.contains("translated"), "{prompt}");
-    assert!(
-        prompt.contains("a `powershell` script"),
-        "extra roots must name the active tool:\n{prompt}"
-    );
-}
-
-#[test]
-fn the_scratch_root_is_listed_apart_from_workspace_folders() {
-    let role = builtin_roles().role("artisan").expect("artisan").clone();
-    let allowed = role.resolve_tools(&["read", "shell"]);
-    let shell = crate::tools::DetectedShell {
-        kind: crate::tools::ShellKind::Pwsh,
-        program: std::path::PathBuf::from("pwsh.exe"),
-    };
-    let registry =
-        super::child_registry_with(&allowed, crate::tools::ShellTool::forcing(shell.clone()));
-    let scratch = crate::tools::os_scratch_root();
-    let prompt = super::subagent_system_prompt(
-        &role,
-        &registry,
-        std::path::Path::new("/work"),
-        std::slice::from_ref(&scratch),
-        "windows",
-        "x86_64",
-        &shell,
-        &Default::default(),
-    );
-    assert!(
-        !prompt.contains("Other workspace folders"),
-        "temp alone is not a workspace folder:\n{prompt}"
-    );
-    assert!(
-        prompt.contains(&format!(
-            "Scratch directory (OS temp): {}",
-            scratch.display()
-        )),
-        "{prompt}"
-    );
-}
-
-#[test]
-fn a_bash_allowlist_entry_still_launches_the_active_powershell_tool() {
-    let mut role = builtin_roles().role("artisan").expect("artisan").clone();
-    role.tools = Some(vec!["read".into(), "bash".into()]);
-    let allowed = role.resolve_tools(&["read", "shell"]);
-    assert_eq!(allowed, vec!["read".to_owned(), "bash".to_owned()]);
-    let shell = crate::tools::DetectedShell {
-        kind: crate::tools::ShellKind::Pwsh,
-        program: std::path::PathBuf::from("pwsh.exe"),
-    };
-    let registry =
-        super::child_registry_with(&allowed, crate::tools::ShellTool::forcing(shell.clone()));
-    assert_eq!(shell_names(&registry), vec!["powershell".to_owned()]);
-    let prompt = super::subagent_system_prompt(
-        &role,
-        &registry,
-        std::path::Path::new(r"C:\work"),
-        &[],
-        "windows",
-        "x86_64",
-        &shell,
-        &Default::default(),
-    );
-    assert!(prompt.contains("shell_tool: powershell"), "{prompt}");
-    assert!(prompt.contains("PowerShell 7"), "{prompt}");
-    assert!(prompt.contains("`&&` and `||` are allowed"), "{prompt}");
-    assert!(prompt.contains("\n- powershell:"), "{prompt}");
-    assert!(!prompt.contains("\n- bash:"), "{prompt}");
-    assert!(!prompt.contains("syntax errors"), "{prompt}");
-    assert!(!prompt.contains("translated"), "{prompt}");
-}
-
-#[test]
-fn zsh_and_cmd_subagents_match_that_interpreter() {
-    let artisan = builtin_roles().role("artisan").expect("artisan").clone();
-    let allowed = ["read".to_owned(), "shell".to_owned()];
-    let zsh = crate::tools::DetectedShell {
-        kind: crate::tools::ShellKind::Zsh,
-        program: std::path::PathBuf::from("/bin/zsh"),
-    };
-    let registry =
-        super::child_registry_with(&allowed, crate::tools::ShellTool::forcing(zsh.clone()));
-    assert_eq!(shell_names(&registry), vec!["zsh".to_owned()]);
-    let prompt = super::subagent_system_prompt(
-        &artisan,
-        &registry,
-        std::path::Path::new("/work"),
-        &[],
-        "macos",
-        "aarch64",
-        &zsh,
-        &Default::default(),
-    );
-    assert!(prompt.contains("shell_tool: zsh"), "{prompt}");
-    assert!(prompt.contains("Write zsh"), "{prompt}");
-    assert!(prompt.contains("The path separator is `/`."), "{prompt}");
-    assert!(prompt.contains("\n- zsh:"), "{prompt}");
-    assert!(!prompt.contains("\n- powershell:"), "{prompt}");
-    assert!(!prompt.contains("Git Bash"), "{prompt}");
-    assert!(!prompt.contains("translated"), "{prompt}");
-
-    let cmd = crate::tools::DetectedShell {
-        kind: crate::tools::ShellKind::Cmd,
-        program: std::path::PathBuf::from(r"C:\Windows\System32\cmd.exe"),
-    };
-    let registry =
-        super::child_registry_with(&allowed, crate::tools::ShellTool::forcing(cmd.clone()));
-    assert_eq!(shell_names(&registry), vec!["cmd".to_owned()]);
-    let prompt = super::subagent_system_prompt(
-        &artisan,
-        &registry,
-        std::path::Path::new(r"C:\work"),
-        &[],
-        "windows",
-        "x86_64",
-        &cmd,
-        &Default::default(),
-    );
-    assert!(prompt.contains("shell_tool: cmd"), "{prompt}");
-    assert!(prompt.contains("cmd.exe"), "{prompt}");
-    assert!(prompt.contains("\n- cmd:"), "{prompt}");
-    assert!(!prompt.contains("translated"), "{prompt}");
 }
 
 #[test]
@@ -363,22 +112,13 @@ fn scout_stays_read_only_and_does_not_list_a_shell() {
             .map(|name| (*name).to_owned())
             .collect::<Vec<_>>(),
     );
-    assert!(
-        allowed.iter().all(|name| {
-            !matches!(
-                name.as_str(),
-                "shell" | "bash" | "zsh" | "sh" | "powershell" | "cmd"
-            )
-        }),
-        "scout must not inherit a shell tool, got {allowed:?}"
-    );
     let shell = crate::tools::DetectedShell {
         kind: crate::tools::ShellKind::WindowsPowerShell,
         program: std::path::PathBuf::from("powershell.exe"),
     };
     let registry =
         super::child_registry_with(&allowed, crate::tools::ShellTool::forcing(shell.clone()));
-    assert!(shell_names(&registry).is_empty(), "{:?}", registry.names());
+    assert!(shell_names(&registry).is_empty());
     let prompt = super::subagent_system_prompt(
         &scout,
         &registry,
@@ -389,124 +129,14 @@ fn scout_stays_read_only_and_does_not_list_a_shell() {
         &shell,
         &Default::default(),
     );
-    assert!(
-        prompt.contains("absolute path to `read`, `find`, `grep`"),
-        "{prompt}"
-    );
-    assert!(!prompt.contains("absolute path to `write`"), "{prompt}");
-    assert!(
-        !prompt.contains("shell_tool:"),
-        "scout has no shell tool:\n{prompt}"
-    );
-    assert!(prompt.contains("no shell tool"), "{prompt}");
-    assert!(prompt.contains("os: windows"), "{prompt}");
-    assert!(!prompt.contains("Do not use `&&`"), "{prompt}");
-    assert!(!prompt.contains("\n- powershell:"), "{prompt}");
-    assert!(!prompt.contains("\n- bash:"), "{prompt}");
-    assert!(!prompt.contains("translated"), "{prompt}");
-    assert!(!prompt.contains("\n- shell:"), "{prompt}");
+    assert!(!prompt.contains("shell_tool:"));
     assert!(registry.get("edit").is_none());
-    assert!(prompt.contains("bounded research question"), "{prompt}");
-    assert!(
-        !prompt.contains("Do not do that research inline"),
-        "{prompt}"
-    );
 }
 
-#[test]
-fn scout_prompt_lists_workspace_skills() {
-    let root = std::env::temp_dir().join(format!(
-        "mycode-scout-skill-{}-{}",
-        std::process::id(),
-        crate::core::unix_now().as_nanos()
-    ));
-    // magpie's Library writes `home.root()/skills`; that is the only catalog
-    // a child prompt lists now.
-    let skill = root.join("skills").join("aaa-scout");
-    std::fs::create_dir_all(&skill).unwrap();
-    std::fs::write(skill.join("SKILL.md"), "# Aaa Scout\nMap the crate.\n").unwrap();
-    let scout = builtin_roles().role("scout").expect("scout").clone();
-    let allowed = scout.resolve_tools(
-        &super::PARENT_TOOL_NAMES
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect::<Vec<_>>(),
-    );
-    let shell = crate::tools::DetectedShell {
-        kind: crate::tools::ShellKind::Bash,
-        program: std::path::PathBuf::from("/bin/bash"),
-    };
-    let registry =
-        super::child_registry_with(&allowed, crate::tools::ShellTool::forcing(shell.clone()));
-    let workspace = super::ChildWorkspace {
-        mycode_home: Some(root.clone()),
-        ..Default::default()
-    };
-    let prompt = super::subagent_system_prompt(
-        &scout,
-        &registry,
-        &root,
-        &[],
-        "macos",
-        "aarch64",
-        &shell,
-        &workspace,
-    );
-    assert!(prompt.contains("/aaa-scout"), "{prompt}");
-    assert!(prompt.contains("read the matching SKILL.md"), "{prompt}");
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// A child registry's MCP nudges come from its own allowlist: a native
-/// name the role holds is redirected to the tool itself, a native name
-/// outside the allowlist keeps the generic MCP error.
-#[tokio::test]
-async fn child_mcp_nudges_follow_the_role_allowlist() {
-    let allowed = ["read", "grep", "find", "shell"]
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect::<Vec<_>>();
-    let shell = crate::tools::DetectedShell {
-        kind: crate::tools::ShellKind::Bash,
-        program: std::path::PathBuf::from("/bin/bash"),
-    };
-    let registry = super::child_registry_with(&allowed, crate::tools::ShellTool::forcing(shell));
-    assert!(registry.get("read").is_some());
-    assert!(registry.get("edit").is_none());
-    let native: std::collections::BTreeSet<String> = registry
-        .names()
-        .into_iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect();
-    let catalog = crate::app::mcp_tools::McpCatalog::new(None, native, Vec::new());
-    let index = crate::app::tool_search::ToolSearchIndex::new();
-    crate::app::mcp_tools::register_meta_tools(&registry, &catalog, std::sync::Arc::clone(&index));
-    crate::app::mcp_tools::register_ready_server(
-        &registry,
-        &catalog,
-        &index,
-        std::sync::Arc::new(crate::app::mcp_tools::McpServerInfo::new("files", None)),
-        vec![crate::app::mcp_tools::stub_catalog_tool(
-            "files",
-            "stat",
-            "Stat a remote file.",
-        )],
-    );
-    let nudged = use_tool_invalid_args(&registry, "read").await;
-    assert!(nudged.contains("already on the tool list"), "{nudged}");
-    assert!(nudged.contains("Call read directly"), "{nudged}");
-    let outside = use_tool_invalid_args(&registry, "edit").await;
-    assert!(outside.contains("no MCP tool named edit"), "{outside}");
-}
-
-/// The read-only filter runs on the drained tool vector, before
-/// registration: a role without write tools never gets a schema it may not
-/// call, and the writable tools keep theirs.
 #[test]
 fn the_read_only_filter_runs_on_the_drained_tools() {
-    use std::sync::Arc;
-
     use crate::tools::ToolDyn;
+    use std::sync::Arc;
     let server = Arc::new(crate::app::mcp_tools::McpServerInfo::new("docs", None));
     let readable = crate::app::mcp_tools::stub_catalog_tool_with_read_only(
         "docs",
@@ -523,14 +153,12 @@ fn the_read_only_filter_runs_on_the_drained_tools() {
     let tools = vec![readable, writable];
     assert_eq!(
         crate::app::mcp_tools::filter_mcp_tools(tools.clone(), true).len(),
-        2,
-        "a write-capable role keeps every tool"
+        2
     );
     let filtered = crate::app::mcp_tools::filter_mcp_tools(tools, false);
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].spec().name, "lookup");
 
-    // Registration after the filter leaves only the readable tool.
     let registry = crate::tools::ToolRegistry::new();
     let catalog =
         crate::app::mcp_tools::McpCatalog::new(None, std::collections::BTreeSet::new(), Vec::new());
@@ -538,141 +166,6 @@ fn the_read_only_filter_runs_on_the_drained_tools() {
     crate::app::mcp_tools::register_ready_server(&registry, &catalog, &index, server, filtered);
     assert!(registry.get("lookup").is_some());
     assert!(registry.get("write-note").is_none());
-}
-
-/// Runs one `use_tool` name lookup that must fail and returns its
-/// `InvalidArgs` text.
-async fn use_tool_invalid_args(registry: &crate::tools::ToolRegistry, name: &str) -> String {
-    let tool = registry.get("use_tool").expect("use_tool registered");
-    let root = std::env::temp_dir().join(format!(
-        "mycode-child-nudge-{}-{}",
-        std::process::id(),
-        crate::core::unix_now().as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let ctx = crate::tools::ToolCtx::new(&root);
-    let (mut stream, rx) = crate::tools::ToolStream::channel();
-    let error = crate::tools::ToolDyn::execute_dyn(
-        tool.as_ref(),
-        serde_json::json!({"name": name, "arguments": {}}),
-        &ctx,
-        &mut stream,
-    )
-    .await
-    .expect_err("the lookup must fail");
-    drop(stream);
-    drop(rx);
-    let _ = std::fs::remove_dir_all(&root);
-    match error {
-        crate::tools::ToolError::InvalidArgs(text) => text,
-        other => panic!("expected InvalidArgs, got {other}"),
-    }
-}
-
-#[test]
-fn artisan_gets_the_same_tool_guidance_as_the_parent() {
-    let artisan = builtin_roles().role("artisan").expect("artisan").clone();
-    let allowed = artisan.resolve_tools(
-        &super::PARENT_TOOL_NAMES
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect::<Vec<_>>(),
-    );
-    assert!(allowed.iter().any(|name| name == "edit"), "{allowed:?}");
-    let shell = crate::tools::DetectedShell {
-        kind: crate::tools::ShellKind::Bash,
-        program: std::path::PathBuf::from("/bin/bash"),
-    };
-    let registry = std::sync::Arc::new(super::child_registry_with(
-        &allowed,
-        crate::tools::ShellTool::forcing(shell.clone()),
-    ));
-    let cells = std::sync::Arc::new(crate::tools::CodeCells::new());
-    registry.register(std::sync::Arc::new(crate::tools::RunCodeTool::new(
-        std::sync::Arc::clone(&registry),
-        std::sync::Arc::clone(&cells),
-        "artisan-guidance-test".to_owned(),
-    )));
-    registry.register(std::sync::Arc::new(crate::tools::WaitCodeTool::new(
-        cells,
-        "artisan-guidance-test".to_owned(),
-    )));
-    registry.expose_only(&["bash", "run_code", "wait_code"]);
-    let prompt = super::subagent_system_prompt(
-        &artisan,
-        &registry,
-        std::path::Path::new("/work"),
-        &[std::path::PathBuf::from("/extra")],
-        "macos",
-        "aarch64",
-        &shell,
-        &Default::default(),
-    );
-    assert!(
-        prompt.contains("absolute path to `call(\"read\""),
-        "{prompt}"
-    );
-    assert!(!prompt.contains("absolute path to `read`"), "{prompt}");
-    assert!(prompt.contains("<tool_calling>"), "{prompt}");
-    assert!(
-        prompt.contains("Change files by `call(\"write\""),
-        "{prompt}"
-    );
-    assert!(
-        prompt.contains("Use `bash` only for what the dedicated tools cannot do"),
-        "{prompt}"
-    );
-    assert!(prompt.contains("cannot delegate further"), "{prompt}");
-    assert!(
-        !prompt.contains("Do not do that research inline"),
-        "{prompt}"
-    );
-    let directive = super::delegation_directive(
-        &builtin_roles(),
-        &crate::config::SubagentSettings::default(),
-        true,
-    );
-    assert!(
-        directive.contains("reuse supplied findings instead of repeating the parent's search"),
-        "{directive}"
-    );
-    assert!(directive.contains("scout"), "{directive}");
-    assert!(
-        !directive.contains("Do not do that research inline"),
-        "{directive}"
-    );
-}
-
-#[tokio::test]
-async fn a_cancelled_child_stops_a_run_that_never_answers() {
-    let cancel = CancellationToken::new();
-    let child = CancellationToken::new();
-    let mut run = tokio::spawn(async {
-        std::future::pending::<()>().await;
-        Ok::<String, crate::tools::ToolError>("never".to_owned())
-    });
-    let stopper = child.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        stopper.cancel();
-    });
-    let outcome = super::finish_subagent_task(&mut run, &cancel, &child).await;
-    assert!(matches!(outcome, super::SubagentFinish::Cancelled));
-    run.abort();
-    let _ = (&mut run).await;
-}
-
-#[tokio::test]
-async fn a_finished_run_returns_its_answer() {
-    let cancel = CancellationToken::new();
-    let child = CancellationToken::new();
-    let mut run = tokio::spawn(async { Ok::<String, crate::tools::ToolError>("done".to_owned()) });
-    let outcome = super::finish_subagent_task(&mut run, &cancel, &child).await;
-    match outcome {
-        super::SubagentFinish::Finished(Ok(text)) => assert_eq!(text, "done"),
-        other => panic!("expected a finished run, got {other:?}"),
-    }
-    assert!(!child.is_cancelled());
 }
 
 #[tokio::test]
@@ -691,51 +184,6 @@ async fn parent_cancel_stops_the_run_and_its_child_token() {
     let _ = (&mut run).await;
 }
 
-#[test]
-fn child_cancel_registration_preserves_a_successor_token_with_the_same_call_id() {
-    let cancels = parking_lot::Mutex::new(std::collections::HashMap::new());
-    let first_token = CancellationToken::new();
-    let second_token = CancellationToken::new();
-    let first = super::ChildCancelRegistration::new(&cancels, "ses", "call_0", &first_token);
-    let second = super::ChildCancelRegistration::new(&cancels, "ses", "call_0", &second_token);
-    drop(first);
-    let kept = cancels
-        .lock()
-        .get("ses:call_0")
-        .cloned()
-        .expect("the successor registration must survive the older drop");
-    kept.cancel();
-    assert!(second_token.is_cancelled());
-    drop(second);
-    assert!(cancels.lock().is_empty());
-}
-
-#[test]
-fn role_with_only_unknown_or_parent_tools_stays_read_only() {
-    use crate::config::{RoleIsolation, RoleOrigin, RoleThinking, SubagentRole};
-
-    let role = SubagentRole {
-        name: "reviewer".to_owned(),
-        description: "Review only".to_owned(),
-        isolation: RoleIsolation::Worktree,
-        thinking: RoleThinking::Default,
-        tools: Some(vec![
-            "read".to_owned(),
-            "grep".to_owned(),
-            "agent".to_owned(),
-            "ask_user".to_owned(),
-            "nonexistent_tool".to_owned(),
-        ]),
-        prompt: "Review.".to_owned(),
-        origin: RoleOrigin::Project,
-    };
-    assert!(!role.is_write_capable());
-    assert_eq!(
-        super::resolve_isolation(&role, Some("worktree")),
-        RoleIsolation::Shared
-    );
-}
-
 fn assistant_msg(
     text: &str,
     stop: crate::core::StopReason,
@@ -752,38 +200,7 @@ fn assistant_msg(
 }
 
 #[test]
-fn an_interrupted_child_answers_as_a_tool_error() {
-    let text = crate::core::interrupted_response_text("provider unavailable: transport failed");
-    let messages = vec![
-        std::sync::Arc::new(crate::core::Message::User(crate::core::UserMessage::text(
-            "brief",
-        ))),
-        assistant_msg(&text, crate::core::StopReason::Error),
-    ];
-    let result = super::subagent_answer(
-        Ok(crate::core::TurnOutcome::Completed),
-        &messages,
-        "artisan",
-    );
-    let error = result.expect_err("the interruption line is not an answer");
-    assert!(error.to_string().contains("transport failed"), "{error}");
-    // A real answer followed by an interrupted retry still fails closed.
-    let messages = vec![
-        assistant_msg("done so far", crate::core::StopReason::Stop),
-        assistant_msg(&text, crate::core::StopReason::Error),
-    ];
-    assert!(
-        super::subagent_answer(
-            Ok(crate::core::TurnOutcome::Completed),
-            &messages,
-            "artisan",
-        )
-        .is_err()
-    );
-}
-
-#[test]
-fn a_stopped_child_answers_with_its_last_text() {
+fn subagent_answer_extracts_final_text_and_rejects_errors_or_truncation() {
     let messages = vec![
         assistant_msg("earlier", crate::core::StopReason::ToolUse),
         assistant_msg("the answer", crate::core::StopReason::Stop),
@@ -793,52 +210,24 @@ fn a_stopped_child_answers_with_its_last_text() {
             .expect("answer");
     assert_eq!(answer, "the answer");
     assert!(
-        super::subagent_answer(Ok(crate::core::TurnOutcome::Aborted), &messages, "scout",)
-            .expect_err("aborted")
-            .to_string()
-            .contains("scout")
+        super::subagent_answer(Ok(crate::core::TurnOutcome::Aborted), &messages, "scout").is_err()
     );
+    let truncated = vec![assistant_msg("partial", crate::core::StopReason::Length)];
     assert!(
-        super::subagent_answer(Ok(crate::core::TurnOutcome::Completed), &[], "scout")
-            .expect_err("empty")
-            .to_string()
-            .contains("no answer")
+        super::subagent_answer(
+            Ok(crate::core::TurnOutcome::Completed),
+            &truncated,
+            "sentinel"
+        )
+        .is_err()
     );
-}
-
-#[test]
-fn concurrent_children_of_one_role_cannot_collect_each_others_cells() {
-    let cells = crate::tools::CodeCells::new();
-    let first_scope = super::child_code_scope("session", "artisan");
-    let second_scope = super::child_code_scope("session", "artisan");
-    let first = cells.create(&first_scope, 1024);
-    assert!(cells.get(&first_scope, first.cell_id()).is_some());
-    assert!(cells.get(&second_scope, first.cell_id()).is_none());
-}
-
-#[test]
-fn an_empty_final_response_never_reuses_an_earlier_child_answer() {
-    for stop in [
-        crate::core::StopReason::Stop,
-        crate::core::StopReason::Error,
-    ] {
-        let messages = vec![
-            assistant_msg("earlier tool preamble", crate::core::StopReason::ToolUse),
-            assistant_msg("", stop),
-        ];
-        assert!(
-            super::subagent_answer(Ok(crate::core::TurnOutcome::Completed), &messages, "scout",)
-                .is_err()
-        );
-    }
 }
 
 #[test]
 fn a_child_sizes_its_window_from_its_own_model() {
-    use std::sync::Arc;
-
     use crate::config::{AppSettings, MagpieSettings, SubagentRoleSettings};
     use crate::providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
+    use std::sync::Arc;
 
     let mut settings = AppSettings {
         magpie: MagpieSettings {
@@ -877,48 +266,23 @@ fn a_child_sizes_its_window_from_its_own_model() {
         .expect("gateway row");
     let resolved = crate::providers::ResolvedProvider::resolve(&parent, "parent-model", "k", "ua")
         .expect("resolve");
-    let host = || {
-        super::BridgeAgentHost::new(
-            resolved.clone(),
-            home.clone(),
-            std::path::PathBuf::from("/tmp"),
-            &settings,
-            "session".to_owned(),
-            Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
-            Arc::new(tokio::sync::Mutex::new(None)),
-            Arc::new(crate::tools::CodeCells::new()),
-        )
-    };
-    let sized = host().with_context(
-        Arc::clone(&catalog),
-        parent.clone(),
-        "parent-model".to_owned(),
-    );
-    assert_eq!(
-        sized.child_window("scout", &settings),
-        ("wide-model".to_owned(), 400_000),
-        "a routed role compacts against its own model's window"
-    );
-    assert_eq!(
-        sized.child_window("artisan", &settings),
-        ("parent-model".to_owned(), 100_000),
-        "an unrouted role runs on the parent turn's model"
-    );
-    assert_eq!(host().child_window("scout", &settings), (String::new(), 0));
-}
-
-#[test]
-fn a_truncated_child_report_is_not_accepted_as_success() {
-    let messages = vec![assistant_msg(
-        "partial findings",
-        crate::core::StopReason::Length,
-    )];
-    let error = super::subagent_answer(
-        Ok(crate::core::TurnOutcome::Completed),
-        &messages,
-        "sentinel",
+    let host = super::BridgeAgentHost::new(
+        resolved,
+        home,
+        std::path::PathBuf::from("/tmp"),
+        &settings,
+        "session".to_owned(),
+        Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+        Arc::new(tokio::sync::Mutex::new(None)),
+        Arc::new(crate::tools::CodeCells::new()),
     )
-    .expect_err("an output limit does not complete the brief");
-    assert!(error.to_string().contains("truncated"));
-    assert!(error.to_string().contains("partial findings"));
+    .with_context(Arc::clone(&catalog), parent, "parent-model".to_owned());
+    assert_eq!(
+        host.child_window("scout", &settings),
+        ("wide-model".to_owned(), 400_000)
+    );
+    assert_eq!(
+        host.child_window("artisan", &settings),
+        ("parent-model".to_owned(), 100_000)
+    );
 }

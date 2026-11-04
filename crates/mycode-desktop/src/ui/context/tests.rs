@@ -62,7 +62,6 @@ fn the_review_pair_fits_side_by_side_beside_docked_details() {
 #[test]
 fn the_subagent_window_stacks_left_of_details_drawer_and_diff() {
     let wide = 1520.;
-    // Alone: clear of Details by the panel gap.
     let (right, width) =
         super::subagent_window_bounds(wide, super::INSPECTOR_OVERLAY_SPAN, false, false);
     assert_eq!(right, super::INSPECTOR_OVERLAY_SPAN + 12.);
@@ -70,7 +69,6 @@ fn the_subagent_window_stacks_left_of_details_drawer_and_diff() {
     let (_, wider) =
         super::subagent_window_bounds(2560., super::INSPECTOR_OVERLAY_SPAN, false, false);
     assert!(wider > width, "agent details should use a wider window");
-    // With the drawer open it moves left of the drawer.
     let (right, _) =
         super::subagent_window_bounds(wide, super::INSPECTOR_OVERLAY_SPAN, true, false);
     assert!(right > super::INSPECTOR_OVERLAY_SPAN + super::CHANGES_DRAWER_WIDTH);
@@ -82,7 +80,6 @@ fn the_subagent_window_stacks_left_of_details_drawer_and_diff() {
         right
             > super::INSPECTOR_OVERLAY_SPAN + super::CHANGES_DRAWER_WIDTH + super::DIFF_PANEL_WIDTH
     );
-    // When everything cannot fit, it stays inside the viewport.
     let (right, _) = super::subagent_window_bounds(700., super::INSPECTOR_OVERLAY_SPAN, true, true);
     assert!(right + super::SUBAGENT_WINDOW_WIDTH <= 700.);
 }

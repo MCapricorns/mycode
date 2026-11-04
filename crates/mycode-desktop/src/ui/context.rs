@@ -444,12 +444,8 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
     let cache_alert = vm.cache_alert;
     // Usage accounting is live-only: the running turn reports through the
     // live meter, and a finished turn keeps its sums as the last-turn row.
-    // These are totals over every request of the turn (one per tool round),
-    // while the context meter is the latest prompt alone; the labels and
-    // the request count say so.
-    // The hit row shares the sum row's timeframe, so it reads "this turn"
-    // only while the turn still runs and "last turn" once the sums are the
-    // last turn's.
+    // These totals cover every request of the turn (one per tool round),
+    // while the context meter is the latest prompt alone.
     let turn_row = vm
         .live_turn
         .as_ref()
@@ -508,8 +504,6 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             // cache) so the two never read as disagreeing numbers.
             let used = vm.context_used;
             let cached = vm.context_cache;
-            // The meter is one prompt, so the hit word names that scope:
-            // the turn row below it reports the summed hit instead.
             let parts = crate::view_model::context_meter_parts(
                 used,
                 context_window,

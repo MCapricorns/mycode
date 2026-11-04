@@ -1,19 +1,9 @@
 //! The command dock: an anchored work surface below the current session page.
 //!
-//! Model, reasoning, and folder sit as pill chips inside the bar, alongside a
-//! `⌘K` / `Ctrl+K` hint; typing `@` references a project file. While a turn
-//! is running the round action is Stop: it ends the whole turn, every
-//! subagent, and any tool still running. Enter on a busy turn no longer
-//! sends at once: a small choice floats above the composer — steer the
-//! running turn (it reads the draft before its next step, without stopping
-//! anything) or interrupt and send (the turn stops, the draft goes out
-//! right after). Enter confirms the steer, Ctrl+Enter the interrupt, and
-//! Escape closes the choice with the draft untouched. Ctrl+G and the arrow
-//! beside Stop steer directly, without the choice. Steers wait in a strip
-//! above the composer until the agent reads them; each one carries an Undo
-//! that takes it back into the composer while it is still unread. Each
-//! running scout or artisan is cancelled from its own `agent` row in the
-//! transcript.
+//! Folder, model, and reasoning chips and a `⌘K` hint sit inside the bar;
+//! `@` references a project file. The round action sends, or stops the running
+//! turn and every subagent it started. Enter on a busy turn opens the
+//! steer-or-interrupt choice instead of sending at once.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::Textarea;
@@ -32,16 +22,12 @@ use crate::view_model::WorkspaceState;
 use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_level};
 use crate::workspace::Workspace;
 
-/// Resting composer hint. The product name does not belong in the field.
 const COMPOSER_PLACEHOLDER: (&str, &str) = ("Ask the agent", "向代理提问");
 const STEER_PLACEHOLDER: (&str, &str) = (
     "Enter chooses: steer or interrupt and send",
     "回车选择：引导或打断并发送",
 );
 
-/// Placeholder for the composer. While a turn is running, Enter opens the
-/// steer-or-interrupt choice above the composer; Ctrl+G steers directly
-/// and Ctrl+Enter interrupts without asking.
 #[must_use]
 pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
     let (english, chinese) = if sending {
@@ -82,15 +68,12 @@ pub(super) fn render_composer(
     }
     let model_label: SharedString = model_button_label(workspace.vm()).into();
     let thinking_label: SharedString = thinking_button_label(workspace.vm()).into();
-    // Keep the source at the start of a long model label visible; the picker
-    // provides the full model name. A hover tooltip would cover nearby chips.
     let show_thinking = selected_model_supports_reasoning(workspace.vm());
     // A manual compact is not a turn, but it locks the composer the same
     // way: Enter waits, Ctrl+Enter stops it and sends the draft.
     let sending = workspace.vm().sending || workspace.vm().compacting;
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
     let has_attachments = !workspace.attachments.is_empty();
-    // A draft or attachment enables sending, including in the default chat space.
     let can_send = has_draft || has_attachments;
     let steer_panel = (!workspace.vm().pending_steers.is_empty())
         .then(|| render_pending_steers(&workspace.vm().pending_steers, cx).into_any_element());
@@ -135,6 +118,8 @@ pub(super) fn render_composer(
             .children(menu)
             .into_any_element()
     });
+    // A long model label keeps its start visible; the picker carries the full
+    // name, and a hover tooltip would cover the chips beside it.
     let model_chip = {
         let menu = workspace
             .vm()
@@ -273,10 +258,6 @@ pub(super) fn render_composer(
                                 .min_w_0()
                                 .text_sm()
                                 .child(
-                                    // The state pins the field at three
-                                    // rows (auto_grow 3..3): long drafts
-                                    // scroll inside instead of growing
-                                    // the composer card.
                                     Textarea::new(&composer)
                                         .appearance(false)
                                         .bordered(false)
@@ -341,9 +322,6 @@ pub(super) fn render_composer(
 }
 
 /// Send arrow while idle, labeled stop control while a turn runs.
-///
-/// Stop ends the whole turn and every subagent. It sits where the send
-/// arrow sits.
 fn composer_round_button(
     sending: bool,
     can_send: bool,

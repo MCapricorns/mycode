@@ -127,7 +127,6 @@ fn the_wire_checkpoint_owns_the_work_it_describes() {
     let wire_text = super::request_summary_text("files: src/main.rs");
     assert!(super::is_summary_message(&user(&wire_text)));
     assert!(wire_text.contains("COMPACTION SUMMARY"));
-    assert!(wire_text.contains("your own earlier work"));
     assert!(wire_text.contains("src/main.rs"));
     // The ledger card keeps the bare display text: it is user-facing.
     assert!(!display_summary_text("files: src/main.rs").contains("your own"));

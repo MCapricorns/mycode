@@ -228,7 +228,6 @@ impl Calibration {
         }
     }
 
-    /// The latest scale, for the session's next turn.
     pub(crate) fn scale(&self) -> TokenScale {
         self.state.lock().scale
     }

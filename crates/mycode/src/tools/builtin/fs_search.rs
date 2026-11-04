@@ -26,11 +26,9 @@
 //! identity on Darwin. Find confirmation uses no-follow metadata (`fstatat`)
 //! and the same `st_dev` / type checks, and fails closed when that proof is
 //! unavailable. Platforms without handle-relative open fail closed.
-//! Directory listings are collected up to a width cap, decorated once with
-//! the lossy rendered component key the frontier and top-N heaps use, sorted
-//! with the original `OsString` as the complete tie-break, and visited best-first
-//! by full rendered path within the invocation depth, entry, handle, ignore-byte,
-//! and ignore-rule limits.
+//! Directory listings are width-capped, sorted by the lossy rendered path
+//! with the original `OsString` as tie-break, and visited best-first (see
+//! `fs_walk`).
 //!
 //! Everything stays in-process (handle-relative walk plus ripgrep's
 //! search core); no external `rg` or `fd` executable is used.

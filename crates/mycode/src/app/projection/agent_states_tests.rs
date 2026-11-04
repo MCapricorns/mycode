@@ -18,8 +18,6 @@ fn snapshot() -> AgentStateEvent {
         result: Some("Readable answer".into()),
         error: None,
         artifact_path: Some("C:/results/answer.md".into()),
-        workflow_id: None,
-        node_id: None,
     })
 }
 

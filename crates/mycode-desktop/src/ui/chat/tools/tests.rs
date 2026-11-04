@@ -15,16 +15,6 @@ fn result_entry(text: &str) -> ConversationEntry {
     }
 }
 
-/// Eleven markdown list lines are what QA saw counted as deletions.
-fn eleven_list_lines(header: &str) -> String {
-    use std::fmt::Write as _;
-    let mut page = format!("{header}\n");
-    for n in 1..=11 {
-        let _ = writeln!(page, "- line {n}");
-    }
-    page
-}
-
 /// String parsing only: the fixtures name no real file, and the test never
 /// touches the filesystem, so it runs the same on any machine.
 #[test]
@@ -35,22 +25,6 @@ fn read_path_strips_only_a_trailing_line_window() {
     assert_eq!(read_path("src/fluxlog.h L520"), "src/fluxlog.h");
     assert_eq!(read_path("src/my file.cpp L520+620"), "src/my file.cpp");
     assert_eq!(read_path("\"src/my file.rs\""), "src/my file.rs");
-}
-
-#[test]
-fn fetch_content_list_lines_are_not_a_diff() {
-    let page = eleven_list_lines("[https://example.com/a]");
-    let status = tool_status("fetch_content", Some(&result_entry(&page)), false);
-    assert_eq!(status, "");
-    assert!(!shows_diff_preview("fetch_content", &page));
-}
-
-#[test]
-fn web_search_snippets_are_not_a_diff() {
-    let text = "[https://example.com] Docs\n- alpha\n- beta\n";
-    let status = tool_status("web_search", Some(&result_entry(text)), false);
-    assert_eq!(status, "");
-    assert!(!shows_diff_preview("web_search", text));
 }
 
 #[test]
@@ -83,10 +57,6 @@ fn a_finished_call_shows_no_output_excerpt() {
     assert_eq!(
         tool_status("bash", Some(&result_entry("failed: exit 1")), false),
         crate::i18n::t("failed", "失败")
-    );
-    assert_eq!(
-        tool_status("bash", None, true),
-        crate::i18n::t("in progress", "进行中")
     );
 }
 

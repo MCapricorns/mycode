@@ -29,9 +29,7 @@ pub(crate) use mycode::frontend::picker::{
     provider_model_choices, provider_scroll_index, selected_in_provider, selected_model_label,
 };
 
-/// Fixed height of one virtualized model row.
 const MODEL_ROW_HEIGHT: f32 = 32.;
-/// How many model rows the panel shows before the list scrolls.
 const MODEL_LIST_VISIBLE: usize = 8;
 
 /// The picker panel. Caller decides when it is mounted.

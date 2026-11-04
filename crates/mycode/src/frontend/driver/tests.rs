@@ -635,12 +635,6 @@ fn ensure_catalog_loads_once_the_composer_has_a_model() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// Removed: poll_until and lists only served the deleted git-watch test.
-
-// Removed: the_driver_keeps_the_open_folders_git_status_fresh ran `git init`
-// in %TEMP% and intermittently hung on this Windows host. The watch path is
-// covered by the changes panel in normal use.
-
 /// A steer goes to the running turn without stopping it and shows as
 /// pending; a turn that cannot take it hands it back to the composer.
 #[test]

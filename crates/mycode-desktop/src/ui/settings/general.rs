@@ -347,20 +347,12 @@ fn appearance_theme_field(selected: &str, cx: &mut Context<Workspace>) -> AnyEle
 #[cfg(test)]
 mod tests {
     #[test]
-    fn language_dropdown_keeps_follow_system_visible_when_configured_auto() {
-        assert_eq!(
-            super::language_label("auto"),
-            crate::i18n::t("Follow system", "跟随系统")
-        );
-        assert_eq!(super::language_label("en"), "English");
-        assert_eq!(super::language_label("zh"), "中文");
-        assert_eq!(
-            super::language_id_for_label(super::language_label("auto")),
-            Some("auto")
-        );
-        assert_eq!(super::language_id_for_label("Follow system"), Some("auto"));
-        assert_eq!(super::language_id_for_label("跟随系统"), Some("auto"));
-        assert_eq!(super::language_id_for_label("English"), Some("en"));
-        assert_eq!(super::language_id_for_label("中文"), Some("zh"));
+    fn every_language_label_selects_its_own_id() {
+        for id in ["auto", "en", "zh"] {
+            assert_eq!(
+                super::language_id_for_label(super::language_label(id)),
+                Some(id)
+            );
+        }
     }
 }

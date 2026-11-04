@@ -237,12 +237,10 @@ fn flush_prose(prose: &mut Vec<&str>, blocks: &mut Vec<MarkdownBlock>) {
 
 /// The plain-text form of assistant markdown, for the reply's copy action.
 ///
-/// Selection copies already leave the app as rendered plain text (see
-/// `text_view`), but a selection cannot span the app-rendered table block,
-/// so the whole-message action converts from the source: emphasis and
-/// heading markers are stripped, a fenced block drops to its contents, a
-/// table becomes tab-separated rows, and a link keeps its text with the
-/// URL appended in parentheses when the text does not already say it.
+/// A selection copies rendered plain text (see `text_view`) but cannot span the
+/// app-rendered table block, so the whole-message action converts from the
+/// source: markers are stripped, a fenced block drops to its contents, a table
+/// becomes tab-separated rows, and a link keeps its URL beside its text.
 #[must_use]
 pub(super) fn markdown_to_plain_text(source: &str) -> String {
     let parts: Vec<String> = split_markdown(source)

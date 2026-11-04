@@ -53,7 +53,6 @@
         "crates/mycode/src/tools/code_mode/dispatch.rs",
         "crates/mycode/src/tools/code_mode/journal.rs",
         "crates/mycode/src/tools/code_mode/tests.rs",
-        "crates/mycode/src/tools/code_mode/regressions.rs",
         "crates/mycode/src/tools/code_mode/image_tests.rs"
       ]
     },
@@ -413,10 +412,10 @@
     },
     {
       "id": "subagent",
-      "label": "子代理与工作流程",
+      "label": "子代理协作",
       "group": "flow",
       "lane": 5,
-      "summary": "scout 查资料，artisan 改代码，sentinel 审查，skeptic 找反例。任务可以查询、停止、补充说明和返工。固定流程最后需要独立验收；migration 要先整合 worktree，再继续检查。",
+      "summary": "scout 查资料，artisan 改代码，sentinel 独立审查或验证假设反例。任务可以查询、停止、补充说明和续接。",
       "links": [
         "agent",
         "tools",
@@ -428,14 +427,11 @@
         "crates/mycode/src/tools/builtin/agent.rs",
         "crates/mycode/src/tools/builtin/agent/runtime.rs",
         "crates/mycode/src/tools/builtin/agent/control.rs",
-        "crates/mycode/src/tools/builtin/agent/workflow.rs",
         "crates/mycode/src/tools/builtin/agent/state.rs",
         "crates/mycode/src/frontend/view_model/subagents.rs",
         "crates/mycode-desktop/src/ui/context/subagents.rs",
-        "crates/mycode/src/tools/builtin/agent/rework.rs",
         "crates/mycode/src/tools/builtin/agent/scope.rs",
-        "crates/mycode/src/tools/builtin/agent/runtime_tests.rs",
-        "crates/mycode/src/tools/builtin/agent/rework_tests.rs"
+        "crates/mycode/src/tools/builtin/agent/runtime_tests.rs"
       ]
     },
     {

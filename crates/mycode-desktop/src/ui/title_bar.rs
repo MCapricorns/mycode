@@ -27,7 +27,6 @@ use crate::view_model::{MainView, UpdateState};
 use crate::workspace::Workspace;
 
 pub(super) const BAR_HEIGHT: f32 = 40.;
-/// Caption hit target.
 const CONTROL_HIT: f32 = 46.;
 /// Fixed caption glyph size. These icons are window chrome, so they stay a
 /// constant pixel size instead of tracking the UI font scale.

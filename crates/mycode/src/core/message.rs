@@ -265,13 +265,6 @@ pub fn tool_target(name: &str, arguments: &serde_json::Value) -> String {
             .to_owned(),
         "search_tool" | "use_tool" => text("name"),
         "agent" => join_target(&text("agent"), &text("description")),
-        "agent_workflow" => {
-            let action = text("action");
-            let action = if action.is_empty() { "start" } else { &action };
-            let name = text("name");
-            let target = if name.is_empty() { text("id") } else { name };
-            join_target(action, &target)
-        }
         // The retired `run_code` carried a `description`; the current one
         // carries only a `script`, so a description-only target left every
         // code-mode row a bare `run_code` with no hint of what it ran. Fall
@@ -605,17 +598,6 @@ mod tests {
         assert_eq!(tool_target("shell", &program), "/bin/echo ok");
         let delegated = json!({"agent": "scout", "description": "map the crate"});
         assert_eq!(tool_target("agent", &delegated), "scout map the crate");
-        assert_eq!(
-            tool_target("agent_workflow", &serde_json::json!({"name": "research"})),
-            "start research"
-        );
-        assert_eq!(
-            tool_target(
-                "agent_workflow",
-                &serde_json::json!({"action": "resume", "id": "workflow-1"})
-            ),
-            "resume workflow-1"
-        );
         assert_eq!(tool_target("task", &delegated), "");
         assert_eq!(tool_target("exec", &program), "");
     }

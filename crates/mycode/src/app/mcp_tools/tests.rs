@@ -184,10 +184,7 @@ fn list_names_tools_without_schemas() {
     );
     assert!(!listed.contains("inputSchema"));
     let note = catalog.prompt_note();
-    assert!(
-        note.contains("\"list\"") || note.contains("search_tool"),
-        "{note}"
-    );
+    assert!(note.contains("search_tool"), "{note}");
     assert!(!note.contains("create_issue"), "{note}");
 }
 
@@ -201,7 +198,7 @@ fn list_keeps_the_config_error_above_the_tools() {
         Vec::new(),
     );
     let listed = catalog.list_text();
-    assert!(listed.contains("MCP config: MCP config unreadable: access denied"));
+    assert!(listed.contains("MCP config unreadable: access denied"));
     assert!(listed.contains("No MCP tools are connected."));
 }
 
@@ -461,8 +458,9 @@ fn the_prompt_note_names_connected_servers() {
     let catalog = catalog_from(tools, None, &native(&[]));
     let note = catalog.prompt_note();
     assert!(note.contains("- anysearch (1 tool)\n"), "{note}");
+    assert!(note.contains("- github (2 tools)"), "{note}");
     assert!(
-        note.contains("- github (2 tools) — Manage GitHub issues, pull requests, and code.\n"),
+        note.contains("Manage GitHub issues, pull requests, and code."),
         "{note}"
     );
     assert!(note.contains("search_tool"), "{note}");
@@ -476,12 +474,9 @@ fn the_prompt_note_names_connected_servers() {
 fn a_connecting_server_is_named_in_the_prompt_note() {
     let catalog = McpCatalog::new(None, native(&[]), ["gh".to_owned(), "fs".to_owned()]);
     let note = catalog.prompt_note();
-    assert!(
-        note.contains("MCP servers connecting in the background: fs, gh."),
-        "{note}"
-    );
+    assert!(note.contains("fs, gh"), "{note}");
+    assert!(note.contains("connecting"), "{note}");
     assert!(!note.contains("Connected MCP servers"), "{note}");
-    assert!(note.contains("not on the tool list yet"), "{note}");
 }
 
 /// A tool whose bare name is already a registry tool keeps its server

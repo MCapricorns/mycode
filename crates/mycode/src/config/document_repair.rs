@@ -7,10 +7,9 @@
 //! field that still decodes and validates (`salvage`), so one bad section does
 //! not force the user to re-enter the rest. Safe Windows DACL drift from
 //! same-user external writers is normalized before decoding, without a
-//! repair report; rejected permissions are salvaged only when the backup
-//! still passes owner, link, and foreign-writer checks. The previous file stays
-//! beside the original as `{name}.broken-<nanos>`. Session ledgers are not
-//! documents this module handles.
+//! repair report. The previous file stays beside the original as
+//! `{name}.broken-<nanos>`. Session ledgers are not documents this module
+//! handles.
 
 use std::io;
 

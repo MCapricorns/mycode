@@ -8,14 +8,11 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 pub const MAX_RETAINED_AGENT_RUNS: usize = 128;
-pub(super) const MAX_WORKFLOWS: usize = 32;
 
 #[derive(Clone, Default)]
 pub(super) struct RunOptions {
     pub phase_id: Option<String>,
     pub scope: Option<AgentScope>,
-    pub workflow_id: Option<String>,
-    pub node_id: Option<String>,
     pub previous_run_id: Option<String>,
     pub expected_writer: Option<bool>,
 }
@@ -31,9 +28,8 @@ pub(super) struct RunRecord {
 #[derive(Default)]
 pub(super) struct RuntimeState {
     pub runs: BTreeMap<String, RunRecord>,
-    pub workflows: BTreeMap<String, super::workflow::WorkflowRecord>,
 }
-/// One session's bounded run/workflow registry, reused across turns.
+/// One session's bounded run registry, reused across turns.
 /// Artifact files contain sanitized result text only, never host configuration.
 pub struct AgentRuntime {
     pub(super) state: Mutex<RuntimeState>,
@@ -48,25 +44,15 @@ impl AgentRuntime {
     }
 
     pub(super) fn snapshots(&self, id: Option<&str>) -> Result<Vec<AgentStateEvent>, ToolError> {
-        let mut state = self.state.lock();
-        refresh_idle_workflows(&mut state);
+        let state = self.state.lock();
         let mut events = Vec::new();
         for r in state.runs.values() {
-            if id.is_none_or(|id| {
-                id == r.snapshot.id
-                    || id == r.snapshot.call_id
-                    || r.snapshot.workflow_id.as_deref() == Some(id)
-            }) {
+            if id.is_none_or(|id| id == r.snapshot.id || id == r.snapshot.call_id) {
                 events.push(AgentStateEvent::Run(r.snapshot.clone()));
             }
         }
-        for w in state.workflows.values() {
-            if id.is_none_or(|id| id == w.snapshot.id) {
-                events.push(AgentStateEvent::Workflow(w.snapshot.clone()));
-            }
-        }
         if id.is_some() && events.is_empty() {
-            return Err(error("unknown or expired run/workflow in this session"));
+            return Err(error("unknown or expired run in this session"));
         }
         Ok(events)
     }
@@ -76,34 +62,15 @@ impl AgentRuntime {
         stream: &ToolStream,
         update: impl FnOnce(&mut AgentRunSnapshot),
     ) {
-        let (snapshot, workflow) = {
+        let snapshot = {
             let mut state = self.state.lock();
             let Some(run) = state.runs.get_mut(id) else {
                 return;
             };
             update(&mut run.snapshot);
-            let snapshot = run.snapshot.clone();
-            let workflow = snapshot
-                .workflow_id
-                .as_ref()
-                .and_then(|wid| state.workflows.get_mut(wid))
-                .map(|w| {
-                    if let Some(node) = w
-                        .snapshot
-                        .nodes
-                        .iter_mut()
-                        .find(|n| Some(&n.id) == snapshot.node_id.as_ref())
-                    {
-                        node.status = snapshot.status;
-                    }
-                    w.snapshot.clone()
-                });
-            (snapshot, workflow)
+            run.snapshot.clone()
         };
         publish(stream, AgentStateEvent::Run(snapshot));
-        if let Some(workflow) = workflow {
-            publish(stream, AgentStateEvent::Workflow(workflow));
-        }
     }
     pub(super) fn stop(
         &self,
@@ -112,27 +79,13 @@ impl AgentRuntime {
     ) -> Result<Vec<AgentStateEvent>, ToolError> {
         {
             let mut state = self.state.lock();
-            if let Some(workflow) = state.workflows.get_mut(id) {
-                workflow.cancel.cancel();
-                // An idle handoff has no driver to settle it.
-                if workflow.snapshot.status == AgentWorkflowStatus::WaitingIntegration {
-                    workflow.snapshot.status = AgentWorkflowStatus::Cancelled;
-                    for node in &mut workflow.snapshot.nodes {
-                        if !node.status.is_terminal() {
-                            node.status = AgentRunStatus::Cancelled;
-                        }
-                    }
-                }
-                publish(stream, AgentStateEvent::Workflow(workflow.snapshot.clone()));
-            } else {
-                let run_id = resolve_run_id(&state, id)?;
-                let run = state.runs.get_mut(&run_id).expect("resolved run retained");
-                if !run.snapshot.status.is_terminal() {
-                    run.cancel.cancel();
-                    run.snapshot.status = AgentRunStatus::Settling;
-                    run.snapshot.step = "Stopping; waiting for child and worktree handoff".into();
-                    publish(stream, AgentStateEvent::Run(run.snapshot.clone()));
-                }
+            let run_id = resolve_run_id(&state, id)?;
+            let run = state.runs.get_mut(&run_id).expect("resolved run retained");
+            if !run.snapshot.status.is_terminal() {
+                run.cancel.cancel();
+                run.snapshot.status = AgentRunStatus::Settling;
+                run.snapshot.step = "Stopping; waiting for child and worktree handoff".into();
+                publish(stream, AgentStateEvent::Run(run.snapshot.clone()));
             }
         }
         self.snapshots(Some(id))
@@ -158,7 +111,7 @@ impl AgentRuntime {
             .is_some_and(|expected| expected != writer)
         {
             return Err(error(
-                "role write capability changed after workflow validation; restart the workflow",
+                "role write capability changed after admission; retry the delegation",
             ));
         }
         let reopen_path = if let Some(source_id) = &options.previous_run_id {
@@ -167,7 +120,7 @@ impl AgentRuntime {
                 let source = state
                     .runs
                     .get(source_id)
-                    .ok_or_else(|| error("previous run expired; no rework was started"))?;
+                    .ok_or_else(|| error("previous run expired; no continuation was started"))?;
                 if !matches!(
                     source.snapshot.status,
                     AgentRunStatus::Completed | AgentRunStatus::Failed
@@ -175,7 +128,9 @@ impl AgentRuntime {
                     return Err(error("previous run must be settled and not cancelled"));
                 }
                 if source.cwd != cwd || source.request.agent != request.agent {
-                    return Err(error("rework must retain the original parent cwd and role"));
+                    return Err(error(
+                        "continuation must retain the original parent cwd and role",
+                    ));
                 }
             }
             if let Some(path) = self.retained_worktree(source_id)? {
@@ -221,18 +176,15 @@ impl AgentRuntime {
             result: None,
             error: None,
             artifact_path: None,
-            workflow_id: options.workflow_id.clone(),
-            node_id: options.node_id.clone(),
         };
         {
             let mut state = self.state.lock();
-            refresh_idle_workflows(&mut state);
             if options
                 .previous_run_id
                 .as_ref()
                 .is_some_and(|id| !state.runs.contains_key(id))
             {
-                return Err(error("previous run expired during rework validation"));
+                return Err(error("previous run expired during validation"));
             }
             for run in state.runs.values() {
                 if !run.snapshot.status.is_terminal()
@@ -262,13 +214,6 @@ impl AgentRuntime {
                     ));
                 }
             }
-            if writer {
-                super::workflow::check_reservations(
-                    &state,
-                    options.scope.as_ref(),
-                    options.workflow_id.as_deref(),
-                )?;
-            }
             if state.runs.len() >= MAX_RETAINED_AGENT_RUNS {
                 let oldest = state
                     .runs
@@ -276,9 +221,6 @@ impl AgentRuntime {
                     .filter(|(_, r)| {
                         r.snapshot.status.is_terminal()
                             && options.previous_run_id.as_deref() != Some(r.snapshot.id.as_str())
-                            && r.options.workflow_id.as_ref().is_none_or(|wid| {
-                                state.workflows.get(wid).is_none_or(|w| w.is_terminal())
-                            })
                     })
                     .min_by_key(|(_, r)| r.snapshot.finished_ms)
                     .map(|(id, _)| id.clone());
@@ -286,17 +228,9 @@ impl AgentRuntime {
                     state.runs.remove(&oldest);
                 } else {
                     return Err(error(
-                        "retained run capacity reached; active workflows must settle first",
+                        "retained run capacity reached; active runs must settle first",
                     ));
                 }
-            }
-            if let (Some(wid), Some(nid)) = (&options.workflow_id, &options.node_id)
-                && let Some(w) = state.workflows.get_mut(wid)
-            {
-                if let Some(n) = w.snapshot.nodes.iter_mut().find(|n| &n.id == nid) {
-                    n.run_id = Some(id.clone());
-                }
-                publish(progress, AgentStateEvent::Workflow(w.snapshot.clone()));
             }
             state.runs.insert(
                 id.clone(),
@@ -316,8 +250,6 @@ impl AgentRuntime {
         let runtime = self.clone();
         let progress = progress.clone();
         let run_id = id.clone();
-        // The owned driver survives a dropped outer script/call long enough to
-        // await host cancellation and retain recovery artifacts before release.
         let task = tokio::spawn(async move {
             let (sink, mut rx) = ToolStream::channel();
             let activity = Arc::new(super::AgentActivity::default());
@@ -407,9 +339,7 @@ impl AgentRuntime {
             .map_err(|e| error(format!("run driver failed: {e}")));
         guard.disarm();
         let (snapshot, panicked) = result?;
-        if panicked && snapshot.workflow_id.is_none() {
-            // Preserve the legacy host-panic behavior after retaining the
-            // failure and settling all native side effects.
+        if panicked {
             std::panic::resume_unwind(Box::new("subagent host panicked"));
         }
         Ok(snapshot)
@@ -480,12 +410,6 @@ pub(super) fn resolve_run_id(state: &RuntimeState, id: &str) -> Result<String, T
     Ok(first.snapshot.id.clone())
 }
 
-pub(super) fn refresh_idle_workflows(state: &mut RuntimeState) {
-    for w in state.workflows.values_mut() {
-        w.refresh_cancellation();
-    }
-}
-
 pub(super) fn overlaps(a: Option<&AgentScope>, b: Option<&AgentScope>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => a.overlaps(b),
@@ -506,8 +430,7 @@ pub(super) fn error(message: impl Into<String>) -> ToolError {
 pub(super) fn clip(text: &str, max: usize) -> String {
     match text.char_indices().nth(max) {
         Some((end, _)) => format!(
-            "{}
-[truncated; read artifact_path for full output]",
+            "{}\n[truncated; read artifact_path for full output]",
             &text[..end]
         ),
         None => text.into(),

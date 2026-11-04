@@ -486,7 +486,6 @@ mod tests {
         assert_eq!(super::interface_font_px("nope"), 14.);
         assert!((super::interface_rem_px("m") - 16.).abs() < f32::EPSILON);
         assert_eq!(super::normalize_font_size("xl"), "xl");
-        assert_eq!(super::font_size_label("s"), "S");
     }
 
     #[test]

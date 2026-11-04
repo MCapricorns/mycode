@@ -198,7 +198,7 @@ async fn validation_failure_does_not_end_a_turn_that_never_started() {
         .prompt(Message::User(UserMessage::text(prompt)), &env)
         .await
         .expect_err("oversized request");
-    assert!(error.to_string().contains("encoded size") || !error.to_string().is_empty());
+    assert!(error.to_string().contains("encoded size"), "{error}");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert!(agent.state().messages().is_empty());
     let mut saw_started = false;

@@ -1,5 +1,4 @@
-//! Code-mode tool tests: recursion refusal, a real `read` call through
-//! `call`, and the yield/wait/terminate lifecycle.
+//! Code-mode tool tests.
 
 mod async_calls;
 
@@ -518,17 +517,9 @@ async fn a_long_script_yields_a_cell_and_wait_code_stops_it() {
     .await
     .expect("run_code returns a running cell");
     assert!(!running.is_error, "{running:?}");
-    let text = text_of(&running);
-    assert!(
-        text.contains("Script running with cell ID cell-0"),
-        "{text}"
-    );
-    let cell_id = running
-        .details
-        .as_ref()
-        .and_then(|details| details["cell_id"].as_str())
-        .expect("cell id")
-        .to_owned();
+    let details = running.details.as_ref().expect("details");
+    assert_eq!(details["phase"], "yielded");
+    let cell_id = details["cell_id"].as_str().expect("cell id").to_owned();
     assert_eq!(cell_id, "cell-0");
 
     let stopped = wait_cell(
@@ -538,8 +529,7 @@ async fn a_long_script_yields_a_cell_and_wait_code_stops_it() {
     )
     .await
     .expect("wait_code stops the cell");
-    let text = text_of(&stopped);
-    assert!(text.contains("terminated"), "{text}");
+    assert_eq!(stopped.details.as_ref().unwrap()["phase"], "terminated");
     assert_eq!(
         cells.get(SCOPE, "cell-0").unwrap().phase(),
         super::CellPhase::Terminated
@@ -566,8 +556,7 @@ async fn yield_control_returns_control_without_stopping_the_script() {
     .expect("yield_control settles the call instead of waiting 60 s")
     .expect("run_code returns");
     assert!(started.elapsed() < Duration::from_secs(4));
-    let text = text_of(&running);
-    assert!(text.contains("Script running with cell ID"), "{text}");
+    assert_eq!(running.details.as_ref().unwrap()["phase"], "yielded");
     let _ = wait_cell(
         &cells,
         &workspace.0,
@@ -590,10 +579,8 @@ async fn wait_code_continues_a_yielded_cell_to_completion() {
     )
     .await
     .expect("run_code returns the yielded cell");
-    assert!(
-        text_of(&running).contains("Script running with cell ID cell-0"),
-        "{running:?}"
-    );
+    assert_eq!(running.details.as_ref().unwrap()["phase"], "yielded");
+    assert_eq!(running.details.as_ref().unwrap()["cell_id"], "cell-0");
 
     // The cell is already `Yielded`; this wait must be for the *next*
     // transition (the script completing), not return at once.
@@ -711,7 +698,7 @@ async fn the_progress_stream_closes_when_run_code_returns_a_running_cell() {
         .await
         .expect("the task ran")
         .expect("run_code returns");
-    assert!(text_of(&result).contains("Script running with cell ID cell-0"));
+    assert_eq!(result.details.as_ref().unwrap()["phase"], "yielded");
     if let Some(cell) = cells.get(SCOPE, "cell-0") {
         cell.terminate();
     }
@@ -794,7 +781,7 @@ async fn terminating_a_code_cell_reaps_its_shell_process() {
         )
         .await
         .unwrap();
-    assert!(text_of(&result).contains("Script running"), "{result:?}");
+    assert_eq!(result.details.as_ref().unwrap()["phase"], "yielded");
     let cell = cells.get(SCOPE, "cell-0").unwrap();
     // Ensure an assertion failure also stops the test's process.
     let _stop_on_drop = super::TerminateOnDrop::new(Arc::clone(&cell));
@@ -865,7 +852,7 @@ async fn wait_code_cannot_reach_another_sessions_cell() {
     )
     .await
     .expect("run_code returns the running cell");
-    assert!(text_of(&running).contains("Script running with cell ID cell-0"));
+    assert_eq!(running.details.as_ref().unwrap()["cell_id"], "cell-0");
 
     let tool = WaitCodeTool::new(Arc::clone(&cells), "session-b".to_owned());
     let ctx = ToolCtx::new(&workspace.0);

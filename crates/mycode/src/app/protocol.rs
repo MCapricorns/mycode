@@ -5,7 +5,6 @@
 //! conversation, and the in-flight reply. They are plain data with no
 //! rendering concern, so they live here rather than in a frontend's view
 //! model: the core's protocol depends on no particular UI.
-//! frontend reads them.
 
 use std::sync::Arc;
 
@@ -62,7 +61,6 @@ pub const CODE_CALLS_HEADING: &str = "[code calls]";
 pub struct ConversationEntry {
     /// Event identity spelling.
     pub event_id: String,
-    /// What this entry represents.
     pub kind: EntryKind,
     /// Display text, already lossy-decoded. Shared so a frontend can hand
     /// entries to its renderer without copying the transcript every frame.
@@ -111,9 +109,7 @@ pub struct ActiveConversation {
 /// One page of transcript older than the cursor the UI already shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OlderTranscript {
-    /// Session identity spelling.
     pub session_id: String,
-    /// Branch identity spelling.
     pub branch_id: String,
     /// Entries in ledger order, strictly before `requested_before`.
     pub entries: Vec<ConversationEntry>,
@@ -142,14 +138,11 @@ pub const MAX_STREAMING_CHARS: usize = 256 * 1024;
 /// One `ask_user` question presented to the user.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AskPrompt {
-    /// Question headline.
     pub question: String,
     /// Candidate answers. Free text is always allowed; empty means no
     /// candidates were offered.
     pub choices: Vec<String>,
-    /// Whether the user may skip this question.
     pub optional: bool,
-    /// Whether more than one choice may be selected.
     pub multiple: bool,
 }
 

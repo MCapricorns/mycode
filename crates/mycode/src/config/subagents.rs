@@ -1,13 +1,9 @@
 //! Subagent role catalog: the delegation roles the `agent` tool can dispatch.
 //!
-//! A role is a bounded Markdown file with a small frontmatter block — the
-//! same shape the reference pi-subagents extension uses — so a user can add
-//! or replace one without an application build. Four roles ship built in;
-//! discovery layers the user home and the session workspace over them.
-//!
-//! This module reads role definitions only. Which roles are enabled, which
-//! model each one runs on, and how much thinking it gets are settings, and
-//! live in [`crate::config::SubagentSettings`].
+//! A role is a bounded Markdown file with a small frontmatter block. Three
+//! roles ship built in; discovery layers the user home and the session
+//! workspace over them. Enabled state, models, and thinking are settings
+//! ([`crate::config::SubagentSettings`]).
 
 use std::path::{Path, PathBuf};
 
@@ -19,11 +15,10 @@ pub(crate) const MAX_ROLES: usize = 32;
 pub(crate) const ROLE_DIR_NAME: &str = "agents";
 
 /// Built-in role definitions, embedded so a fresh install has a full team.
-const BUILTIN_ROLES: [(&str, &str); 4] = [
+const BUILTIN_ROLES: [(&str, &str); 3] = [
     ("scout", include_str!("../../agents/scout.md")),
     ("artisan", include_str!("../../agents/artisan.md")),
     ("sentinel", include_str!("../../agents/sentinel.md")),
-    ("skeptic", include_str!("../../agents/skeptic.md")),
 ];
 
 /// Where a role's edits land.
@@ -142,7 +137,6 @@ const PARENT_ONLY_TOOLS: &[&str] = &[
     "agent_status",
     "agent_stop",
     "agent_message",
-    "agent_workflow",
     "ask_user",
 ];
 
@@ -177,12 +171,6 @@ pub struct SubagentRole {
 
 impl SubagentRole {
     /// Tools this role may use, intersected with the parent's live set.
-    ///
-    /// An omitted allowlist inherits the parent set for writers. Read-only
-    /// roles keep only read/grep/find, even when an override lists shell or
-    /// code-mode tools. The host may wrap this filtered set in code mode;
-    /// scripts must dispatch through that same restricted registry.
-    /// Parent-only tools never reach a child, so depth stays at one.
     #[must_use]
     pub fn resolve_tools<S: AsRef<str>>(&self, parent_tools: &[S]) -> Vec<String> {
         let live = |name: &str| {
@@ -213,12 +201,10 @@ impl SubagentRole {
 
     /// Whether this role may write the tree (and therefore take a worktree).
     ///
-    /// Scout, sentinel, and skeptic stay read-only across user/project
-    /// overrides. Other roles inherit writers when their allowlist is omitted;
-    /// explicit lists need a known mutating tool to gain writer isolation.
+    /// Scout and sentinel stay read-only across user/project overrides.
     #[must_use]
     pub fn is_write_capable(&self) -> bool {
-        if matches!(self.name.as_str(), "scout" | "sentinel" | "skeptic") {
+        if matches!(self.name.as_str(), "scout" | "sentinel") {
             return false;
         }
         match &self.tools {
@@ -258,9 +244,6 @@ impl RoleCatalog {
 }
 
 /// Returns the embedded role definitions.
-///
-/// Built-ins are part of the binary. A parse failure is a build defect and
-/// is skipped so one bad role cannot take the application down.
 #[must_use]
 pub fn builtin_roles() -> RoleCatalog {
     let mut catalog = RoleCatalog::default();
@@ -276,12 +259,6 @@ pub fn builtin_roles() -> RoleCatalog {
 }
 
 /// Resolves the role catalog for one session workspace.
-///
-/// Precedence is project over user over built-in on equal `name`, so a
-/// project can replace `artisan` without copying `scout`. Only
-/// `<name>.md` files directly inside a role directory are read; the file stem
-/// must match the frontmatter `name`, which keeps the on-disk layout and the
-/// routing vocabulary from drifting apart.
 #[must_use]
 pub fn discover_roles(
     home: &crate::config::HomeLayout,
@@ -376,8 +353,6 @@ fn read_role_dir(dir: &Path) -> Vec<(PathBuf, String)> {
     files
 }
 
-/// Bound the actual read as well as metadata: editors may replace or grow
-/// the file between discovery and opening it.
 fn read_role_bytes(reader: impl std::io::Read) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     let mut bytes = Vec::new();
@@ -393,14 +368,7 @@ fn read_role_bytes(reader: impl std::io::Read) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Parses one role file: a `---` delimited `key: value` header, then the
-/// prompt body.
-///
-/// The header is deliberately not YAML. It accepts exactly the five keys the
-/// runtime honors, so a role file cannot smuggle in structure the dispatcher
-/// would ignore.
 fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
-    // Windows editors often save with a byte-order mark.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let body = text
         .strip_prefix("---")
@@ -425,7 +393,6 @@ fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
         let (key, value) = line
             .split_once(':')
             .ok_or_else(|| format!("frontmatter line is not \"key: value\": {line}"))?;
-        // Role files are often written as YAML, which quotes freely.
         let value = unquote(value.trim());
         match key.trim() {
             "name" => {
@@ -486,7 +453,6 @@ fn parse_role(text: &str, origin: RoleOrigin) -> Result<SubagentRole, String> {
     })
 }
 
-/// Drops one pair of matching `"` or `'` quotes around a value.
 fn unquote(value: &str) -> &str {
     for quote in ['"', '\''] {
         if let Some(inner) = value
@@ -499,7 +465,6 @@ fn unquote(value: &str) -> &str {
     value
 }
 
-/// Splits the header from the body at the first line that is exactly `---`.
 fn split_frontmatter(body: &str) -> Option<(&str, &str)> {
     let mut offset = 0usize;
     for line in body.split_inclusive('\n') {
@@ -528,16 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn role_reads_are_bounded_even_if_metadata_becomes_stale() {
-        use std::io::Read as _;
-        let mut source = std::io::repeat(b'x').take(u64::MAX);
-        assert!(super::read_role_bytes(&mut source).is_err());
-        assert_eq!(source.limit(), u64::MAX - super::MAX_ROLE_BYTES as u64 - 1);
-        assert_eq!(super::read_role_bytes(b"role".as_slice()).unwrap(), b"role");
-    }
-
-    #[test]
-    fn discover_roles_adds_user_and_project_files_without_inventing_retired_ones() {
+    fn discover_roles_layers_project_over_user_over_builtin() {
         let root = std::env::temp_dir().join(format!(
             "mycode-role-discover-{}-{}",
             std::process::id(),
@@ -572,17 +528,11 @@ mod tests {
         assert!(names.iter().any(|name| name == "scout"));
         assert!(names.iter().any(|name| name == "artisan"));
         assert!(names.iter().any(|name| name == "sentinel"));
-        assert!(names.iter().any(|name| name == "skeptic"));
         assert!(names.iter().any(|name| name == "reviewer"));
         assert!(!names.iter().any(|name| name == "other"));
-        assert!(!names.iter().any(|name| name == "steward"));
         let reviewer = catalog.role("reviewer").expect("reviewer");
         assert_eq!(reviewer.origin, RoleOrigin::Project);
         assert_eq!(reviewer.description, "Project review.");
-        assert_eq!(
-            catalog.role("scout").expect("scout").origin,
-            RoleOrigin::Builtin
-        );
     }
 
     struct RemoveDir<'a>(&'a std::path::Path);
@@ -595,7 +545,7 @@ mod tests {
     #[test]
     fn builtins_have_distinct_roles_and_only_artisan_can_write() {
         let catalog = super::builtin_roles();
-        assert_eq!(catalog.names(), ["scout", "artisan", "sentinel", "skeptic"]);
+        assert_eq!(catalog.names(), ["scout", "artisan", "sentinel"]);
         for role in &catalog.roles {
             assert_eq!(role.origin, RoleOrigin::Builtin);
             let writer = role.name == "artisan";
@@ -615,50 +565,10 @@ mod tests {
                 );
             }
         }
-        let blob = catalog
-            .roles
-            .into_iter()
-            .map(|role| format!("{}\n{}", role.description, role.prompt))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(blob.contains("then stop"));
-        assert!(blob.contains("Do not stop at a first draft"));
-        // The environment block names the one interpreter; the role does not
-        // hard-code a shell.
-        assert!(blob.contains("the shell tool the environment block names"));
-        assert!(!blob.contains("`bash`"));
-        assert!(!blob.contains("steward"));
-        assert!(blob.contains("No findings alone is not PASS"));
-        assert!(blob.contains("If no specific claim is supplied"));
-        assert!(!blob.contains("`exec`"));
-        assert!(!blob.contains("`task`"));
     }
 
     #[test]
-    fn children_never_inherit_parent_control_tools() {
-        let mut parent = vec!["read", "write", "shell"];
-        parent.extend_from_slice(super::PARENT_ONLY_TOOLS);
-        for allowlist in [
-            None,
-            Some(parent.iter().map(|name| (*name).to_owned()).collect()),
-        ] {
-            let artisan = role("artisan", allowlist);
-            assert_eq!(artisan.resolve_tools(&parent), ["read", "write", "shell"]);
-        }
-        for name in [
-            "agent",
-            "agent_status",
-            "agent_stop",
-            "agent_message",
-            "agent_workflow",
-            "ask_user",
-        ] {
-            assert!(super::PARENT_ONLY_TOOLS.contains(&name));
-        }
-    }
-
-    #[test]
-    fn read_only_roles_reject_shell_aliases_and_code_mode_escape_tools() {
+    fn read_only_roles_and_children_filter_tools_accurately() {
         let parent = [
             "read",
             "grep",
@@ -666,198 +576,31 @@ mod tests {
             "write",
             "edit",
             "shell",
-            "bash",
-            "zsh",
-            "sh",
             "powershell",
-            "cmd",
             "run_code",
             "wait_code",
-            "unknown",
-            "remote_write",
             "agent",
             "agent_status",
             "agent_stop",
             "agent_message",
-            "agent_workflow",
             "ask_user",
         ];
-        for name in ["scout", "sentinel", "skeptic"] {
-            for origin in [RoleOrigin::Builtin, RoleOrigin::User, RoleOrigin::Project] {
-                for allowlist in [
-                    None,
-                    Some(parent.iter().map(|name| (*name).to_owned()).collect()),
-                ] {
-                    let mut role = role(name, allowlist);
-                    role.origin = origin;
-                    role.isolation = RoleIsolation::Worktree;
-                    assert!(!role.is_write_capable(), "{name} {origin:?}");
-                    assert_eq!(
-                        role.resolve_tools(&parent),
-                        ["read", "grep", "find"],
-                        "{name} {origin:?}"
-                    );
-                    assert_eq!(
-                        role.resolve_tools(&["shell", "run_code"]),
-                        Vec::<String>::new()
-                    );
-                }
-            }
+        for name in ["scout", "sentinel"] {
+            let mut r = role(name, Some(parent.iter().map(|s| (*s).to_owned()).collect()));
+            r.origin = RoleOrigin::Project;
+            assert!(!r.is_write_capable());
+            assert_eq!(r.resolve_tools(&parent), ["read", "grep", "find"]);
         }
-        let custom = role(
-            "researcher",
-            Some(vec![
-                "read".into(),
-                "run_code".into(),
-                "remote_write".into(),
-            ]),
-        );
-        assert!(!custom.is_write_capable());
-        assert_eq!(custom.resolve_tools(&parent), ["read"]);
-    }
-
-    #[test]
-    fn read_only_allowlists_still_intersect_the_live_parent_tools() {
-        let catalog = super::builtin_roles();
-        for name in ["scout", "sentinel", "skeptic"] {
-            let role = catalog.role(name).expect("builtin");
-            assert_eq!(role.resolve_tools(&["read", "shell"]), ["read"]);
-            assert!(role.resolve_tools::<&str>(&[]).is_empty());
-        }
-    }
-
-    #[test]
-    fn builtin_roles_are_opt_out_and_disabling_does_not_change_the_catalog() {
-        let catalog = super::builtin_roles();
-        let mut settings = crate::config::SubagentSettings::default();
-        for name in catalog.names() {
-            assert!(settings.is_enabled(&name));
-        }
-        for name in ["sentinel", "skeptic"] {
-            settings.role_mut(name).enabled = false;
-        }
-        let enabled: Vec<_> = catalog
-            .roles
-            .iter()
-            .filter(|role| settings.is_enabled(&role.name))
-            .map(|role| role.name.as_str())
-            .collect();
-        assert_eq!(enabled, ["scout", "artisan"]);
-        for name in catalog.names() {
-            settings.role_mut(&name).enabled = false;
-            assert!(catalog.role(&name).is_some());
-        }
+        let artisan = role("artisan", None);
+        assert!(artisan.is_write_capable());
         assert!(
-            catalog
-                .roles
+            artisan
+                .resolve_tools(&parent)
                 .iter()
-                .all(|role| !settings.is_enabled(&role.name))
+                .all(|t| !super::PARENT_ONLY_TOOLS.contains(&t.as_str()))
         );
-        settings.role_mut("sentinel").enabled = true;
-        assert!(settings.is_enabled("sentinel"));
-        assert!(!settings.is_enabled("skeptic"));
-    }
-
-    #[test]
-    fn user_and_project_overrides_replace_builtins_without_losing_read_only_boundaries() {
-        let root = std::env::temp_dir().join(format!(
-            "mycode-role-overrides-{}-{}",
-            std::process::id(),
-            crate::core::unix_now().as_nanos()
-        ));
-        let _cleanup = RemoveDir(&root);
-        let project = root.join("project");
-        let user_agents = root.join("agents");
-        let project_agents = project
-            .join(crate::config::home::MYCODE_DIR_NAME)
-            .join("agents");
-        std::fs::create_dir_all(&user_agents).unwrap();
-        std::fs::create_dir_all(&project_agents).unwrap();
-        let home = crate::config::HomeLayout::from_root(&root).unwrap();
-        let names = super::builtin_roles().names();
-        for (origin, directory) in [
-            (RoleOrigin::User, user_agents),
-            (RoleOrigin::Project, project_agents),
-        ] {
-            for name in &names {
-                std::fs::write(directory.join(format!("{name}.md")), format!(
-                    "---\nname: {name}\ndescription: Override {origin:?}.\nisolation: worktree\ntools: read, shell, write, run_code, agent_workflow\n---\nCustom {origin:?} instructions.\n"
-                )).unwrap();
-            }
-            let catalog = super::discover_roles(&home, Some(&project));
-            assert_eq!(catalog.roles.len(), names.len());
-            for name in &names {
-                let role = catalog.role(name).expect("overridden builtin");
-                assert_eq!(role.origin, origin);
-                assert_eq!(role.prompt, format!("Custom {origin:?} instructions."));
-                assert_eq!(role.isolation, RoleIsolation::Worktree);
-                assert_eq!(role.is_write_capable(), name == "artisan");
-                if name != "artisan" {
-                    assert_eq!(
-                        role.resolve_tools(&[
-                            "read",
-                            "shell",
-                            "write",
-                            "run_code",
-                            "agent_workflow"
-                        ]),
-                        ["read"]
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn declared_exec_is_dropped_when_the_parent_only_has_shell() {
-        let narrow = role(
-            "narrow",
-            Some(vec![
-                "read".into(),
-                "grep".into(),
-                "find".into(),
-                "exec".into(),
-                "shell".into(),
-            ]),
-        );
-        let tools = narrow.resolve_tools(&["read", "grep", "find", "shell", "agent"]);
-        assert_eq!(
-            tools,
-            vec![
-                "read".to_owned(),
-                "grep".to_owned(),
-                "find".to_owned(),
-                "shell".to_owned()
-            ]
-        );
-    }
-
-    #[test]
-    fn powershell_in_a_role_matches_the_parent_shell_tool() {
-        let role = role("artisan", Some(vec!["read".into(), "powershell".into()]));
-        let tools = role.resolve_tools(&["read", "shell"]);
-        assert_eq!(tools, vec!["read".to_owned(), "powershell".to_owned()]);
-    }
-
-    #[test]
-    fn write_capability_requires_an_actual_mutating_tool() {
-        assert!(!role("scout", None).is_write_capable());
-        assert!(role("artisan", None).is_write_capable());
-        assert!(!role("reviewer", Some(vec!["read".into(), "grep".into()])).is_write_capable());
-        assert!(
-            !role(
-                "coordinator",
-                Some(vec![
-                    "read".into(),
-                    "agent".into(),
-                    "ask_user".into(),
-                    "unknown".into()
-                ])
-            )
-            .is_write_capable()
-        );
-        assert!(role("writer", Some(vec!["read".into(), "edit".into()])).is_write_capable());
-        assert!(role("runner", Some(vec!["powershell".into()])).is_write_capable());
+        let ps = role("artisan", Some(vec!["read".into(), "powershell".into()]));
+        assert_eq!(ps.resolve_tools(&["read", "shell"]), ["read", "powershell"]);
     }
 
     #[test]

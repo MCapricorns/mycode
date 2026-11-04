@@ -420,7 +420,6 @@ struct PreparingCalls {
 struct PreparingCall {
     /// Arguments so far; dropped once the label is final.
     arguments: String,
-    /// The label last sent.
     shown: String,
     /// Role and description were both read: the rest of the brief cannot
     /// change the label, so later bytes are neither kept nor scanned.

@@ -76,7 +76,7 @@ pub fn task_surface_visible(state: &WorkspaceState) -> bool {
         state.project_dir.as_deref(),
         project_of_session(&state.session_projects, session_id),
     ) {
-        // A scratch chat has no explicit project, but its agent/workflow
+        // A scratch chat has no explicit project, but its agent
         // detail cards still belong to the conversation on screen.
         (None, None) => true,
         (Some(project), Some(bound)) => same_project_path(bound, project),

@@ -1,4 +1,4 @@
-//! Session agent inspector: compact run/workflow rows and result-first details.
+//! Session agent inspector: compact run rows and result-first details.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -9,15 +9,12 @@ use gpui_kit::{
     AnyElement, Context, Div, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, Window, div, px,
 };
-use mycode::tools::builtin::{
-    AgentRunSnapshot, AgentRunStatus, AgentWorkflowSnapshot, AgentWorkflowStatus,
-};
+use mycode::tools::builtin::{AgentRunSnapshot, AgentRunStatus};
 
 use super::{SUBAGENT_WINDOW_BOTTOM_CLEAR, subagent_window_bounds};
 use crate::i18n::t;
 use crate::view_model::{
-    FrontendAction, SubagentSession, WorkspaceState, agent_run_elapsed_ms, agent_run_status_label,
-    agent_workflow_status_label, elapsed_label,
+    FrontendAction, WorkspaceState, agent_run_elapsed_ms, agent_run_status_label, elapsed_label,
 };
 use crate::workspace::Workspace;
 
@@ -45,16 +42,6 @@ fn run_tone(status: AgentRunStatus) -> StatusTone {
     }
 }
 
-fn workflow_tone(status: AgentWorkflowStatus) -> StatusTone {
-    match status {
-        AgentWorkflowStatus::Queued | AgentWorkflowStatus::Cancelled => StatusTone::Neutral,
-        AgentWorkflowStatus::Running => StatusTone::Active,
-        AgentWorkflowStatus::WaitingIntegration => StatusTone::Warning,
-        AgentWorkflowStatus::Completed => StatusTone::Success,
-        AgentWorkflowStatus::Failed => StatusTone::Error,
-    }
-}
-
 fn tone_color(tone: StatusTone, theme: &Theme) -> gpui_kit::Hsla {
     match tone {
         StatusTone::Neutral => theme.muted_foreground,
@@ -69,7 +56,6 @@ fn tone_color(tone: StatusTone, theme: &Theme) -> gpui_kit::Hsla {
 struct AgentRow {
     id: String,
     title: String,
-    workflow: bool,
     role: String,
     status: String,
     tone: StatusTone,
@@ -85,7 +71,6 @@ fn can_stop(run: &AgentRunSnapshot) -> bool {
 
 fn run_row(run: &AgentRunSnapshot) -> AgentRow {
     AgentRow {
-        workflow: false,
         id: run.id.clone(),
         title: if run.description.is_empty() {
             run.role.clone()
@@ -109,135 +94,10 @@ fn run_row(run: &AgentRunSnapshot) -> AgentRow {
     }
 }
 
-fn workflow_has_current_run(workflow: &AgentWorkflowSnapshot, run: &AgentRunSnapshot) -> bool {
-    workflow
-        .nodes
-        .iter()
-        .any(|node| node.run_id.as_deref() == Some(run.id.as_str()))
-}
-
-fn previous_workflow_runs<'a>(
-    workflow: &AgentWorkflowSnapshot,
-    session: &'a SubagentSession,
-) -> Vec<&'a AgentRunSnapshot> {
-    session
-        .runs
-        .iter()
-        .rev()
-        .filter(|run| {
-            run.workflow_id.as_deref() == Some(workflow.id.as_str())
-                && !workflow_has_current_run(workflow, run)
-        })
-        .collect()
-}
-
-fn workflow_status_text(workflow: &AgentWorkflowSnapshot) -> String {
-    let status = agent_workflow_status_label(workflow.status);
-    if workflow.revision == 0 {
-        status.to_owned()
-    } else {
-        format!("{status} · {} {}", t("Rework", "返工"), workflow.revision)
-    }
-}
-
-fn previous_result_button(run: &AgentRunSnapshot, theme: &Theme) -> Button {
-    let row = run_row(run);
-    Button::new(format!("workflow-previous-{}", run.id))
-        .ghost()
-        .h_auto()
-        .w_full()
-        .min_w_0()
-        .px_2()
-        .py_2()
-        .accessibility_label(format!(
-            "{}: {}",
-            t("View previous result", "查看以往结果"),
-            row.title
-        ))
-        .tooltip(t("View previous run and result", "查看以往运行与结果"))
-        .child(row_content(&row, theme))
-}
-
 fn rows(state: &WorkspaceState) -> Vec<AgentRow> {
     let mut rows = Vec::new();
     if let Some(session) = state.subagent_session() {
-        rows.extend(session.workflows.iter().rev().map(|workflow| {
-            let runs: Vec<_> = session
-                .runs
-                .iter()
-                .filter(|run| {
-                    run.workflow_id.as_deref() == Some(&workflow.id)
-                        && workflow_has_current_run(workflow, run)
-                })
-                .collect();
-            let active = runs.iter().filter(|run| !run.status.is_terminal()).count();
-            let latest = runs
-                .iter()
-                .rev()
-                .find(|run| !run.status.is_terminal())
-                .or_else(|| runs.last());
-            let started = runs
-                .iter()
-                .map(|run| run.started_ms)
-                .filter(|ms| *ms > 0)
-                .min();
-            let finished = if runs.iter().any(|run| !run.status.is_terminal()) {
-                None
-            } else {
-                runs.iter().filter_map(|run| run.finished_ms).max()
-            };
-            let elapsed = started
-                .map(|started| {
-                    elapsed_label(
-                        finished
-                            .unwrap_or_else(|| crate::unix_now().as_millis() as u64)
-                            .saturating_sub(started),
-                    )
-                })
-                .unwrap_or_else(|| "—".to_owned());
-            AgentRow {
-                id: workflow.id.clone(),
-                title: workflow_label(&workflow.name).to_owned(),
-                workflow: true,
-                role: t("Workflow", "工作流").to_owned(),
-                status: workflow_status_text(workflow),
-                tone: workflow_tone(workflow.status),
-                elapsed,
-                activity: if workflow.status == AgentWorkflowStatus::WaitingIntegration {
-                    t(
-                        "Integrate worktrees, then request acceptance",
-                        "整合 worktree 后再请求验收",
-                    )
-                    .to_owned()
-                } else if active > 0 {
-                    latest.map(|run| run.step.clone()).unwrap_or_default()
-                } else {
-                    workflow
-                        .result
-                        .as_deref()
-                        .or(workflow.acceptance.as_deref())
-                        .unwrap_or("")
-                        .lines()
-                        .next()
-                        .unwrap_or_default()
-                        .to_owned()
-                },
-                cancel_id: None,
-            }
-        }));
-        rows.extend(
-            session
-                .runs
-                .iter()
-                .rev()
-                .filter(|run| {
-                    !session
-                        .workflows
-                        .iter()
-                        .any(|workflow| run.workflow_id.as_deref() == Some(workflow.id.as_str()))
-                })
-                .map(run_row),
-        );
+        rows.extend(session.runs.iter().rev().map(run_row));
     }
     rows.extend(
         state
@@ -254,7 +114,6 @@ fn rows(state: &WorkspaceState) -> Vec<AgentRow> {
                 })
             })
             .map(|job| AgentRow {
-                workflow: false,
                 id: job.call_id.clone(),
                 title: if job.label.is_empty() {
                     job.title()
@@ -277,15 +136,6 @@ fn rows(state: &WorkspaceState) -> Vec<AgentRow> {
     rows
 }
 
-fn workflow_label(name: &str) -> &str {
-    match name {
-        "research" => t("Research workflow", "调研工作流"),
-        "code-review" => t("Code review workflow", "代码审查工作流"),
-        "migration" => t("Migration workflow", "迁移工作流"),
-        name => name,
-    }
-}
-
 fn row_content(row: &AgentRow, theme: &Theme) -> Div {
     div()
         .w_full()
@@ -301,14 +151,10 @@ fn row_content(row: &AgentRow, theme: &Theme) -> Div {
                 .items_center()
                 .gap_2()
                 .child(
-                    Icon::new(if row.workflow {
-                        IconName::GitBranch
-                    } else {
-                        IconName::Bot
-                    })
-                    .small()
-                    .flex_shrink_0()
-                    .text_color(theme.primary),
+                    Icon::new(IconName::Bot)
+                        .small()
+                        .flex_shrink_0()
+                        .text_color(theme.primary),
                 )
                 .child(
                     div()
@@ -374,9 +220,7 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
             .vm()
             .subagent_session()
             .and_then(|session| session.run(id))
-            .map_or(id, |run| {
-                run.workflow_id.as_deref().unwrap_or(run.id.as_str())
-            })
+            .map_or(id, |run| run.id.as_str())
     });
     div()
         .id("subagents")
@@ -392,7 +236,7 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                     div()
                         .text_sm()
                         .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                        .child(t("Agents & workflows", "子代理与工作流")),
+                        .child(t("Subagents", "子代理")),
                 )
                 .child(
                     div()
@@ -408,7 +252,7 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                 .text_color(theme.muted_foreground)
                 .child(t(
                     "Tasks, progress and retained results",
-                    "任务进度、流程节点与保留结果",
+                    "任务进度与保留结果",
                 )),
         )
         .when(count == 0, |this| {
@@ -463,7 +307,7 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                                     t("Open details", "打开详情"),
                                     row.title
                                 ))
-                                .tooltip(t("Open run or workflow details", "打开运行或工作流详情"))
+                                .tooltip(t("Open run details", "打开运行详情"))
                                 .child(row_content(&row, theme))
                                 .on_click(cx.listener(move |workspace, _, _, cx| {
                                     workspace.on_open_subagent(&id, cx);
@@ -698,21 +542,6 @@ fn run_detail(
                 ))
             },
         )
-        .when_some(run.workflow_id.clone(), |this, workflow_id| {
-            this.child(
-                Button::new("agent-parent-workflow")
-                    .label(t("View workflow", "查看工作流"))
-                    .small()
-                    .ghost()
-                    .tooltip(t(
-                        "Show dependencies and independent acceptance",
-                        "查看依赖关系与独立验收",
-                    ))
-                    .on_click(cx.listener(move |workspace, _, _, cx| {
-                        workspace.on_open_subagent(&workflow_id, cx);
-                    })),
-            )
-        })
         .when_some(run.artifact_path.clone(), |this, path| {
             this.child(detail_section(
                 "agent-artifact",
@@ -769,192 +598,6 @@ fn run_detail(
         .into_any_element()
 }
 
-fn acceptance_text(workflow: &AgentWorkflowSnapshot) -> String {
-    if workflow.status == AgentWorkflowStatus::WaitingIntegration {
-        return t("Not accepted. Integrate the retained worktrees into the main workspace, then explicitly request the integration gate and independent acceptance.", "尚未验收。请先将保留的 worktree 整合到主工作区，再明确请求运行集成检查与独立验收。").to_owned();
-    }
-    let node = workflow
-        .nodes
-        .iter()
-        .find(|node| node.id == "workflow-acceptance");
-    match (workflow.acceptance.as_deref(), node) {
-        (Some(verdict), Some(node)) => {
-            format!("{} · {verdict}", agent_run_status_label(node.status))
-        }
-        (Some(verdict), None) => verdict.to_owned(),
-        (None, Some(node)) => agent_run_status_label(node.status).to_owned(),
-        (None, None) => t(
-            "No independent acceptance result yet.",
-            "暂无独立验收结果。",
-        )
-        .to_owned(),
-    }
-}
-
-fn workflow_detail(
-    workflow: &AgentWorkflowSnapshot,
-    workspace: &Workspace,
-    window: &Window,
-    cx: &Context<Workspace>,
-) -> AnyElement {
-    let theme = cx.theme();
-    let previous = workspace
-        .vm()
-        .subagent_session()
-        .map(|session| previous_workflow_runs(workflow, session))
-        .unwrap_or_default();
-    div()
-        .flex()
-        .flex_col()
-        .gap_4()
-        .min_w_0()
-        .flex_shrink_0()
-        .child(
-            div()
-                .text_sm()
-                .text_color(tone_color(workflow_tone(workflow.status), theme))
-                .child(format!(
-                    "{} · {} / {} {}",
-                    workflow_status_text(workflow),
-                    workflow
-                        .nodes
-                        .iter()
-                        .filter(|node| node.status == AgentRunStatus::Completed)
-                        .count(),
-                    workflow.nodes.len(),
-                    t("nodes complete", "节点完成")
-                )),
-        )
-        .child(
-            detail_section(
-                "workflow-acceptance",
-                t("Independent acceptance", "独立验收"),
-                &acceptance_text(workflow),
-                theme,
-            )
-            .when(
-                workflow.status == AgentWorkflowStatus::WaitingIntegration,
-                |this| this.text_color(theme.warning),
-            ),
-        )
-        .when_some(workflow.result.clone(), |this, result| {
-            this.child(result_section(
-                "workflow-result",
-                t("Result / handoff", "结果 / 交接"),
-                &result,
-                theme,
-                window,
-            ))
-            .child(copy_button(
-                "workflow-copy-result",
-                t("Copy result", "复制结果"),
-                result,
-                cx,
-            ))
-        })
-        .child(
-            div()
-                .text_sm()
-                .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                .child(t("Nodes and dependencies", "节点与依赖")),
-        )
-        .children(workflow.nodes.iter().map(|node| {
-            let run = node.run_id.as_ref().and_then(|id| {
-                workspace
-                    .vm()
-                    .subagent_session()?
-                    .runs
-                    .iter()
-                    .find(|run| &run.id == id)
-            });
-            let deps = if node.dependencies.is_empty() {
-                t("No dependencies", "无依赖").to_owned()
-            } else {
-                format!("{}: {}", t("After", "依赖"), node.dependencies.join(", "))
-            };
-            div()
-                .flex()
-                .flex_col()
-                .min_w_0()
-                .gap_2()
-                .flex_shrink_0()
-                .pt_3()
-                .border_t_1()
-                .border_color(theme.border)
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .items_center()
-                        .child(div().text_sm().child(node.id.clone()))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(node.role.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(tone_color(run_tone(node.status), theme))
-                                .child(agent_run_status_label(node.status)),
-                        ),
-                )
-                .child(detail_text(
-                    &format!("node-{}-description", node.id),
-                    &node.description,
-                ))
-                .child(
-                    detail_text(&format!("node-{}-dependencies", node.id), &deps)
-                        .text_color(theme.muted_foreground),
-                )
-                .when_some(run, |this, run| {
-                    let run_id = run.id.clone();
-                    this.child(
-                        Button::new(format!("node-{}-details", node.id))
-                            .label(if node.id == "workflow-acceptance" {
-                                t("View acceptance run", "查看验收运行")
-                            } else {
-                                t("View run and result", "查看运行与结果")
-                            })
-                            .small()
-                            .ghost()
-                            .tooltip(run.description.clone())
-                            .on_click(cx.listener(move |workspace, _, _, cx| {
-                                workspace.on_open_subagent(&run_id, cx);
-                            })),
-                    )
-                })
-        }))
-        .when(!previous.is_empty(), |this| {
-            this.child(
-                div()
-                    .id("workflow-previous-results")
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .min_w_0()
-                    .flex_shrink_0()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                            .child(t("Previous results", "以往结果")),
-                    )
-                    .children(previous.into_iter().map(|run| {
-                        let run_id = run.id.clone();
-                        previous_result_button(run, theme).on_click(cx.listener(
-                            move |workspace, _, _, cx| {
-                                workspace.on_open_subagent(&run_id, cx);
-                            },
-                        ))
-                    })),
-            )
-        })
-        .into_any_element()
-}
-
 /// Scrollable detail that stays open after a run reaches its terminal state.
 pub(crate) fn render_subagent_window(
     workspace: &mut Workspace,
@@ -965,27 +608,17 @@ pub(crate) fn render_subagent_window(
     let selected = workspace.vm().subagent_window.clone().unwrap_or_default();
     let session = workspace.vm().subagent_session();
     let run = session.and_then(|session| session.run(&selected));
-    let workflow = session.and_then(|session| {
-        session
-            .workflows
-            .iter()
-            .find(|workflow| workflow.id == selected)
-    });
     let legacy = workspace
         .vm()
         .live_jobs
         .iter()
         .find(|job| job.call_id == selected);
-    let is_workflow = workflow.is_some();
     let title = run
         .map(|run| run.description.clone())
-        .or_else(|| workflow.map(|workflow| workflow_label(&workflow.name).to_owned()))
         .or_else(|| legacy.map(|job| job.title()))
         .unwrap_or_else(|| t("Subagent", "子代理").to_owned());
     let content = if let Some(run) = run {
         run_detail(run, workspace, window, cx)
-    } else if let Some(workflow) = workflow {
-        workflow_detail(workflow, workspace, window, cx)
     } else if let Some(job) = legacy {
         let run = AgentRunSnapshot {
             id: job.call_id.clone(),
@@ -1005,8 +638,6 @@ pub(crate) fn render_subagent_window(
             result: None,
             error: None,
             artifact_path: None,
-            workflow_id: None,
-            node_id: None,
         };
         run_detail(&run, workspace, window, cx)
     } else {
@@ -1056,15 +687,7 @@ pub(crate) fn render_subagent_window(
                 .gap_3()
                 .border_b_1()
                 .border_color(theme.border)
-                .child(
-                    Icon::new(if is_workflow {
-                        IconName::GitBranch
-                    } else {
-                        IconName::Bot
-                    })
-                    .small()
-                    .text_color(theme.primary),
-                )
+                .child(Icon::new(IconName::Bot).small().text_color(theme.primary))
                 .child(
                     div()
                         .flex_1()
@@ -1109,27 +732,6 @@ fn detail_bottom_inset(height: f32, top: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn failures_and_integration_handoffs_have_distinct_semantics() {
-        assert_eq!(run_tone(AgentRunStatus::Failed), StatusTone::Error);
-        assert_eq!(run_tone(AgentRunStatus::Blocked), StatusTone::Warning);
-        assert_eq!(
-            workflow_tone(AgentWorkflowStatus::WaitingIntegration),
-            StatusTone::Warning
-        );
-        let workflow = AgentWorkflowSnapshot {
-            id: "w".into(),
-            name: "migration".into(),
-            revision: 0,
-            status: AgentWorkflowStatus::WaitingIntegration,
-            nodes: Vec::new(),
-            acceptance: Some("PASS".into()),
-            result: None,
-        };
-        assert_ne!(acceptance_text(&workflow), "PASS");
-        assert!(!crate::view_model::workflow_terminal(workflow.status));
-    }
-
     #[test]
     fn long_machine_tokens_have_break_opportunities_without_changing_copy_source() {
         let source = format!("C:\\workspace\\{}\\result.md", "long_segment".repeat(20));

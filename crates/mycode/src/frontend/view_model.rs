@@ -52,7 +52,6 @@ pub use self::reduce::{
 pub use self::state::{MAX_COMPOSER_CHARS, WorkspaceState};
 pub use self::subagents::{
     SubagentHistory, SubagentSession, agent_run_elapsed_ms, agent_run_status_label,
-    agent_workflow_status_label, workflow_terminal,
 };
 pub use self::usage::{
     CacheAlert, ContextMeterParts, TurnStats, cache_alert_text, compact_count, context_meter_parts,

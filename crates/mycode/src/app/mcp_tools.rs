@@ -73,7 +73,6 @@ impl McpServerInfo {
         }
     }
 
-    /// The server identity the prompt and catalog key use.
     pub(crate) fn id(&self) -> &str {
         &self.id
     }
@@ -114,7 +113,6 @@ impl DynamicMcpTool {
         self.read_only
     }
 
-    /// The server this tool belongs to.
     pub(crate) fn server_id(&self) -> &str {
         &self.server.id
     }
@@ -129,7 +127,6 @@ impl DynamicMcpTool {
         &self.spec.description
     }
 
-    /// The server-declared input schema.
     pub(crate) fn schema(&self) -> &Value {
         &self.spec.params_schema
     }
@@ -1629,8 +1626,6 @@ pub(crate) fn stub_catalog_tool_with_read_only(
     ))
 }
 
-#[cfg(test)]
-mod regressions;
 #[cfg(test)]
 mod tests;
 

@@ -41,7 +41,7 @@ pub(crate) struct CoreState {
     pub(crate) turn_cancels: Arc<Mutex<HashMap<String, LiveWork>>>,
     /// One token per running subagent, keyed by `session_id:call_id`.
     pub(crate) subagent_cancels: Arc<Mutex<HashMap<String, Arc<CancellationToken>>>>,
-    /// Bounded run/workflow records partitioned by session and reused across turns.
+    /// Bounded run records partitioned by session and reused across turns.
     pub(crate) agent_runtimes: Mutex<HashMap<String, Arc<crate::tools::builtin::AgentRuntime>>>,
     /// Steer inbox for the live turn of each session. Removed when the turn ends.
     pub(crate) steer_inboxes: Arc<Mutex<HashMap<String, Arc<crate::agent::SteerInbox>>>>,
@@ -127,7 +127,6 @@ impl CoreState {
             .map(|work| work.kind)
     }
 
-    /// The scale the session's last turn measured.
     pub(crate) fn token_scale(&self, session_id: &str) -> crate::app::compaction::TokenScale {
         self.token_scales
             .lock()
@@ -155,7 +154,6 @@ impl CoreState {
         self.startup_repairs.lock().clone()
     }
 
-    /// The tool working directory for one session.
     pub(crate) fn project_dir(&self, session_id: &str) -> PathBuf {
         self.projects
             .lock()

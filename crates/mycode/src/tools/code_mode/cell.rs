@@ -372,7 +372,6 @@ impl ScriptCell {
         let mut inner = self.inner.write();
         let key = |event: &AgentStateEvent| match event {
             AgentStateEvent::Run(r) => r.id.clone(),
-            AgentStateEvent::Workflow(w) => w.id.clone(),
         };
         for event in events {
             if let Some(existing) = inner

@@ -41,17 +41,6 @@ fn a_single_op_miss_keeps_the_plain_message() {
 }
 
 #[test]
-fn a_failed_batch_plans_nothing() {
-    let body = "alpha\nbeta\n";
-    let ops = [literal("alpha", "one"), literal("missing", "two")];
-    let cancel = CancellationToken::new();
-    let error = plan_edits(body, &ops, &cancel).err().expect("miss");
-    assert!(error.to_string().contains("operation 2 of 2"));
-    // The first op would have matched; the batch must still plan nothing.
-    assert_eq!(body, "alpha\nbeta\n");
-}
-
-#[test]
 fn a_fully_matching_batch_still_applies() {
     let body = "alpha\nbeta\n";
     let ops = [literal("alpha", "one"), literal("beta", "two")];

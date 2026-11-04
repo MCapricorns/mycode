@@ -265,14 +265,3 @@ fn welcome_action(
         .child(Icon::new(icon).with_size(px(15.)).text_color(ink))
         .child(label)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{TAGLINE_HAS_FOLDER, TAGLINE_NO_FOLDER, empty_desk_tagline};
-
-    #[test]
-    fn empty_conversation_offers_chat_and_project_selection_when_unbound() {
-        assert_eq!(empty_desk_tagline(false), TAGLINE_NO_FOLDER);
-        assert_eq!(empty_desk_tagline(true), TAGLINE_HAS_FOLDER);
-    }
-}

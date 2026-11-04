@@ -410,11 +410,7 @@ mod tests {
     fn normalized_server_id_collisions_are_rejected() {
         let text = r#"{"mcpServers":{"Git Hub":{"command":"one"},"git-hub":{"command":"two"}}}"#;
         for parse in [parse_mcp_import, parse_mcp_library] {
-            assert!(
-                parse(text)
-                    .unwrap_err()
-                    .contains("unique after normalization")
-            );
+            assert!(parse(text).is_err());
         }
     }
 

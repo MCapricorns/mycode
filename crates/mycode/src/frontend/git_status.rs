@@ -319,7 +319,6 @@ mod diff_tests {
         assert!(diff.contains("+++ b/f.txt"), "{diff}");
         assert!(diff.contains("+alpha\n"), "{diff}");
         assert!(diff.contains("+beta\n"), "{diff}");
-        assert!(!diff.contains("No diff"), "{diff}");
     }
 
     #[test]

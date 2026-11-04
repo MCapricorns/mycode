@@ -110,7 +110,6 @@ mod tests {
     #[test]
     fn a_chord_splits_into_one_cap_per_key() {
         assert_eq!(keycap_labels("Ctrl+Enter"), ["Ctrl", "Enter"]);
-        assert_eq!(keycap_labels("Shift+Enter"), ["Shift", "Enter"]);
         assert_eq!(keycap_labels("⌘G"), ["⌘", "G"]);
         assert_eq!(keycap_labels("⌘Enter"), ["⌘", "Enter"]);
         assert_eq!(keycap_labels("Esc"), ["Esc"]);

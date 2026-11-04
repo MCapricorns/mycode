@@ -53,7 +53,7 @@ impl Render for RolesProbe {
 }
 
 #[gpui_kit::test]
-fn four_roles_stay_compact_and_controls_fit_at_both_widths(cx: &mut TestAppContext) {
+fn builtin_roles_stay_compact_and_controls_fit_at_both_widths(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     for (width, wide) in [(640., false), (912., true)] {
         for font_size in ["m", "xl"] {
@@ -64,14 +64,10 @@ fn four_roles_stay_compact_and_controls_fit_at_both_widths(cx: &mut TestAppConte
             cx.update_window(handle.into(), |_, window, cx| {
                 window.render_frame(cx);
                 let first_top = window.find("agent-role-scout").bounds().top();
-                let last_bottom = window.find("agent-role-skeptic").bounds().bottom();
-                assert!(
-                    last_bottom - first_top < px(600.),
-                    "four roles take too much height: {:?}",
-                    last_bottom - first_top
-                );
+                let last_bottom = window.find("agent-role-sentinel").bounds().bottom();
+                assert!(last_bottom - first_top < px(500.));
                 let mut previous_bottom = px(0.);
-                for name in ["scout", "artisan", "sentinel", "skeptic"] {
+                for name in ["scout", "artisan", "sentinel"] {
                     let row = window.find(format!("agent-role-{name}")).bounds();
                     let summary = window.find(format!("agent-summary-{name}")).bounds();
                     let controls = window.find(format!("agent-controls-{name}")).bounds();

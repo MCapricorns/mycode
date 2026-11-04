@@ -126,7 +126,7 @@ pub struct WorkspaceState {
     pub preparing_calls: Vec<ConversationEntry>,
     /// Compatibility projection of currently active calls for transcript tools.
     pub live_jobs: Vec<LiveJob>,
-    /// Typed run/workflow history, bounded per session in this process.
+    /// Typed run history, bounded per session in this process.
     pub subagents: super::subagents::SubagentHistory,
     /// Expanded optional sections in the selected agent detail.
     pub subagent_sections: std::collections::HashSet<String>,
@@ -136,7 +136,7 @@ pub struct WorkspaceState {
     /// Terminal or individually stopped jobs in the current conversation.
     /// Retiring a view or ending a turn alone does not finish yielded cells.
     pub finished_jobs: std::collections::HashSet<String>,
-    /// Stable run/workflow id (or legacy call id) selected in the agent detail.
+    /// Stable run id (or legacy call id) selected in the agent detail.
     pub subagent_window: Option<String>,
     /// Whether the full working-tree changes drawer is open.
     pub changes_panel_open: bool,
@@ -263,7 +263,7 @@ impl WorkspaceState {
         !self.live_jobs.is_empty()
             || self
                 .subagent_session()
-                .is_some_and(|session| !session.runs.is_empty() || !session.workflows.is_empty())
+                .is_some_and(|session| !session.runs.is_empty())
     }
 
     /// Final runtime of a finished subagent call, in milliseconds. The

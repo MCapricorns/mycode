@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::tools::builtin::{AgentRunStatus, AgentStateEvent, AgentWorkflowStatus};
+use crate::tools::builtin::{AgentRunStatus, AgentStateEvent};
 use crate::tools::registry::ToolRegistry;
 use crate::tools::stream::{ToolStream, ToolStreamItem};
 use crate::tools::tool::{ToolDyn, ToolResult};
@@ -260,11 +260,9 @@ async fn handle(
 }
 
 // Query/control results retain history without executing the reported runs.
-// Workflow execution returns its own terminal snapshot alongside runs from all
-// revisions; only that workflow outcome determines cancellation of this call.
 fn current_execution_cancelled(
     name: &str,
-    args: &Value,
+    _args: &Value,
     call_id: &str,
     states: &[AgentStateEvent],
 ) -> bool {
@@ -273,27 +271,6 @@ fn current_execution_cancelled(
             matches!(event, AgentStateEvent::Run(run)
                 if run.call_id == call_id && run.status == AgentRunStatus::Cancelled)
         }),
-        "agent_workflow" => {
-            let id = match args
-                .get("action")
-                .and_then(Value::as_str)
-                .unwrap_or("start")
-            {
-                "start" => None,
-                "resume" | "accept" | "revise" => {
-                    let Some(id) = args.get("id").and_then(Value::as_str) else {
-                        return false;
-                    };
-                    Some(id)
-                }
-                _ => return false,
-            };
-            states.iter().any(|event| {
-                matches!(event, AgentStateEvent::Workflow(workflow)
-                    if id.is_none_or(|id| workflow.id == id)
-                        && workflow.status == AgentWorkflowStatus::Cancelled)
-            })
-        }
         _ => false,
     }
 }

@@ -1,7 +1,7 @@
 //! Typed agent progress is consumed before the legacy free-text protocol.
 use super::*;
 use crate::tools::builtin::{
-    AGENT_STATE_PREFIX, AgentRunSnapshot, AgentRunStatus, AgentStateEvent, AgentWorkflowStatus,
+    AGENT_STATE_PREFIX, AgentRunSnapshot, AgentRunStatus, AgentStateEvent,
 };
 
 #[cfg(test)]
@@ -24,7 +24,6 @@ pub(super) fn consume(
     let Some(json) = message.strip_prefix(AGENT_STATE_PREFIX) else {
         return false;
     };
-    // Never paint protocol JSON as user-facing progress, including a malformed packet.
     if let Ok(event) = serde_json::from_str::<AgentStateEvent>(json) {
         apply(state, call_id, provider_id, event);
     }
@@ -33,76 +32,55 @@ pub(super) fn consume(
 
 fn apply(state: &mut WorkspaceState, ledger_id: &str, provider_id: &str, event: AgentStateEvent) {
     let session_id = session_id(state);
-    match event {
-        AgentStateEvent::Run(run) => {
-            if !state.sending && !run.status.is_terminal() {
-                return;
-            }
-            let accepted = state
-                .subagents
-                .session_mut(&session_id)
-                .upsert_run(run.clone());
-            if !accepted {
-                return;
-            }
-            let row_id = state
-                .live_jobs
-                .iter()
-                .find(|job| {
-                    job.call_id == run.call_id
-                        || job.provider_call_id == run.call_id
-                        || (run.workflow_id.is_none()
-                            && job.call_id == ledger_id
-                            && provider_id == run.call_id)
-                })
-                .map(|job| job.call_id.clone())
-                .unwrap_or_else(|| run.call_id.clone());
-            // A typed snapshot replaces an earlier compatibility-only archive.
-            let session = state.subagents.session_mut(&session_id);
-            if row_id != run.call_id {
-                session.call_ids.retain(|(call, _)| call != &row_id);
-                session.call_ids.push((row_id.clone(), run.id.clone()));
-            }
-            session
-                .runs
-                .retain(|old| old.id == run.id || old.id != format!("legacy:{row_id}"));
-            if run.status.is_terminal() {
-                drop_live_job(state, &row_id);
-                state.finished_jobs.insert(run.call_id.clone());
-                state.job_elapsed.retain(|(id, _)| id != &row_id);
-                state.job_elapsed.push((
-                    row_id,
-                    crate::frontend::view_model::agent_run_elapsed_ms(&run),
-                ));
-                if state.job_elapsed.len() > 128 {
-                    state.job_elapsed.remove(0);
-                }
-            } else if !state.finished_jobs.contains(&row_id)
-                && !state.finished_jobs.contains(&run.call_id)
-            {
-                upsert_live_job(state, &row_id, &run.role, &run.step);
-                if let Some(job) = live_job_mut(state, &row_id) {
-                    job.provider_call_id = run.call_id.clone();
-                    job.label = run.description;
-                    job.prompt = run.prompt;
-                    job.path = run.path;
-                    job.started_ms = run.started_ms;
-                }
-            }
+    let AgentStateEvent::Run(run) = event;
+    if !state.sending && !run.status.is_terminal() {
+        return;
+    }
+    let accepted = state
+        .subagents
+        .session_mut(&session_id)
+        .upsert_run(run.clone());
+    if !accepted {
+        return;
+    }
+    let row_id = state
+        .live_jobs
+        .iter()
+        .find(|job| {
+            job.call_id == run.call_id
+                || job.provider_call_id == run.call_id
+                || (job.call_id == ledger_id && provider_id == run.call_id)
+        })
+        .map(|job| job.call_id.clone())
+        .unwrap_or_else(|| run.call_id.clone());
+    let session = state.subagents.session_mut(&session_id);
+    if row_id != run.call_id {
+        session.call_ids.retain(|(call, _)| call != &row_id);
+        session.call_ids.push((row_id.clone(), run.id.clone()));
+    }
+    session
+        .runs
+        .retain(|old| old.id == run.id || old.id != format!("legacy:{row_id}"));
+    if run.status.is_terminal() {
+        drop_live_job(state, &row_id);
+        state.finished_jobs.insert(run.call_id.clone());
+        state.job_elapsed.retain(|(id, _)| id != &row_id);
+        state.job_elapsed.push((
+            row_id,
+            crate::frontend::view_model::agent_run_elapsed_ms(&run),
+        ));
+        if state.job_elapsed.len() > 128 {
+            state.job_elapsed.remove(0);
         }
-        AgentStateEvent::Workflow(workflow) => {
-            if !state.sending
-                && matches!(
-                    workflow.status,
-                    AgentWorkflowStatus::Queued | AgentWorkflowStatus::Running
-                )
-            {
-                return;
-            }
-            state
-                .subagents
-                .session_mut(&session_id)
-                .upsert_workflow(workflow);
+    } else if !state.finished_jobs.contains(&row_id) && !state.finished_jobs.contains(&run.call_id)
+    {
+        upsert_live_job(state, &row_id, &run.role, &run.step);
+        if let Some(job) = live_job_mut(state, &row_id) {
+            job.provider_call_id = run.call_id.clone();
+            job.label = run.description;
+            job.prompt = run.prompt;
+            job.path = run.path;
+            job.started_ms = run.started_ms;
         }
     }
     if state.sending {
@@ -110,7 +88,7 @@ fn apply(state: &mut WorkspaceState, ledger_id: &str, provider_id: &str, event: 
     }
 }
 
-/// Prefer projected typed results; retain compatibility with status/workflow JSON text.
+/// Prefer projected typed results; retain compatibility with status JSON text.
 pub(in crate::frontend::view_model::reduce) fn consume_result(
     state: &mut WorkspaceState,
     entry: &ConversationEntry,
@@ -154,7 +132,6 @@ pub(in crate::frontend::view_model::reduce) fn consume_result(
     let session_id = session_id(state);
     let failed = entry.text.starts_with("failed: ");
     let session = state.subagents.session_mut(&session_id);
-    // Generic outer results cannot rewrite a typed child verdict.
     if let Some(run) = session
         .runs
         .iter_mut()
@@ -251,8 +228,6 @@ pub(super) fn archive_legacy(
             None
         },
         artifact_path: None,
-        workflow_id: None,
-        node_id: None,
     });
     session
         .activity

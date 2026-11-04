@@ -1,6 +1,4 @@
-use super::{
-    COMPOSER_PLACEHOLDER, STEER_PLACEHOLDER, lit_context_pips, thinking_chip_label, used_percent,
-};
+use super::{lit_context_pips, thinking_chip_label, used_percent};
 
 #[test]
 fn thinking_chip_labels_fit_the_chip() {
@@ -13,28 +11,10 @@ fn thinking_chip_labels_fit_the_chip() {
 }
 
 #[test]
-fn composer_placeholder_asks_the_agent_without_a_product_name() {
-    assert_eq!(COMPOSER_PLACEHOLDER.0, "Ask the agent");
-    assert_eq!(COMPOSER_PLACEHOLDER.1, "向代理提问");
-    assert!(!COMPOSER_PLACEHOLDER.0.contains("MYCode"));
-    assert!(!COMPOSER_PLACEHOLDER.1.contains("MYCode"));
-    assert!(!COMPOSER_PLACEHOLDER.0.to_ascii_lowercase().contains("chat"));
-    assert!(!COMPOSER_PLACEHOLDER.1.contains("对话"));
-    assert_eq!(
-        STEER_PLACEHOLDER.0,
-        "Enter chooses: steer or interrupt and send"
-    );
-    assert_eq!(STEER_PLACEHOLDER.1, "回车选择：引导或打断并发送");
-}
-
-#[test]
 fn busy_enter_opens_choice_only_for_a_text_draft_on_a_busy_turn() {
     use super::busy_enter_opens_choice;
-    // Busy turn with a text draft: the choice opens.
     assert!(busy_enter_opens_choice(true, "steer me", false));
-    // Idle turn: Enter submits as before.
     assert!(!busy_enter_opens_choice(false, "hello", false));
-    // Blank draft: nothing to choose for.
     assert!(!busy_enter_opens_choice(true, "  ", false));
     assert!(!busy_enter_opens_choice(true, "", false));
     // Attachments cannot steer: their submit keeps the waiting path.

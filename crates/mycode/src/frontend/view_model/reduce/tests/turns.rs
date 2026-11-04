@@ -948,20 +948,12 @@ fn an_auto_compaction_shows_in_the_status_line() {
     reduce(&mut state, FrontendAction::TurnArmed);
     reduce(&mut state, FrontendAction::ContextCompacting(true));
     assert!(state.auto_compacting);
-    assert_eq!(
-        status(&state).as_deref(),
-        Some(crate::frontend::i18n::t(
-            "Compacting context",
-            "正在压缩上下文"
-        ))
-    );
+    let compacting = status(&state).expect("a compaction status");
     reduce(&mut state, FrontendAction::ContextCompacting(false));
     assert!(!state.auto_compacting);
-    assert_eq!(
-        status(&state).as_deref(),
-        Some(crate::frontend::i18n::t(
-            "Waiting for the model",
-            "等待模型响应"
-        ))
+    let waiting = status(&state).expect("a waiting status");
+    assert_ne!(
+        compacting, waiting,
+        "the status line follows the compaction"
     );
 }

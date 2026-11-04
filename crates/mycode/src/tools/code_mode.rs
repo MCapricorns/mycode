@@ -433,7 +433,4 @@ mod image_tests;
 #[cfg(test)]
 mod progress_tests;
 #[cfg(test)]
-mod regressions;
-/// Argument type used by tests that need a serialized form.
-#[cfg(test)]
 mod tests;

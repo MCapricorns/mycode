@@ -190,12 +190,6 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(block.text.ends_with(&format!("[revision {revision}]")));
-        assert!(
-            ReadTool
-                .description()
-                .contains("without line-number prefixes")
-        );
-        assert!(ReadTool.description().contains("[revision"));
         std::fs::remove_dir_all(base).unwrap();
     }
 

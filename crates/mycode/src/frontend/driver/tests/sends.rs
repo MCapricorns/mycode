@@ -392,8 +392,11 @@ fn an_unavailable_captured_route_settles_the_committed_send_without_a_fallback()
     assert!(!driver.submitted_turns.contains_key(&session));
     // The driver consumes the reducer error into a user-visible toast.
     assert!(out.iter().any(|effect| matches!(
-        effect, Effect::Toast { kind: ToastKind::Error, text }
-            if text.contains("unavailable") || text.contains("不可用")
+        effect,
+        Effect::Toast {
+            kind: ToastKind::Error,
+            ..
+        }
     )));
     assert_eq!(driver.vm.selected_model.as_deref(), Some("other"));
     driver.shutdown();

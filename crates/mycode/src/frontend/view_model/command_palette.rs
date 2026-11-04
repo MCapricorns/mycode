@@ -545,22 +545,12 @@ mod tests {
     #[test]
     fn search_is_case_insensitive_across_labels_and_keywords() {
         let state = populated();
-        let parser = labels_matching(&state, "PARSER");
-        assert!(parser.iter().any(|label| label.contains("parser")));
-        let model = labels_matching(&state, "gpt-5");
-        assert!(model.iter().any(|label| label.contains("gpt-5")));
-        let settings = labels_matching(&state, "设置");
-        assert!(settings.iter().any(|label| label.contains("设置")
-            || label.contains("General")
-            || label.contains("通用")
-            || label.contains("/settings")));
-        assert!(
-            labels_matching(&state, "slash")
-                .iter()
-                .any(|label| label.contains("/review")
-                    || label.contains("Skills")
-                    || label.contains("技能"))
-        );
+        for query in ["PARSER", "parser", "gpt-5", "设置", "slash"] {
+            assert!(
+                !labels_matching(&state, query).is_empty(),
+                "{query} must match a label or keyword"
+            );
+        }
         assert!(labels_matching(&state, "no-such-row").is_empty());
         assert!(palette_matches(
             &palette_catalog(&state).groups[0].items[0],

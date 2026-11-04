@@ -335,7 +335,7 @@ mod compat_tests {
     use crate::tools::tool::{ToolDyn, ToolResult};
     use serde_json::Value;
 
-    async fn run(dir: &std::path::Path, file: &std::path::Path, args: Value) -> ToolResult {
+    async fn run(dir: &std::path::Path, args: Value) -> ToolResult {
         let args_json = args;
         let ctx = crate::tools::prepare_tool_ctx(
             dir,
@@ -348,7 +348,6 @@ mod compat_tests {
         )
         .await
         .expect("preflight succeeds");
-        let _ = file;
         let (mut stream, _rx) = ToolStream::channel();
         ToolDyn::execute_dyn(&EditTool, args_json, &ctx, &mut stream)
             .await
@@ -376,7 +375,7 @@ mod compat_tests {
             "old_string": "  let x = 1;\n  println!(\"{x}\");",
             "new_string": "    let x = 2;"
         });
-        let result = run(&base, &file, args).await;
+        let result = run(&base, args).await;
         assert!(!result.is_error, "{result:?}");
         let text = format!("{:?}", result.content);
         assert!(text.contains("ignoring whitespace"), "{text}");
@@ -408,7 +407,7 @@ mod compat_tests {
                 "replacement": "BETA"
             }]
         });
-        let result = run(&base, &file, args).await;
+        let result = run(&base, args).await;
         assert!(!result.is_error, "{result:?}");
         let text = format!("{:?}", result.content);
         assert!(text.contains("no longer matches"), "{text}");

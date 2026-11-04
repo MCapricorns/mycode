@@ -21,8 +21,7 @@ pub mod write;
 pub use agent::{
     AGENT_COMPACTED_STEP, AGENT_PROGRESS_PREFIX, AGENT_STATE_PREFIX, AgentActivity, AgentHost,
     AgentMessageTool, AgentRunSnapshot, AgentRunStatus, AgentRuntime, AgentScope, AgentStateEvent,
-    AgentStatusTool, AgentStopTool, AgentSymbolScope, AgentTool, AgentWorkflowNode,
-    AgentWorkflowSnapshot, AgentWorkflowStatus, AgentWorkflowTool, SubagentRequest,
+    AgentStatusTool, AgentStopTool, AgentSymbolScope, AgentTool, SubagentRequest,
     inherit_agent_activity, settle_agent_activity,
 };
 pub use ask::{
@@ -63,9 +62,6 @@ pub fn register_builtins(registry: &ToolRegistry) {
 }
 
 /// Byte-cap text truncation that respects char boundaries.
-///
-/// Returns `(text, truncated)`; callers append their own notice so the
-/// model knows how to fetch the rest (offset/limit, narrower glob, …).
 pub(crate) fn truncate_bytes(text: &str, max_bytes: usize) -> (String, bool) {
     if text.len() <= max_bytes {
         return (text.to_owned(), false);
@@ -75,9 +71,6 @@ pub(crate) fn truncate_bytes(text: &str, max_bytes: usize) -> (String, bool) {
 
 /// Byte-cap truncation that keeps the start and the end of `text` and
 /// drops the middle, for command output whose last lines carry the verdict.
-///
-/// Returns `(text, truncated)`. The kept parts respect char boundaries and
-/// sum to at most `max_bytes`; the marker between them is extra.
 pub(crate) fn truncate_middle(text: &str, max_bytes: usize) -> (String, bool) {
     if text.len() <= max_bytes {
         return (text.to_owned(), false);

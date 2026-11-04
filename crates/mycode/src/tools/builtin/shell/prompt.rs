@@ -1,9 +1,4 @@
 //! Model-facing copy for the one shell tool the active interpreter selects.
-//!
-//! Pi ships `bash` and `powershell` as separate tools and shows the model
-//! only the tools that are enabled. Codex, Gemini CLI, and OpenCode keep a
-//! single shell tool but describe the real interpreter. This crate follows
-//! the stricter rule: one tool, named and documented for that interpreter.
 
 use std::path::Path;
 
@@ -11,7 +6,6 @@ use serde_json::{Value, json};
 
 use super::detect::{DetectedShell, ShellKind};
 
-/// Tool description sent in the tool spec.
 #[must_use]
 pub(crate) fn tool_description(kind: ShellKind) -> &'static str {
     match kind {
@@ -24,7 +18,6 @@ pub(crate) fn tool_description(kind: ShellKind) -> &'static str {
     }
 }
 
-/// One-line system-prompt snippet for the active shell tool.
 #[must_use]
 pub(crate) fn prompt_snippet(kind: ShellKind) -> &'static str {
     match kind {
@@ -36,7 +29,6 @@ pub(crate) fn prompt_snippet(kind: ShellKind) -> &'static str {
     }
 }
 
-/// Short label used in the environment block.
 #[must_use]
 pub(crate) fn shell_label(kind: ShellKind) -> &'static str {
     match kind {
@@ -49,7 +41,6 @@ pub(crate) fn shell_label(kind: ShellKind) -> &'static str {
     }
 }
 
-/// Operating rules for the active shell. Inserted once in the system prompt.
 #[must_use]
 pub(crate) fn guidance(kind: ShellKind) -> &'static str {
     match kind {
@@ -62,46 +53,42 @@ pub(crate) fn guidance(kind: ShellKind) -> &'static str {
     }
 }
 
-/// Schema description for `command`.
 #[must_use]
 pub(crate) fn command_parameter_doc(kind: ShellKind) -> &'static str {
     match kind {
         ShellKind::Pwsh => {
-            "PowerShell 7 command. Required when `mode` is `script`. Use cmdlets, pipelines, `$env:NAME`, and PowerShell operators (`&&` is allowed). Do not send bash or cmd. Omit for `program`."
+            "PowerShell 7 command (required for `script`, omit for `program`). `&&` and `||` work; do not send bash or cmd."
         }
         ShellKind::WindowsPowerShell => {
-            "Windows PowerShell 5.1 command. Required when `mode` is `script`. Chain with `;` and `$LASTEXITCODE`. `&&` and `||` are syntax errors. Do not send bash or cmd. Omit for `program`."
+            "Windows PowerShell 5.1 command (required for `script`, omit for `program`). Chain with `;` and `$LASTEXITCODE`; `&&` and `||` are syntax errors."
         }
         ShellKind::Bash => {
-            "Bash command passed to `bash -c`. Required when `mode` is `script`. Use bash quoting, pipes, and `&&`. The path separator is `/`. Omit for `program`."
+            "Bash command passed to `bash -c` (required for `script`, omit for `program`)."
         }
         ShellKind::Zsh => {
-            "Zsh command passed to `zsh -c`. Required when `mode` is `script`. Use zsh quoting, pipes, and `&&`. The path separator is `/`. Omit for `program`."
+            "Zsh command passed to `zsh -c` (required for `script`, omit for `program`)."
         }
         ShellKind::Sh => {
-            "POSIX sh command passed to `sh -c`. Required when `mode` is `script`. Use POSIX quoting, pipes, and `&&`. The path separator is `/`. Omit for `program`."
+            "POSIX sh command passed to `sh -c` (required for `script`, omit for `program`)."
         }
         ShellKind::Cmd => {
-            "cmd.exe command passed to `/d /s /c`. Required when `mode` is `script`. Use `%VAR%` and cmd quoting. Omit for `program`."
+            "cmd.exe command passed to `/d /s /c` (required for `script`, omit for `program`)."
         }
     }
 }
 
-/// `mode` schema text for one interpreter. A macro so `concat!` can build a
-/// `&'static str` per shell from the shared wording.
 macro_rules! mode_doc {
     ($interpreter:literal, $starts:literal) => {
         concat!(
-            "`script` (the default when `mode` is omitted) runs `command` in ",
+            "`script` (default) runs `command` in ",
             $interpreter,
-            ". `program` runs a kernel image or a direct shebang wrapper (its interpreter, the script path, and `args`) and does not start ",
+            ". `program` runs an executable or direct shebang wrapper with `args` and does not start ",
             $starts,
             "."
         )
     };
 }
 
-/// Schema description for `mode`.
 #[must_use]
 pub(crate) fn mode_parameter_doc(kind: ShellKind) -> &'static str {
     match kind {
@@ -114,8 +101,6 @@ pub(crate) fn mode_parameter_doc(kind: ShellKind) -> &'static str {
     }
 }
 
-/// Replaces the shell-specific parameter descriptions (`command`, `mode`) so
-/// the schema matches the active shell.
 pub(crate) fn apply_parameter_docs(schema: &mut Value, kind: ShellKind) {
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
         return;
@@ -131,7 +116,6 @@ fn set_description(value: Option<&mut Value>, description: &str) {
     object.insert("description".to_owned(), json!(description));
 }
 
-/// Environment plus shell rules. `os` is `std::env::consts::OS`.
 #[must_use]
 pub fn render_environment_block(os: &str, arch: &str, cwd: &Path, shell: &DetectedShell) -> String {
     format!(
@@ -152,82 +136,52 @@ interpreter: {label} ({program})\n\
     )
 }
 
-/// The interpreter-independent middle of every shell description: tool
-/// routing, `program` mode, and result semantics.
 macro_rules! shared_description {
     () => {
-        " Each call is a new process in the session cwd, so `cd` and variable \
-assignments do not persist. Use it for builds, tests, git, package managers, and other \
-programs. When available, use `read`, `grep`, and `find` for listing, reading, and searching, \
-and `edit` and `write` to change files instead of this tool. If a dedicated tool is unavailable, \
-use the shell within the task's permissions. Never use it to talk to the user. \
-Commands must exit on their own: no servers, watchers, or interactive prompts. \
-`mode` `program` spawns `program` with a verbatim `args` vector and no shell: a PE, ELF, \
-or Mach-O image runs directly, and a direct shebang wrapper runs its interpreter with the \
-script path and `args`; batch files and a shebang `-c` are rejected. Output beyond 50 KiB \
-keeps its start and end. A non-zero exit is an error result carrying the exit code, not a \
-tool failure. Default timeout: 120 s (`timeout_secs` overrides). There is no permission \
-prompt, and file changes are not undone. For routine file/data transformations, prefer \
-the available file tools and in-process JavaScript when `run_code` is available. \
-Running the user's Python projects remains supported."
+        " Each call starts a new process in the session cwd (`cd` and env assignments do not persist). \
+Use for builds, tests, git, package managers, and running programs; prefer dedicated `read`, `grep`, `find`, `edit`, and `write` tools when available. \
+Commands must exit on their own (no servers, watchers, or interactive prompts). `mode` `program` spawns `program` with `args` and no shell. \
+Output beyond 50 KiB keeps its start and end; default timeout is 120 s (`timeout_secs` overrides)."
     };
 }
 
 const POWERSHELL7_DESCRIPTION: &str = concat!(
-    "Run a PowerShell 7 (`pwsh`) command and return its stdout and stderr. `command` is \
-PowerShell, not bash or cmd: use cmdlets, pipelines, `$env:NAME`, and `2>$null`; `&&` and \
-`||` work. Do not send bash syntax such as `2>/dev/null`, `export`, or `<<` heredocs. Quote \
-paths that contain spaces. Output is captured as UTF-8.",
+    "Run a PowerShell 7 (`pwsh`) command. Use PowerShell syntax (`$env:NAME`, `2>$null`, `&&`/`||`, `@'...'@`), not bash or cmd.",
     shared_description!()
 );
 
 const POWERSHELL51_DESCRIPTION: &str = concat!(
-    "Run a Windows PowerShell 5.1 command and return its stdout and stderr. `command` is \
-Windows PowerShell, not bash, cmd, or PowerShell 7-only syntax: `&&`, `||`, and the ternary \
-operator are syntax errors, so chain with `;` and check `$LASTEXITCODE`. Use cmdlets, \
-`$env:NAME`, and `2>$null` instead of `2>/dev/null`. Quote paths that contain spaces. \
-Output is captured as UTF-8.",
+    "Run a Windows PowerShell 5.1 command. `&&` and `||` are syntax errors; chain with `;` and check `$LASTEXITCODE`. Use `$env:NAME` and `2>$null`, not bash.",
     shared_description!()
 );
 
 const BASH_DESCRIPTION: &str = concat!(
-    "Run a bash command (`bash -c`) and return its stdout and stderr. Use bash syntax: \
-pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`. The path separator is `/`; quote \
-paths that contain spaces.",
+    "Run a bash command (`bash -c`) and return stdout/stderr.",
     shared_description!()
 );
 
 const ZSH_DESCRIPTION: &str = concat!(
-    "Run a zsh command (`zsh -c`) and return its stdout and stderr. Use zsh syntax: pipes, \
-`&&` / `||`, redirection, `$VAR`, and `$(...)`. The path separator is `/`; quote paths \
-that contain spaces.",
+    "Run a zsh command (`zsh -c`) and return stdout/stderr.",
     shared_description!()
 );
 
 const SH_DESCRIPTION: &str = concat!(
-    "Run a POSIX sh command (`sh -c`) and return its stdout and stderr. Use POSIX syntax: \
-pipes, `&&` / `||`, redirection, `$VAR`, and `$(...)`; do not rely on bash arrays or \
-`[[ ]]`. The path separator is `/`; quote paths that contain spaces.",
+    "Run a POSIX sh command (`sh -c`) and return stdout/stderr.",
     shared_description!()
 );
 
 const CMD_DESCRIPTION: &str = concat!(
-    "Run a cmd.exe command (`cmd.exe /d /s /c`) and return its stdout and stderr. \
-PowerShell was not found, so this is the last-resort shell. Use cmd syntax: `%VAR%`, \
-quoted Windows paths, and `&` or `&&` to chain.",
+    "Run a cmd.exe command (`cmd.exe /d /s /c`) and return stdout/stderr.",
     shared_description!()
 );
 
-/// One-line system-prompt entry. The tool name prefix is stripped by the
-/// prompt builder when it repeats the list item's name.
 macro_rules! snippet {
     ($tool:literal, $interpreter:literal) => {
         concat!(
             $tool,
-            ": mode script (the default) runs one ",
+            ": mode script (default) runs one ",
             $interpreter,
-            " command (`command`); mode program runs one program with an explicit `args` \
-vector and no shell. Optional `timeout_secs`."
+            " command (`command`); mode program runs one program with `args` and no shell."
         )
     };
 }
@@ -240,100 +194,52 @@ const CMD_SNIPPET: &str = snippet!("cmd", "cmd.exe");
 
 const POWERSHELL7_GUIDANCE: &str = "\
 The `powershell` tool runs PowerShell 7 (`pwsh`). Write PowerShell, not bash or cmd.
-- Each call starts a new process in the session cwd. `cd` and `$env:` assignments do not persist.
-- `&&` and `||` are allowed. Read environment variables with `$env:NAME`. Redirect errors with `2>$null`, not `2>/dev/null`.
-- Unix-only commands do not exist here: use `(Get-Item p).LastWriteTime = Get-Date` (or `New-Item -ItemType File p`) instead of `touch`, `$env:NAME = \"v\"` instead of `export`, `Get-Command` instead of `which`, and `@'...'@` instead of `<<` heredocs.
-- The path separator is `\\`. Quote paths that contain spaces. `/` is also accepted.";
+- Each call starts a new process in the session cwd; `cd` and `$env:` do not persist.
+- `&&` and `||` are allowed. Use `$env:NAME`, `2>$null`, `Get-Command`, and `@'...'@` instead of bash syntax.";
 
 const POWERSHELL51_GUIDANCE: &str = "\
-The `powershell` tool runs Windows PowerShell 5.1 (`powershell.exe`), not PowerShell 7 and not bash.
-- Do not use `&&` or `||`. They are syntax errors on 5.1. Chain with `;` and test `$LASTEXITCODE`.
-- Do not use bash heredocs, `$(...)`, or `2>/dev/null`. Use `$env:NAME` and `2>$null`.
-- Unix-only commands do not exist here: use `(Get-Item p).LastWriteTime = Get-Date` (or `New-Item -ItemType File p`) instead of `touch`, `$env:NAME = \"v\"` instead of `export`, `Get-Command` instead of `which`, and `@'...'@` instead of `<<` heredocs.
-- The ternary operator and `&&` pipelines are PowerShell 7 only.
-- Each call starts a new process in the session cwd. `cd` and `$env:` assignments do not persist.
-- The path separator is `\\`. Quote paths that contain spaces.";
+The `powershell` tool runs Windows PowerShell 5.1 (`powershell.exe`).
+- Do not use `&&` or `||`; chain with `;` and test `$LASTEXITCODE`.
+- Use `$env:NAME`, `2>$null`, `Get-Command`, and `@'...'@` instead of bash syntax.";
 
 const BASH_GUIDANCE: &str = "\
-The `bash` tool runs bash (`bash -c`). Write bash, not PowerShell or cmd.
-- Each call starts a new process in the session cwd. `cd` and `export` do not persist.
-- Pipes, `&&`, `||`, `$VAR`, and `$(...)` are bash.
-- The path separator is `/`. Quote paths that contain spaces.";
+The `bash` tool runs `bash -c`. Each call starts a new process in the session cwd.";
 
 const ZSH_GUIDANCE: &str = "\
-The `zsh` tool runs zsh (`zsh -c`). Write zsh, not bash-only syntax, PowerShell, or cmd.
-- Each call starts a new process in the session cwd. `cd` and `export` do not persist.
-- Pipes, `&&`, `||`, `$VAR`, and `$(...)` are zsh. The path separator is `/`.";
+The `zsh` tool runs `zsh -c`. Each call starts a new process in the session cwd.";
 
 const SH_GUIDANCE: &str = "\
-The `sh` tool runs POSIX sh (`sh -c`). Write POSIX sh, not bash arrays, `[[ ]]`, PowerShell, or cmd.
-- Each call starts a new process in the session cwd. `cd` and `export` do not persist.
-- Pipes, `&&`, `||`, `$VAR`, and `$(...)` are POSIX. The path separator is `/`.";
+The `sh` tool runs `sh -c`. Each call starts a new process in the session cwd.";
 
 const CMD_GUIDANCE: &str = "\
-The `cmd` tool runs `cmd.exe /d /s /c` because PowerShell was not found.
-- Use `%VAR%` and cmd quoting. This is not bash and not PowerShell.
-- Each call starts a new process in the session cwd.";
+The `cmd` tool runs `cmd.exe /d /s /c`. Each call starts a new process in the session cwd.";
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-
     use super::{guidance, render_environment_block};
     use crate::tools::builtin::shell::{DetectedShell, ShellKind};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn environment_block_matches_the_interpreter() {
         let cwd = Path::new("/work");
-        let ps51 = DetectedShell {
-            kind: ShellKind::WindowsPowerShell,
-            program: PathBuf::from("powershell.exe"),
-        };
-        let block = render_environment_block("windows", "x86_64", cwd, &ps51);
-        assert!(block.contains("shell_tool: powershell"), "{block}");
-        assert!(block.contains("Windows PowerShell 5.1"), "{block}");
-        assert!(block.contains("Do not use `&&`"), "{block}");
-        assert!(!block.contains("translated"), "{block}");
-        assert!(
-            guidance(ShellKind::WindowsPowerShell).contains("syntax errors")
-                || block.contains("syntax errors")
-        );
-
-        let pwsh = DetectedShell {
-            kind: ShellKind::Pwsh,
-            program: PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"),
-        };
-        let block = render_environment_block("windows", "x86_64", cwd, &pwsh);
-        assert!(block.contains("`&&` and `||` are allowed"), "{block}");
-        assert!(!block.contains("syntax errors"), "{block}");
-        assert!(block.contains("shell_tool: powershell"), "{block}");
-
-        let bash = DetectedShell {
-            kind: ShellKind::Bash,
-            program: PathBuf::from("/bin/bash"),
-        };
-        let block = render_environment_block("macos", "aarch64", cwd, &bash);
-        assert!(block.contains("shell_tool: bash"), "{block}");
-        assert!(block.contains("Write bash, not PowerShell"), "{block}");
-        assert!(block.contains("The path separator is `/`."), "{block}");
-        assert!(!block.contains("Git Bash"), "{block}");
-
-        let zsh = DetectedShell {
-            kind: ShellKind::Zsh,
-            program: PathBuf::from("/bin/zsh"),
-        };
-        let block = render_environment_block("macos", "aarch64", cwd, &zsh);
-        assert!(block.contains("shell_tool: zsh"), "{block}");
-        assert!(block.contains("Write zsh"), "{block}");
-        assert!(block.contains("The path separator is `/`."), "{block}");
-
-        let sh = DetectedShell {
-            kind: ShellKind::Sh,
-            program: PathBuf::from("/bin/sh"),
-        };
-        let block = render_environment_block("macos", "aarch64", cwd, &sh);
-        assert!(block.contains("shell_tool: sh"), "{block}");
-        assert!(block.contains("POSIX"), "{block}");
-        assert!(!block.contains("translated"), "{block}");
+        for (kind, program, label) in [
+            (ShellKind::Pwsh, "pwsh.exe", "PowerShell 7"),
+            (
+                ShellKind::WindowsPowerShell,
+                "powershell.exe",
+                "Windows PowerShell 5.1",
+            ),
+            (ShellKind::Bash, "/bin/bash", "bash"),
+        ] {
+            let shell = DetectedShell {
+                kind,
+                program: PathBuf::from(program),
+            };
+            let block = render_environment_block("windows", "x86_64", cwd, &shell);
+            assert!(block.contains(&format!("shell_tool: {}", kind.tool_name())));
+            assert!(block.contains(&format!("interpreter: {label} ({program})")));
+            assert!(block.contains(guidance(kind)));
+        }
     }
 }

@@ -279,14 +279,12 @@ mod tests {
             .single()
             .expect("now");
 
-        // 1 calendar day ago -> Yesterday
         let one_day_ago = ms(tz, 2026, 4, 14, 23, 0, 0);
         assert_eq!(
             classify_session_group_in_tz(Some(one_day_ago), &now),
             DateGroup::Yesterday
         );
 
-        // 2 calendar days ago -> Last 7 days
         let two_days_ago = ms(tz, 2026, 4, 13, 23, 59, 0);
         assert_eq!(
             classify_session_group_in_tz(Some(two_days_ago), &now),
@@ -300,7 +298,6 @@ mod tests {
             DateGroup::Last7Days
         );
 
-        // 7 calendar days ago -> Older
         let seven_days_ago = ms(tz, 2026, 4, 8, 23, 59, 59);
         assert_eq!(
             classify_session_group_in_tz(Some(seven_days_ago), &now),

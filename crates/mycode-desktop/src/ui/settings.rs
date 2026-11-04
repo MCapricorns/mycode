@@ -526,18 +526,10 @@ mod tests {
 
     #[test]
     fn footer_status_only_reports_writing_when_a_save_is_in_flight() {
+        let highlighted = |status: Option<(&'static str, bool)>| status.map(|(_, flag)| flag);
         assert_eq!(nav_footer_status(false, false), None);
-        assert_eq!(
-            nav_footer_status(true, false),
-            Some((crate::i18n::t("writing\u{2026}", "写入中\u{2026}"), false))
-        );
-        assert_eq!(
-            nav_footer_status(true, true),
-            Some((crate::i18n::t("writing\u{2026}", "写入中\u{2026}"), false))
-        );
-        assert_eq!(
-            nav_footer_status(false, true),
-            Some((crate::i18n::t("unsaved", "未保存"), true))
-        );
+        assert_eq!(highlighted(nav_footer_status(true, false)), Some(false));
+        assert_eq!(highlighted(nav_footer_status(true, true)), Some(false));
+        assert_eq!(highlighted(nav_footer_status(false, true)), Some(true));
     }
 }

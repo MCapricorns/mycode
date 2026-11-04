@@ -58,10 +58,7 @@ pub(super) enum MenuAnchor {
     ChipEnd,
 }
 
-/// Diameter of the jump-to-latest button, in pixels.
 pub(super) const JUMP_LATEST_BUTTON_PX: f32 = 30.;
-
-/// Padding under the jump-to-latest row, in pixels.
 pub(super) const JUMP_LATEST_ROW_PAD: f32 = 4.;
 
 /// Gap between a composer menu and its trigger button.

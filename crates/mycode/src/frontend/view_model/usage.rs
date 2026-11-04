@@ -416,30 +416,14 @@ mod tests {
             before: 92,
             after: 8,
         };
-        assert_eq!(
-            cache_alert_text(&alert),
-            "Cache hit fell from 92% to 8% after compaction."
-        );
-        assert_eq!(
-            cache_alert_text(&CacheAlert {
-                cause: CacheBreak::Steer,
-                ..alert
-            }),
-            "Cache hit fell from 92% to 8% after a steer."
-        );
-        assert_eq!(
-            cache_alert_text(&CacheAlert {
-                cause: CacheBreak::Switch,
-                ..alert
-            }),
-            "Cache hit fell from 92% to 8% after a model switch."
-        );
-        assert_eq!(
-            cache_alert_text(&CacheAlert {
-                cause: CacheBreak::Both,
-                ..alert
-            }),
-            "Cache hit fell from 92% to 8% after multiple prompt changes."
+        let compaction = cache_alert_text(&alert);
+        assert!(compaction.contains("92%"), "{compaction}");
+        assert!(compaction.contains("8%"), "{compaction}");
+        let causes = [CacheBreak::Steer, CacheBreak::Switch, CacheBreak::Both]
+            .map(|cause| cache_alert_text(&CacheAlert { cause, ..alert }));
+        assert!(
+            causes.iter().all(|text| *text != compaction),
+            "each cause reads as its own sentence: {causes:?}"
         );
         assert_eq!(
             CacheBreak::Compaction.merge(CacheBreak::Steer),

@@ -407,17 +407,6 @@ pub(super) fn tool_call_parts(
                 t("Ran agent", "已运行子代理")
             }
         }
-        "agent_workflow" => {
-            if active {
-                t("Running workflow", "正在运行工作流")
-            } else if failed {
-                t("Workflow failed", "工作流失败")
-            } else if !completed {
-                t("Workflow interrupted", "工作流中断")
-            } else {
-                t("Workflow returned", "工作流已返回")
-            }
-        }
         "ask" | "ask_user" => {
             if active {
                 t("Asking", "正在提问")
@@ -460,7 +449,6 @@ fn tool_icon(tool: &str) -> IconName {
         tool if is_shell_tool(tool) => IconName::Terminal,
         "web_search" | "fetch_content" => IconName::Globe,
         "agent" => IconName::Bot,
-        "agent_workflow" => IconName::GitBranch,
         "ask" | "ask_user" => IconName::MessageSquare,
         "run_code" | "wait_code" => IconName::Code,
         _ => IconName::Wrench,
@@ -477,7 +465,7 @@ pub(super) fn tool_icon_color(tool: &str, theme: &Theme, desk: &Desk) -> gpui_ki
         "edit" | "write" | "run_code" | "wait_code" => desk.violet,
         "grep" | "search" | "find" => desk.amber,
         tool if is_shell_tool(tool) => desk.green,
-        "agent" | "agent_workflow" => theme.primary,
+        "agent" => theme.primary,
         _ => theme.muted_foreground,
     }
 }

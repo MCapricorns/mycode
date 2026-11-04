@@ -78,7 +78,6 @@ pub fn open_window(home: HomeLayout, applied_update: Option<String>, cx: &mut Ap
     let mut driver = FrontendDriver::start(home.clone(), move || {
         let _ = wake_tx.send(());
     });
-    // The changes panel and the diff panel show it.
     driver.watch_git();
     if let Some(version) = applied_update {
         driver.note_update_applied(version);

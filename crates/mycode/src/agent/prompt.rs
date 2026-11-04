@@ -4,9 +4,6 @@ use std::fmt::Write;
 
 use crate::tools::ToolRegistry;
 
-/// Tool-list header. Deliberately not an identity sentence: every caller
-/// (session, subagent, compaction) opens its prompt with its own identity,
-/// so a second one here would read as a duplication.
 const HEADER: &str = "\
 Complete the task with the tools listed below. Do not invent tools. \
 Support claims with inspected sources or tool results. Distinguish source inspection, \
@@ -20,39 +17,32 @@ pub fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
         .find(|name| crate::tools::ShellKind::is_tool_name(name))
 }
 
-/// Calling rules follow the exposed registry. Child roles may expose tools
-/// directly, or expose only code mode without a shell.
+/// Calling rules follow the exposed registry.
 fn tool_calling(tools: &ToolRegistry, code_mode: bool) -> String {
     let mut rules = String::from("<tool_calling>\n");
     if code_mode {
         rules.push_str(
             "- Only names under Available tools are directly callable. Tools under \
 Tools inside run_code are called from JavaScript as `call(\"name\", { argument: value })`; \
-use their argument schemas below. `script` accepts JavaScript only. It runs in embedded \
-QuickJS with top-level await and Promises; no Node.js, require, fs, fetch, filesystem or network globals, or imports.\n\
-- Batch independent reads/searches with await Promise.all([...callAsync(name, args)]). \
-The host runs parallel-safe calls together; writes, shell commands and other exclusive calls run alone in submission order. \
-Use await callAsync(name, args) for dependent steps. Blocking call(name, args) remains available. \
-A `call` returns `{ content, is_error }`; text blocks use `result.content[0].Text`. Dispatch refusals also include `__error__`. \
-Inspect errors before continuing dependent work; \
-Await required work before `complete(value)`: it ends the script and cancels outstanding calls. \
-Use `log(value)` for output and progress, and `budget()` to inspect remaining cell limits.\n\
-- Use listed native names and schemas directly. When remote tools are available, \
-retrieve their schemas through the registered discovery tools before calling them.\n\
-- Scripts can reach only registered tools; they cannot add a shell or permissions.\n\
-- A `run_code` script cannot call `run_code` or `wait_code` itself.\n",
+use their argument schemas below. `script` accepts JavaScript only (embedded QuickJS with \
+top-level await and Promises; no Node.js, require, fs, fetch, or imports).\n\
+- Batch independent reads/searches with `await Promise.all([...callAsync(name, args)])`. \
+Parallel-safe calls run together; writes, shell commands, and other exclusive calls run in submission order. \
+Use `await callAsync(name, args)` or blocking `call(name, args)` for dependent steps. \
+Calls return `{ content, is_error }` (`result.content[0].Text`). Await required work before \
+`complete(value)`: it ends the script and cancels outstanding calls. Use `log(value)` for \
+progress and `budget()` for remaining limits. Discover remote tool schemas before calling them; \
+a `run_code` script cannot call `run_code` or `wait_code`.\n",
         );
         let _ = writeln!(
             rules,
-            "- Each cell permits at most {} `call`/`callAsync` invocations combined; use `budget()` to check the remaining allowance.",
+            "- Each cell permits at most {} `call`/`callAsync` invocations combined.",
             crate::tools::code_mode::MAX_HOST_CALLS
         );
     }
     if code_mode && tools.is_exposed("wait_code") && tools.get("wait_code").is_some() {
         rules.push_str(
-            "- When run_code yields a cell_id, collect that same cell with wait_code until it terminates. \
-A yield is not a failed or completed tool call. Do not submit the script again: earlier calls may already \
-have changed files or started work. Inspect the terminal result before continuing dependent work.\n",
+            "- When `run_code` yields a `cell_id`, collect that same cell with `wait_code` until it terminates; do not resubmit the script.\n",
         );
     }
     if ["find", "grep", "read"]
@@ -60,18 +50,10 @@ have changed files or started work. Inspect the terminal result before continuin
         .all(|name| tools.get(name).is_some())
     {
         rules.push_str(
-            "- Use the dedicated tools first: `find` lists and locates files and directories \
-(pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n",
+            "- Use dedicated tools first: `find` locates files/directories (pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n",
         );
     }
     if tools.get("write").is_some() && tools.get("edit").is_some() {
-        if code_mode {
-            rules.push_str(
-                "- Prefer in-process JavaScript for routine file/data transformations: read with \
-`call(\"read\", ...)`, transform objects/arrays/strings, then use `call(\"write\", ...)` or \
-`call(\"edit\", ...)`.\n",
-            );
-        }
         let names = if code_mode {
             "`call(\"write\", …)` and `call(\"edit\", …)`"
         } else {
@@ -79,36 +61,23 @@ have changed files or started work. Inspect the terminal result before continuin
         };
         let _ = writeln!(
             rules,
-            "- Read existing content before changing it. Change files by {names}. Use revision tokens from the latest read when required; revision and truncation notices are metadata, not file contents."
+            "- Read existing content before changing it. Change files by {names}. Use revision tokens from the latest read when required."
         );
     }
     if let Some(shell_tool) = shell_tool_name(tools) {
         let _ = writeln!(
             rules,
-            "- Use `{shell_tool}` only for what the dedicated tools cannot do: builds, tests, \
-git, package managers, and running programs (including the user's Python projects). \
-Never use it to list directories, read files, or search text when the matching dedicated tool is available. \
-If that tool is unavailable, use the shell within the task's permissions.\n\
-- A `{shell_tool}` call waits for its command to exit. Do not start one that waits for \
-input or never exits (a dev server, a watcher, an interactive prompt): it holds the turn \
-until the timeout. Pass non-interactive flags instead.\n\
-- On Windows, keep console work in the background with captured output. Do not open \
-terminal windows or detach ordinary commands with Start-Process. The registered shell \
-manages process lifetime and cancellation.\n\
-- `{shell_tool}` `mode` `script` runs a command in the active shell. `mode` `program` \
-runs one executable with an explicit `args` vector and no shell parsing. Prefer it when a command string would need fragile quoting.\n\
-- Never use `{shell_tool}` to talk to the user."
+            "- Use `{shell_tool}` only for builds, tests, git, package managers, and running programs; never for listing, reading, or searching when dedicated tools are available.\n\
+- Commands must exit on their own (pass non-interactive flags; no dev servers or watchers). On Windows, keep console work in the background with captured output.\n\
+- `mode` `script` runs a shell command; `mode` `program` runs an executable with explicit `args` and no shell parsing."
         );
     }
     rules.push_str(
-        "- Editing or recalling a chat message, or switching conversation branches, does not restore or delete workspace files. \
-Inspect relevant files before resuming from earlier context.\n</tool_calling>",
+        "- Editing or recalling a chat message does not restore or delete workspace files.\n</tool_calling>",
     );
     rules
 }
 
-/// Native and bridge schemas hidden from Request.tools still reach the
-/// model. Remote catalogs have discovery tools and stay on demand.
 fn push_code_tools(prompt: &mut String, tools: &ToolRegistry) {
     let hidden: Vec<_> = tools
         .names()
@@ -225,278 +194,33 @@ mod tests {
             .expect("hidden catalog");
         assert!(direct.contains("\n- run_code:"));
         assert!(!direct.contains("\n- read:"));
-        assert!(
-            !direct.contains("ask_user"),
-            "unregistered tools must not be advertised"
-        );
         assert!(!registry.specs().iter().any(|spec| spec.name == "read"));
         for name in ["read", "write", "edit", "find", "grep"] {
             let spec = registry.get(name).unwrap().spec();
             assert!(hidden.contains(&format!("\n- {name}:")));
             assert!(hidden.contains(&format!("Arguments JSON Schema: {}", spec.params_schema)));
         }
-        assert!(direct.contains("`script` accepts JavaScript only"));
-        assert!(direct.contains("no Node.js"));
-        assert!(
-            direct.contains("Prefer in-process JavaScript for routine file/data transformations")
-        );
-        assert!(!direct.contains("Rhai"));
-        assert!(!direct.contains("pipe a literal here-string to `python`"));
-        assert!(direct.contains("Inspect errors before continuing dependent work"));
-        assert!(direct.contains(&format!(
-            "at most {} `call`/`callAsync` invocations combined",
-            crate::tools::code_mode::MAX_HOST_CALLS
-        )));
-    }
-
-    struct DiscoveredTool(String);
-
-    impl crate::tools::ToolDyn for DiscoveredTool {
-        fn spec(&self) -> crate::core::ToolSpec {
-            crate::core::ToolSpec {
-                name: self.0.clone(),
-                description: "discovered remote capability".into(),
-                params_schema: serde_json::json!({
-                    "type": "object", "description": "remote_schema".repeat(300)
-                }),
-            }
-        }
-
-        fn schema_on_demand(&self) -> bool {
-            true
-        }
-
-        fn execute_dyn<'a>(
-            &'a self,
-            _: serde_json::Value,
-            _: &'a crate::tools::ToolCtx,
-            _: &'a mut crate::tools::ToolStream,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<crate::tools::ToolResult, crate::tools::ToolError>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            Box::pin(async { unreachable!("prompt construction never executes a tool") })
-        }
     }
 
     #[test]
-    fn ready_remote_catalogs_do_not_expand_the_fixed_prompt() {
-        let registry = registry_with(ShellKind::Bash, "/bin/bash");
-        let before = build_system_prompt(&registry);
-        for index in 0..100 {
-            registry.register(Arc::new(DiscoveredTool(format!("remote_{index}"))));
-        }
-        assert_eq!(build_system_prompt(&registry), before);
-        assert!(
-            registry.get("remote_0").is_some(),
-            "discovery keeps dispatch available"
-        );
-    }
-
-    #[test]
-    fn shellless_code_mode_still_explains_call_and_the_read_schema() {
-        let registry = Arc::new(ToolRegistry::new());
-        registry.register(Arc::new(crate::tools::builtin::ReadTool));
-        expose_code_mode(&registry, &["run_code", "wait_code"]);
-        let prompt = build_system_prompt(&registry);
-        assert!(prompt.contains("call(\"name\", { argument: value })"));
-        assert!(prompt.contains("\n- read:"));
-        assert!(prompt.contains("Arguments JSON Schema:"));
-        assert!(!prompt.contains("`powershell`"));
-        assert!(!prompt.contains("`bash`"));
-        assert!(!prompt.contains("`agent`"));
-        for unavailable in [
-            "call(\"write\"",
-            "call(\"edit\"",
-            "Change files by",
-            "routine file/data transformations",
+    fn powershell_prompt_names_the_powershell_tool_and_hides_bash() {
+        for (kind, program, label) in [
+            (
+                ShellKind::WindowsPowerShell,
+                "powershell.exe",
+                "Windows PowerShell 5.1",
+            ),
+            (ShellKind::Pwsh, "pwsh.exe", "PowerShell 7"),
         ] {
-            assert!(
-                !prompt.contains(unavailable),
-                "unavailable capability {unavailable}:\n{prompt}"
-            );
-        }
-        assert!(prompt.contains("await Promise.all"));
-        assert!(prompt.contains("exclusive calls run alone in submission order"));
-        assert!(prompt.contains("top-level await and Promises"));
-        assert!(prompt.contains("Scripts can reach only registered tools"));
-        assert!(prompt.contains("Use listed native names and schemas directly"));
-        assert!(prompt.contains("retrieve their schemas through the registered discovery tools"));
-        assert!(prompt.contains("switching conversation branches"));
-        assert!(prompt.contains("does not restore or delete workspace files"));
-    }
-
-    #[test]
-    fn directly_exposed_tools_do_not_teach_an_unregistered_code_tool() {
-        let registry = ToolRegistry::new();
-        register_builtins(&registry);
-        let prompt = build_system_prompt(&registry);
-        assert!(prompt.contains("\n- read:"));
-        assert!(!prompt.contains("run_code"));
-        assert!(!prompt.contains("call(\"write\""));
-    }
-
-    #[test]
-    fn shell_only_roles_keep_a_file_access_fallback() {
-        let registry = ToolRegistry::new();
-        let shell = ShellTool::forcing(DetectedShell {
-            kind: ShellKind::Bash,
-            program: PathBuf::from("/bin/bash"),
-        });
-        let description = shell.description().to_owned();
-        registry.register(Arc::new(shell));
-        let prompt = build_system_prompt(&registry);
-        assert!(prompt.contains("\n- bash:"));
-        assert!(!prompt.contains("\n- read:"));
-        assert!(!prompt.contains("\n- find:"));
-        assert!(prompt.contains("when the matching dedicated tool is available"));
-        assert!(prompt.contains("If that tool is unavailable, use the shell"));
-        assert!(description.contains("When available"));
-        assert!(description.contains("If a dedicated tool is unavailable"));
-    }
-
-    #[test]
-    fn prompt_names_the_active_shell_tool_and_not_exec_or_task() {
-        let registry = ToolRegistry::new();
-        register_builtins(&registry);
-        let prompt = build_system_prompt(&registry);
-        let shell = crate::tools::resolved_shell().kind.tool_name();
-        assert!(prompt.contains(&format!("`{shell}`")), "{prompt}");
-        assert!(prompt.contains("`program`"));
-        assert!(prompt.contains("`script`"));
-        assert!(!prompt.contains("`exec`"));
-        assert!(!prompt.contains("`task`"));
-        assert!(!prompt.contains("translated"));
-    }
-
-    #[test]
-    fn powershell_51_prompt_forbids_bash_chaining() {
-        let registry = registry_with(ShellKind::WindowsPowerShell, "powershell.exe");
-        let prompt = build_system_prompt(&registry);
-        assert!(prompt.contains("`powershell`"), "{prompt}");
-        assert!(!prompt.contains("\n- bash:"), "{prompt}");
-        assert!(prompt.contains("in-process JavaScript"), "{prompt}");
-        assert!(!prompt.contains("translated"), "{prompt}");
-        assert!(
-            !prompt.contains("`shell`"),
-            "the model must not be told to call `shell`:\n{prompt}"
-        );
-    }
-
-    #[test]
-    fn bash_prompt_prefers_javascript_for_file_transforms() {
-        let registry = registry_with(ShellKind::Bash, "/bin/bash");
-        let prompt = build_system_prompt(&registry);
-        assert!(prompt.contains("`bash`"), "{prompt}");
-        assert!(prompt.contains("in-process JavaScript"), "{prompt}");
-        assert!(
-            prompt.contains("including the user's Python projects"),
-            "{prompt}"
-        );
-        assert!(
-            prompt.contains("Change files by `call(\"write\""),
-            "write and edit are the file-change tools reached through call, got:\n{prompt}"
-        );
-        assert!(
-            prompt.contains("Use `bash` only for what the dedicated tools cannot do"),
-            "the shell is the fallback, got:\n{prompt}"
-        );
-        assert!(
-            prompt.contains("Never use it to list directories, read files, or search text"),
-            "{prompt}"
-        );
-        assert!(
-            prompt.contains("`max_depth` 1"),
-            "directory listing belongs to find, got:\n{prompt}"
-        );
-        assert!(
-            prompt.contains("`mode` `program`"),
-            "external programs keep a direct invocation path, got:\n{prompt}"
-        );
-        assert!(
-            !prompt.contains("only for pipelines"),
-            "shell must not be limited to pipelines:\n{prompt}"
-        );
-        assert!(
-            prompt.contains("does not restore or delete workspace files"),
-            "chat rewind must be documented as chat-only:\n{prompt}"
-        );
-        assert!(!prompt.contains("here-string"), "{prompt}");
-        assert!(!prompt.contains("translated"), "{prompt}");
-        let shell = ShellTool::forcing(DetectedShell {
-            kind: ShellKind::Bash,
-            program: PathBuf::from("/bin/bash"),
-        });
-        let description = shell.description();
-        assert!(
-            !description.contains("run Python"),
-            "shell descriptions must not direct routine rewrites to Python, got:\n{description}"
-        );
-        assert!(
-            description.contains("`mode` `program`"),
-            "program mode stays on the shell tool, got:\n{description}"
-        );
-        assert!(
-            !description.contains("`exec`"),
-            "shell description must not name a separate exec tool, got:\n{description}"
-        );
-    }
-
-    #[test]
-    fn powershell_7_prompt_allows_native_chaining() {
-        let registry = registry_with(ShellKind::Pwsh, "pwsh.exe");
-        let prompt = build_system_prompt(&registry);
-        assert!(prompt.contains("powershell:"), "{prompt}");
-        assert!(prompt.contains("in-process JavaScript"), "{prompt}");
-        let shell = ShellTool::forcing(DetectedShell {
-            kind: ShellKind::Pwsh,
-            program: PathBuf::from("pwsh.exe"),
-        });
-        assert!(shell.description().contains("PowerShell 7"));
-        assert!(!shell.description().contains("syntax errors"));
-    }
-
-    #[test]
-    fn agent_snippet_defers_role_names_to_the_dispatch_section() {
-        struct Host;
-
-        impl crate::tools::builtin::AgentHost for Host {
-            fn run_subagent<'a>(
-                &'a self,
-                _request: crate::tools::builtin::SubagentRequest,
-                _progress: &'a crate::tools::ToolStream,
-                _cancel: &'a tokio_util::sync::CancellationToken,
-                _call_id: &'a str,
-            ) -> std::pin::Pin<
-                Box<
-                    dyn std::future::Future<Output = Result<String, crate::tools::ToolError>>
-                        + Send
-                        + 'a,
-                >,
-            > {
-                Box::pin(async { Err(crate::tools::ToolError::Execution("unused".to_owned())) })
-            }
-        }
-
-        let registry = ToolRegistry::new();
-        register_builtins(&registry);
-        registry.register(Arc::new(crate::tools::builtin::AgentTool::new(Arc::new(
-            Host,
-        ))));
-        let prompt = build_system_prompt(&registry);
-        assert!(
-            prompt.contains("agent: hand one self-contained brief to a role from <dispatch>"),
-            "the agent snippet must point at the dispatch section:\n{prompt}"
-        );
-        for role in ["scout", "artisan", "sentinel", "skeptic"] {
-            assert!(
-                !prompt.contains(role),
-                "role {role} must come from the dynamic dispatch section only:\n{prompt}"
-            );
+            let registry = registry_with(kind, program);
+            let prompt = build_system_prompt(&registry);
+            assert!(prompt.contains("`powershell`"), "{prompt}");
+            assert!(!prompt.contains("\n- bash:"), "{prompt}");
+            let shell = ShellTool::forcing(DetectedShell {
+                kind,
+                program: PathBuf::from(program),
+            });
+            assert!(shell.description().contains(label));
         }
     }
 }

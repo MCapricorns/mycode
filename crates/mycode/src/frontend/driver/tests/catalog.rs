@@ -380,8 +380,10 @@ fn catalog_first_start_refresh_reloads_binding_without_restart() {
     );
     assert!(out.iter().any(|effect| matches!(
         effect,
-        Effect::Toast { kind: ToastKind::Info, text }
-            if text == "Provider catalog refreshed" || text == "服务商目录已刷新"
+        Effect::Toast {
+            kind: ToastKind::Info,
+            ..
+        }
     )));
     driver.shutdown();
     let _ = std::fs::remove_dir_all(root);

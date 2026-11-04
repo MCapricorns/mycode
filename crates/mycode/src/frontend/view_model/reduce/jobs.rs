@@ -153,10 +153,6 @@ pub(super) fn tool_progress(
     if !state.sending {
         return;
     }
-    // Legacy workflow text has no node identity. Typed snapshots own those rows.
-    if name == "agent_workflow" {
-        return;
-    }
     let agent_event = is_agent_event(&name, &message);
     if agent_event && job_finished(state, &call_id) {
         return;
@@ -436,9 +432,9 @@ pub(super) fn retire_live_jobs(state: &mut WorkspaceState) {
         record_job_elapsed(state, job);
     }
     let retained = state.subagent_window.as_ref().is_some_and(|id| {
-        state.subagent_session().is_some_and(|session| {
-            session.run(id).is_some() || session.workflows.iter().any(|workflow| &workflow.id == id)
-        })
+        state
+            .subagent_session()
+            .is_some_and(|session| session.run(id).is_some())
     });
     if !retained {
         state.subagent_window = None;

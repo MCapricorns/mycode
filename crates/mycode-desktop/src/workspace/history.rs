@@ -42,7 +42,6 @@ impl Workspace {
         offset_y + max_offset_y <= px(0.)
     }
 
-    /// The conversation column's scroll handle.
     pub(crate) fn conversation_scroll_handle(&self) -> &gpui_kit::ScrollHandle {
         &self.conversation_scroll
     }
@@ -54,7 +53,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The subagent window body's scroll handle.
     pub(crate) fn subagent_scroll_handle(&self) -> &gpui_kit::ScrollHandle {
         &self.subagent_scroll
     }

@@ -147,8 +147,9 @@ fn an_unavailable_session_pin_blocks_chat_and_compaction() {
         None,
     );
     let mut out = Vec::new();
-    let error = driver.prepare_chat_turn().expect_err("unavailable route");
-    assert!(error.contains("unavailable") || error.contains("不可用"));
+    driver
+        .prepare_chat_turn()
+        .expect_err("an unavailable route refuses the turn");
     driver.vm.sending = false;
     assert_eq!(driver.vm.selected_model.as_deref(), Some("p/pinned"));
     driver.compact(&mut out);

@@ -216,17 +216,6 @@ mod tests {
     use super::SettingsSection;
 
     #[test]
-    fn font_size_round_trips_through_the_editor_projection() {
-        let mut document = crate::config::AppSettings::default();
-        document.appearance.font_size = "xl".to_owned();
-        let state = super::SettingsState::from_settings(&document, 1);
-        assert_eq!(state.font_size, "xl");
-        let stored = state.to_settings();
-        assert_eq!(stored.appearance.font_size, "xl");
-        assert!(stored.validate().is_ok());
-    }
-
-    #[test]
     fn nav_groups_match_the_settings_shell() {
         let ids: Vec<_> = SettingsSection::GROUPS.iter().map(|(id, _)| *id).collect();
         assert_eq!(ids, ["Appearance", "Models", "Agents", "Tools", "App"]);

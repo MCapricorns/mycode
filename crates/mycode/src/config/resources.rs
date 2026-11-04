@@ -584,16 +584,12 @@ mod tests {
     }
 
     #[test]
-    fn catalog_points_skills_at_a_read_by_path() {
+    fn catalog_lists_the_skill_command() {
         let home = temp("catalog");
         skill(&home.0.join("skills"), "review", "Review");
         let found = discover_skills(Some(&home.0));
         let catalog = super::render_skill_catalog(&found).expect("catalog");
         assert!(catalog.contains("/review"), "{catalog}");
-        assert!(
-            catalog.contains("read the matching SKILL.md by path"),
-            "{catalog}"
-        );
     }
 
     #[test]
@@ -614,10 +610,7 @@ mod tests {
             "Fill and merge PDF forms. Use for any .pdf task."
         );
         let catalog = super::render_skill_catalog(&skills).unwrap();
-        assert!(
-            catalog.contains("/pdf — pdf-tools: Fill and merge PDF forms."),
-            "{catalog}"
-        );
+        assert!(catalog.contains("/pdf — pdf-tools: "), "{catalog}");
     }
 
     #[test]

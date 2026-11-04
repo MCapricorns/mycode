@@ -28,7 +28,6 @@ pub enum HeadStamp {
 /// Classifies one session event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EventKind {
-    /// A conversation message payload.
     Message,
     /// An issued tool call; `call_id` is `Some`.
     ToolCall,
@@ -83,13 +82,10 @@ impl EventKind {
 /// One committed event's ledger metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionEvent {
-    /// The event identity.
     pub event_id: SessionEventId,
     /// Lowercase `sha256:` digest of the payload bytes.
     pub digest: String,
-    /// Payload byte length.
     pub bytes: u64,
-    /// Event classification.
     pub kind: EventKind,
     /// Present only for `tool-call` and `tool-result`.
     pub call_id: Option<SessionCallId>,
@@ -98,16 +94,13 @@ pub struct SessionEvent {
 /// One branch head in an `open` result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BranchHead {
-    /// The branch identity.
     pub branch_id: BranchId,
-    /// The branch's committed head.
     pub head: HeadStamp,
 }
 
 /// Host-issued single-use event reservation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventReservationView {
-    /// The reserved event identity.
     pub event_id: SessionEventId,
     /// Lowercase `sha256:` digest of the reserved payload.
     pub payload_digest: String,
@@ -147,13 +140,9 @@ pub struct BranchReservationView {
     pub reservation_id: BranchReservationId,
     /// Fork or rewind.
     pub kind: BranchMutationKind,
-    /// The branch whose prefix is copied.
     pub source_branch_id: BranchId,
-    /// The source head bound by the reservation.
     pub source_head: HeadStamp,
-    /// The prefix boundary event.
     pub target_event_id: SessionEventId,
-    /// The branch the mutation creates.
     pub new_branch_id: BranchId,
     /// Lowercase `sha256:` mutation digest over the frozen framing.
     pub mutation_digest: String,
@@ -169,25 +158,16 @@ pub enum SessionRequest {
         project: Option<String>,
     },
     /// Recovers one session and returns every branch head.
-    Open {
-        /// The session to recover.
-        session: SessionId,
-    },
+    Open { session: SessionId },
     /// Drops one session's in-memory ledger without touching disk.
     ///
     /// Idempotent; a host deletes a session's durable footprint under this
     /// cover so no later in-flight write resurrects the directory.
-    Evict {
-        /// The session to forget.
-        session: SessionId,
-    },
+    Evict { session: SessionId },
     /// Validates, stages a payload in the actor, and issues an event reservation.
     ReserveEvent {
-        /// The session to append into.
         session: SessionId,
-        /// The branch to append onto.
         branch: BranchId,
-        /// The event classification.
         kind: EventKind,
         /// Required exactly for tool-call and tool-result.
         call_id: Option<SessionCallId>,
@@ -196,20 +176,15 @@ pub enum SessionRequest {
     },
     /// Consumes one event reservation under expected-head CAS.
     Append {
-        /// The session to append into.
         session: SessionId,
-        /// The branch to append onto.
         branch: BranchId,
         /// The head the caller observed.
         expected_head: HeadStamp,
-        /// The single-use reservation.
         reservation: EventReservationView,
     },
     /// Reads one bounded page of one immutable snapshot.
     Read {
-        /// The session to read.
         session: SessionId,
-        /// The branch to read.
         branch: BranchId,
         /// The snapshot boundary head.
         snapshot_head: HeadStamp,
@@ -220,46 +195,33 @@ pub enum SessionRequest {
     },
     /// Issues one single-use branch mutation reservation.
     ReserveBranch {
-        /// The session to mutate.
         session: SessionId,
         /// Fork or rewind.
         kind: BranchMutationKind,
-        /// The branch whose prefix is copied.
         source_branch: BranchId,
         /// The prefix boundary event on the source branch.
         target_event: SessionEventId,
     },
     /// Consumes one fork reservation under source-head CAS.
     Fork {
-        /// The session to mutate.
         session: SessionId,
-        /// The branch whose prefix is copied.
         from_branch: BranchId,
-        /// The prefix boundary event.
         at_event: SessionEventId,
-        /// The single-use reservation.
         reservation: BranchReservationView,
     },
     /// Consumes one rewind reservation under source-head CAS.
     Rewind {
-        /// The session to mutate.
         session: SessionId,
-        /// The branch whose prefix is copied.
         branch: BranchId,
-        /// The prefix boundary event.
         to_event: SessionEventId,
-        /// The single-use reservation.
         reservation: BranchReservationView,
     },
     /// Consumes one exclusive rewind reservation under source-head CAS.
     RewindBefore {
-        /// The session to mutate.
         session: SessionId,
-        /// The branch whose prefix is copied.
         branch: BranchId,
         /// The first event excluded from the copied prefix.
         before_event: SessionEventId,
-        /// The single-use reservation.
         reservation: BranchReservationView,
     },
     /// Reads one page of committed events together with their payloads.
@@ -267,9 +229,7 @@ pub enum SessionRequest {
     /// One actor round-trip covers the metadata page and every payload in
     /// it, so replaying a branch does not pay a separate invoke per event.
     ReadPayloads {
-        /// The session to read.
         session: SessionId,
-        /// The branch to read.
         branch: BranchId,
         /// The snapshot boundary head.
         snapshot_head: HeadStamp,
@@ -283,9 +243,7 @@ pub enum SessionRequest {
     /// `before` absent ends the window at the snapshot head. `older` on the
     /// result names the first returned event when still-earlier events exist.
     ReadPayloadWindow {
-        /// The session to read.
         session: SessionId,
-        /// The branch to read.
         branch: BranchId,
         /// The snapshot boundary head.
         snapshot_head: HeadStamp,
@@ -296,11 +254,8 @@ pub enum SessionRequest {
     },
     /// Loads one committed event with its verified payload.
     LoadEvent {
-        /// The session to read.
         session: SessionId,
-        /// The branch holding the event.
         branch: BranchId,
-        /// The event to load.
         event: SessionEventId,
     },
 }
@@ -320,17 +275,11 @@ pub enum SessionPull {
 /// Successful terminal payloads.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SessionResult {
-    /// `create` finished.
     Created(CreatedResult),
-    /// `open` finished.
     Opened(OpenedResult),
-    /// `evict` finished; nothing to return.
     Evicted,
-    /// `append` finished.
     Appended(AppendedResult),
-    /// `read` finished.
     Events(EventsResult),
-    /// `fork`/`rewind` finished.
     Branched(BranchedResult),
     /// `reserve-event` finished (first-party only).
     ReservedEvent(EventReservationView),
@@ -365,9 +314,7 @@ pub struct PayloadPage {
 /// `create` result: both identifiers are Host-minted and the head is empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreatedResult {
-    /// The fresh session identity.
     pub session_id: SessionId,
-    /// The fresh root branch identity.
     pub branch_id: BranchId,
 }
 
@@ -384,7 +331,6 @@ pub struct OpenedResult {
 /// `append` result: exactly `event(reservation.event-id)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppendedResult {
-    /// The branch head after the commit.
     pub head: HeadStamp,
 }
 
@@ -409,7 +355,6 @@ pub struct BranchedResult {
 /// `load-event` result: metadata plus the verified payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadedEvent {
-    /// The event metadata.
     pub event: SessionEvent,
     /// The payload bytes, digest-verified.
     pub payload: Vec<u8>,
