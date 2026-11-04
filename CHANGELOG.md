@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.44] - 2026-11-04
+
 ### Changed
 
 - 移除 `agent_workflow` 工作流及返工模块，简化子代理运行时、状态快照和详情界面。
@@ -703,7 +705,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.43...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.44...HEAD
+[0.12.44]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.44
 [0.12.43]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.43
 [0.12.42]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.42
 [0.12.41]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.41

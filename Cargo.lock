@@ -4506,7 +4506,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "mycode"
-version = "0.12.43"
+version = "0.12.44"
 dependencies = [
  "aho-corasick",
  "base64 0.23.1",
@@ -4551,7 +4551,7 @@ dependencies = [
 
 [[package]]
 name = "mycode-desktop"
-version = "0.12.43"
+version = "0.12.44"
 dependencies = [
  "base64 0.23.1",
  "chrono",
