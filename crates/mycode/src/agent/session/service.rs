@@ -418,13 +418,15 @@ impl SessionService {
         }
     }
 
-    /// Retires the publication, closes live operations, and awaits drain.
+    /// Retires the publication, closes live operations, and awaits worker
+    /// teardown and drain.
     ///
     /// After this call the service rejects every further operation; other
     /// clones observe the same retirement because the fence is shared.
     pub async fn shutdown(self) {
         self.inner.fence.mark_retired();
         self.inner.client.shutdown();
+        self.inner.client.wait_stopped().await;
         self.inner.fence.wait_drained().await;
         self.inner.fence.close_publication();
     }

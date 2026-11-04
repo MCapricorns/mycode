@@ -19,6 +19,7 @@ pub(crate) struct TaskActorOperationId(u64);
 pub(crate) struct TaskActorClient<A: PackTaskActor> {
     sender: mpsc::Sender<Command<A>>,
     worker: tokio::task::AbortHandle,
+    completion: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     live: Arc<Mutex<HashMap<TaskActorOperationId, TaskCloseSignal>>>,
 }
 
@@ -105,12 +106,16 @@ impl<A: PackTaskActor> TaskActorClient<A> {
         // private thread or calls `block_on`.
         let worker_sender = sender.clone();
         let worker_live = Arc::clone(&live);
-        let worker = tokio::runtime::Handle::current()
-            .spawn(run_worker(actor, receiver, worker_sender, worker_live))
-            .abort_handle();
+        let worker = tokio::runtime::Handle::current().spawn(run_worker(
+            actor,
+            receiver,
+            worker_sender,
+            worker_live,
+        ));
         Self {
             sender,
-            worker,
+            worker: worker.abort_handle(),
+            completion: tokio::sync::Mutex::new(Some(worker)),
             live,
         }
     }
@@ -177,6 +182,18 @@ impl<A: PackTaskActor> TaskActorClient<A> {
             close.close();
         }
         self.worker.abort();
+    }
+
+    /// Waits for the aborted worker to drop its actor and owned resources.
+    pub(crate) async fn wait_stopped(&self) {
+        // Keep the handle in the mutex while awaiting it: concurrent callers
+        // must all wait for teardown, and cancelling one waiter must not
+        // detach the task or let the next waiter return before it finishes.
+        let mut completion = self.completion.lock().await;
+        if let Some(worker) = completion.as_mut() {
+            let _ = worker.await;
+            completion.take();
+        }
     }
 }
 
@@ -411,3 +428,6 @@ fn map_actor_error<A: PackTaskActor>(error: A::Error) -> TaskActorError<A::Error
         TaskActorError::Pack(error)
     }
 }
+
+#[cfg(test)]
+mod tests;
