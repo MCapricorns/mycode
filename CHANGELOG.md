@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.45] - 2026-11-04
+
 ### Changed
 
 - 精简主代理与子代理系统提示词：去掉与工具定义重复的 Shell 说明、工具摘要和 MCP 调用指引，统一环境块、MCP 段落和工作区目录的渲染；内置工具参数 schema 不再附带根级标题和类型说明。默认配置下主代理系统提示词缩短约 19%，内置角色的子代理提示词缩短约 17%，每次请求附带的直接工具定义缩短约 18%。
@@ -712,7 +714,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.44...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.45...HEAD
+[0.12.45]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.45
 [0.12.44]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.44
 [0.12.43]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.43
 [0.12.42]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.42
