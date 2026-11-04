@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.43] - 2026-11-04
+
 ### Changed
 
 - Library 文件变化自动刷新设置、skills、角色和 MCP 界面；主代理与子代理在后续模型请求前更新规则、技能目录和 MCP 配置，移除过期服务工具并保留后台渐进式发现。已接收的 MCP 工具目录变更通知触发重新列举，空闲通知在下一次协议交互时读取。
@@ -695,7 +697,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.42...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.43...HEAD
+[0.12.43]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.43
 [0.12.42]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.42
 [0.12.41]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.41
 [0.12.40]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.40
