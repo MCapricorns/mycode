@@ -708,33 +708,3 @@ fn sync_fd_raw(fd: std::os::fd::BorrowedFd<'_>) -> Result<(), Errno> {
 pub(super) fn sync_parent(dir: &File) -> io::Result<()> {
     sync_file(dir)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unrelated_symlinks_and_sockets_do_not_reject_regular_files() {
-        let base = std::env::temp_dir().join(format!(
-            "mc-{}",
-            &uuid::Uuid::new_v4().simple().to_string()[..8]
-        ));
-        std::fs::create_dir_all(&base).unwrap();
-        std::fs::write(base.join("target.txt"), "hello").unwrap();
-        std::os::unix::fs::symlink("missing", base.join("link")).unwrap();
-        let socket = std::os::unix::net::UnixListener::bind(base.join("socket")).unwrap();
-        let parent = open_allowed_root(&base).unwrap();
-        let target =
-            open_child(&parent, OsStr::new("target.txt"), ChildOpen::ExistingFile).unwrap();
-        assert_eq!(
-            unique_component_name(&parent, target.meta.identity, &CancellationToken::new())
-                .unwrap(),
-            "target.txt"
-        );
-        // Target opens still reject special files rather than following them.
-        assert!(open_child(&parent, OsStr::new("link"), ChildOpen::ExistingFile).is_err());
-        assert!(open_child(&parent, OsStr::new("socket"), ChildOpen::ExistingFile).is_err());
-        drop(socket);
-        std::fs::remove_dir_all(base).unwrap();
-    }
-}

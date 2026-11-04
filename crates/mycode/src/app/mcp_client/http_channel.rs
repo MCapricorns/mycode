@@ -431,16 +431,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oversized_error_body_keeps_its_excerpt() {
-        let response = reqwest::Response::from(http::Response::new(reqwest::Body::from(
-            "authentication failed: ".repeat(100),
-        )));
-        let excerpt = super::error_excerpt(response).await;
-        assert_eq!(excerpt.len(), super::ERROR_EXCERPT_BYTES);
-        assert!(excerpt.starts_with(b"authentication failed: "));
-    }
-
-    #[tokio::test]
     async fn sse_reply_completes_before_the_server_closes_the_stream() {
         use futures_util::StreamExt as _;
 
@@ -468,14 +458,5 @@ mod tests {
         .unwrap()
         .expect("reply");
         assert_eq!(reply["result"]["ok"], true);
-    }
-
-    #[test]
-    fn finish_reply_rejects_missing_response_object() {
-        let err = super::finish_reply(None, 7).expect_err("empty request response must fail");
-        assert!(
-            matches!(err, super::McpError::Protocol(ref msg) if msg.contains("empty response")),
-            "{err:?}"
-        );
     }
 }

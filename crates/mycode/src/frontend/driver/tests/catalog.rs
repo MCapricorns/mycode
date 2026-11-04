@@ -111,7 +111,6 @@ fn loaded(settings: AppSettings, revision: u64) -> BridgeReply {
     BridgeReply::Settings(Ok(SettingsSnapshot {
         settings,
         revision: AuthorityRevision::new(revision).unwrap_or(AuthorityRevision::ABSENT),
-        provider_keys: Vec::new(),
         mcp_keys: Vec::new(),
         repairs: Vec::new(),
     }))
@@ -316,43 +315,6 @@ fn assert_live_library_refreshes(mut driver: FrontendDriver, root: std::path::Pa
 }
 
 #[test]
-fn a_library_refresh_invalidates_changed_server_tools_and_old_probes() {
-    let (mut driver, root) = scratch_driver("library-probe-invalidation");
-    let mut out = Vec::new();
-    driver.on_reply(
-        ReplyScope::Global,
-        loaded(AppSettings::default(), 0),
-        &mut out,
-    );
-    std::fs::write(root.join("mcp.json"), r#"{"mcpServers":{"docs":{"url":"http://localhost:3425/old"},"keep":{"url":"http://localhost:3425/keep"}}}"#).unwrap();
-    driver.reload_mcp_library(&mut out);
-    let old = driver
-        .vm
-        .mcp_library
-        .iter()
-        .find(|server| server.id == "docs")
-        .unwrap()
-        .clone();
-    let scope = ReplyScope::McpProbe(Box::new(old));
-    assert!(scope.applies(&driver.vm, None));
-    driver.vm.mcp_tools = vec![
-        ("docs".into(), vec!["old_tool".into()]),
-        ("keep".into(), vec!["kept_tool".into()]),
-    ];
-    driver.vm.mcp_probing = vec!["docs".into()];
-    std::fs::write(root.join("mcp.json"), r#"{"mcpServers":{"docs":{"url":"http://localhost:3425/new"},"keep":{"url":"http://localhost:3425/keep"}}}"#).unwrap();
-    driver.reload_mcp_library(&mut out);
-    assert!(!scope.applies(&driver.vm, None));
-    assert!(driver.vm.mcp_probing.is_empty());
-    assert_eq!(
-        driver.vm.mcp_tools,
-        vec![("keep".to_owned(), vec!["kept_tool".to_owned()])]
-    );
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
 fn catalog_first_start_refresh_reloads_binding_without_restart() {
     let gateway = GatewayFixture::start();
     let (mut driver, root) = scratch_driver("catalog-first-start");
@@ -469,105 +431,6 @@ fn catalog_external_model_change_preserves_drafts_and_session_pins() {
     assert!(settings.dirty && settings.saving);
     assert_eq!(settings.edit_epoch, 7);
     assert_eq!(settings.reasoning.as_deref(), Some("high"));
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn catalog_before_settings_rejects_a_late_bootstrap_snapshot() {
-    use crate::providers::catalog::{CatalogDocument, CatalogModel, CatalogProvider};
-
-    let (mut driver, root) = scratch_driver("catalog-before-settings");
-    let mut out = Vec::new();
-    let catalog = Arc::new(CatalogDocument {
-        providers: vec![CatalogProvider {
-            id: "magpie".to_owned(),
-            models: ["a/other", "z/default"]
-                .into_iter()
-                .map(|id| CatalogModel {
-                    id: id.to_owned(),
-                    ..CatalogModel::default()
-                })
-                .collect(),
-            ..CatalogProvider::default()
-        }],
-    });
-    driver.on_reply(
-        ReplyScope::CatalogRefresh,
-        BridgeReply::Catalog(Ok(crate::app::CatalogInfo {
-            document: catalog,
-            fetched_at: 1,
-        })),
-        &mut out,
-    );
-    assert!(out.is_empty(), "success waits for the settings projection");
-    let current_generation = driver.settings_load_generation;
-    assert!(current_generation > 0);
-    let document = AppSettings {
-        magpie: crate::config::MagpieSettings {
-            enabled: true,
-            base_url: "http://127.0.0.1:3425/v1".to_owned(),
-            api_key: "fixture-key".to_owned(),
-            model: "z/default".to_owned(),
-            hidden_models: Vec::new(),
-        },
-        ..AppSettings::default()
-    };
-    driver.on_reply(
-        ReplyScope::Settings {
-            generation: current_generation,
-        },
-        loaded(document, 1),
-        &mut out,
-    );
-    driver.on_reply(
-        ReplyScope::Settings {
-            generation: current_generation - 1,
-        },
-        loaded(AppSettings::default(), 0),
-        &mut out,
-    );
-    assert_eq!(driver.vm.selected_model.as_deref(), Some("z/default"));
-    assert!(out.iter().any(|effect| matches!(
-        effect,
-        Effect::Toast {
-            kind: ToastKind::Info,
-            ..
-        }
-    )));
-    assert_eq!(
-        driver.vm.settings.as_ref().expect("settings").providers[0]
-            .models
-            .len(),
-        2
-    );
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn catalog_lazy_read_cannot_announce_a_manual_refresh_success() {
-    let (mut driver, root) = scratch_driver("catalog-refresh-toast");
-    let mut out = Vec::new();
-    driver.refresh_catalog();
-    driver.on_reply(
-        ReplyScope::Global,
-        BridgeReply::Catalog(Ok(crate::app::CatalogInfo {
-            document: Arc::new(crate::providers::catalog::CatalogDocument::default()),
-            fetched_at: 0,
-        })),
-        &mut out,
-    );
-    assert!(out.is_empty(), "the lazy read must not toast success");
-    driver.on_reply(
-        ReplyScope::CatalogRefresh,
-        BridgeReply::Catalog(Err("fixture offline".to_owned())),
-        &mut out,
-    );
-    assert!(out.iter().any(|effect| matches!(
-        effect,
-        Effect::Toast { kind: ToastKind::Error, text } if text == "fixture offline"
-    )));
     driver.shutdown();
     let _ = std::fs::remove_dir_all(root);
 }

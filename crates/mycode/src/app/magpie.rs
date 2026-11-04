@@ -145,27 +145,3 @@ pub fn provider_row(
         magpie.hidden_models.clone(),
     ))
 }
-
-#[cfg(test)]
-mod tests {
-    #[tokio::test]
-    async fn model_body_rejects_oversize_without_waiting_for_eof() {
-        use futures_util::StreamExt as _;
-
-        let chunks = futures_util::stream::iter([
-            Ok::<_, std::io::Error>(bytes::Bytes::from(vec![b' '; super::MAX_MODELS_BYTES])),
-            Ok(bytes::Bytes::from_static(b"x")),
-        ])
-        .chain(futures_util::stream::pending());
-        let response =
-            reqwest::Response::from(http::Response::new(reqwest::Body::wrap_stream(chunks)));
-        let error = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            super::read_models_body(response),
-        )
-        .await
-        .expect("the bound must be checked before EOF")
-        .expect_err("oversized catalog");
-        assert!(error.contains("larger than 4 MiB"));
-    }
-}

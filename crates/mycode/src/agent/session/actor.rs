@@ -157,13 +157,6 @@ enum Action {
         expected_head: HeadStamp,
         reservation: EventReservationView,
     },
-    Read {
-        session: SessionId,
-        branch: BranchId,
-        snapshot_head: HeadStamp,
-        after: Option<SessionEventId>,
-        limit: u16,
-    },
     ReserveBranch {
         session: SessionId,
         kind: BranchMutationKind,
@@ -206,7 +199,6 @@ impl Action {
             | Self::Evict { session }
             | Self::ReserveEvent { session, .. }
             | Self::Append { session, .. }
-            | Self::Read { session, .. }
             | Self::ReserveBranch { session, .. }
             | Self::BranchCommit { session, .. }
             | Self::LoadEvent { session, .. }
@@ -384,27 +376,6 @@ impl SessionCore {
                         branch,
                         expected_head,
                         reservation,
-                    },
-                )?
-            }
-            SessionRequest::Read {
-                session,
-                branch,
-                snapshot_head,
-                after,
-                limit,
-            } => {
-                if let Err(error) = reject_bad_read_limit(limit) {
-                    return failed(admission, error);
-                }
-                self.stage_for(
-                    session.clone(),
-                    Action::Read {
-                        session,
-                        branch,
-                        snapshot_head,
-                        after,
-                        limit,
                     },
                 )?
             }
@@ -618,13 +589,6 @@ impl SessionCore {
                 expected_head,
                 reservation,
             } => self.action_append(&session, &branch, &expected_head, &reservation),
-            Action::Read {
-                session,
-                branch,
-                snapshot_head,
-                after,
-                limit,
-            } => self.action_read(&session, &branch, &snapshot_head, after.as_ref(), limit),
             Action::ReserveBranch {
                 session,
                 kind,
@@ -749,6 +713,3 @@ fn blocking_session<T: Send + 'static>(
     });
     async move { rx.await.map_err(|_| SessionTaskError::Storage) }
 }
-
-#[cfg(test)]
-mod tests;

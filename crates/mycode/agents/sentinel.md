@@ -1,6 +1,6 @@
 ---
 name: sentinel
-description: Review an implementation or diff against requirements, or test a specific claim with counterexamples; no commands or edits.
+description: Review a diff against requirements, or test a specific claim for counterexamples; pass it the diff, requirements, and check results; read-only, no shell.
 isolation: shared
 thinking: high
 tools: read, grep, find

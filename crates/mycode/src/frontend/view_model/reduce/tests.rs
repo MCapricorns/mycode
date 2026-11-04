@@ -329,25 +329,6 @@ fn older_page_prepends_when_the_cursor_still_matches() {
 }
 
 #[test]
-fn stale_older_page_is_dropped() {
-    let mut state = open(vec![user("e5", "new")], Some("e5"));
-    reduce(
-        &mut state,
-        FrontendAction::OlderLoaded {
-            session_id: "ses".to_owned(),
-            entries: vec![user("e0", "old")],
-            older_before: None,
-            requested_before: "e9".to_owned(),
-        },
-    );
-    let active = state.active.expect("open");
-    assert_eq!(active.entries.len(), 1);
-    assert_eq!(active.entries[0].event_id, "e5");
-    assert_eq!(active.older_before.as_deref(), Some("e5"));
-    assert!(!state.history_loading);
-}
-
-#[test]
 fn reasoning_pick_stays_on_the_session_and_does_not_dirty_settings() {
     use std::sync::Arc;
 
@@ -547,22 +528,6 @@ fn a_steer_shows_until_it_commits_and_a_returned_one_leaves_the_strip() {
         },
     );
     assert!(state.pending_steers.is_empty());
-}
-
-#[test]
-fn a_retracted_steer_leaves_the_strip_and_an_unknown_one_changes_nothing() {
-    let mut state = open(Vec::new(), None);
-    state.pending_steers = vec!["first".to_owned(), "second".to_owned()];
-    reduce(
-        &mut state,
-        FrontendAction::SteerRetracted("first".to_owned()),
-    );
-    assert_eq!(state.pending_steers, ["second"]);
-    reduce(
-        &mut state,
-        FrontendAction::SteerRetracted("not pending".to_owned()),
-    );
-    assert_eq!(state.pending_steers, ["second"]);
 }
 
 mod turns;

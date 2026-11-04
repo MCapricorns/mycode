@@ -17,8 +17,8 @@ use crate::agent::session::runtime::{TaskActorClient, TaskActorError, TaskCloseS
 use super::actor::{SessionActor, SessionTaskError};
 use super::dto::{
     AppendedResult, BranchMutationKind, BranchedResult, CreatedResult, EventKind,
-    EventReservationView, EventsResult, HeadStamp, LoadedEvent, OpenedResult, SessionError,
-    SessionRequest, SessionResult,
+    EventReservationView, HeadStamp, LoadedEvent, OpenedResult, SessionError, SessionRequest,
+    SessionResult,
 };
 use super::ids::{BranchId, SessionCallId, SessionEventId, SessionId};
 
@@ -181,37 +181,6 @@ impl SessionService {
             .await?
         {
             SessionResult::Appended(appended) => Ok(appended),
-            _ => Err(SessionError::Unavailable),
-        }
-    }
-
-    /// Reads one bounded page of one immutable branch snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionError::Limit`] for a page size outside `1..=256`,
-    /// [`SessionError::NotFound`] for an unknown session, branch, or cursor,
-    /// [`SessionError::InvalidArgument`] for a cursor beyond the snapshot
-    /// head, and the actor's terminal error otherwise.
-    pub async fn read(
-        &self,
-        session: &SessionId,
-        branch: &BranchId,
-        snapshot_head: &HeadStamp,
-        after: Option<&SessionEventId>,
-        limit: u16,
-    ) -> Result<EventsResult, SessionError> {
-        match self
-            .run(SessionRequest::Read {
-                session: session.clone(),
-                branch: branch.clone(),
-                snapshot_head: snapshot_head.clone(),
-                after: after.cloned(),
-                limit,
-            })
-            .await?
-        {
-            SessionResult::Events(events) => Ok(events),
             _ => Err(SessionError::Unavailable),
         }
     }

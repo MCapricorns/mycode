@@ -1,5 +1,6 @@
 //! Model-facing copy for the one shell tool the active interpreter selects.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -19,17 +20,6 @@ pub(crate) fn tool_description(kind: ShellKind) -> &'static str {
 }
 
 #[must_use]
-pub(crate) fn prompt_snippet(kind: ShellKind) -> &'static str {
-    match kind {
-        ShellKind::Pwsh | ShellKind::WindowsPowerShell => POWERSHELL_SNIPPET,
-        ShellKind::Bash => BASH_SNIPPET,
-        ShellKind::Zsh => ZSH_SNIPPET,
-        ShellKind::Sh => SH_SNIPPET,
-        ShellKind::Cmd => CMD_SNIPPET,
-    }
-}
-
-#[must_use]
 pub(crate) fn shell_label(kind: ShellKind) -> &'static str {
     match kind {
         ShellKind::Pwsh => "PowerShell 7",
@@ -38,18 +28,6 @@ pub(crate) fn shell_label(kind: ShellKind) -> &'static str {
         ShellKind::Zsh => "zsh",
         ShellKind::Sh => "sh",
         ShellKind::Cmd => "cmd.exe",
-    }
-}
-
-#[must_use]
-pub(crate) fn guidance(kind: ShellKind) -> &'static str {
-    match kind {
-        ShellKind::Pwsh => POWERSHELL7_GUIDANCE,
-        ShellKind::WindowsPowerShell => POWERSHELL51_GUIDANCE,
-        ShellKind::Bash => BASH_GUIDANCE,
-        ShellKind::Zsh => ZSH_GUIDANCE,
-        ShellKind::Sh => SH_GUIDANCE,
-        ShellKind::Cmd => CMD_GUIDANCE,
     }
 }
 
@@ -116,24 +94,26 @@ fn set_description(value: Option<&mut Value>, description: &str) {
     object.insert("description".to_owned(), json!(description));
 }
 
+/// The `<environment>` block: OS, cwd, and the shell tool when the run has one.
 #[must_use]
-pub fn render_environment_block(os: &str, arch: &str, cwd: &Path, shell: &DetectedShell) -> String {
-    format!(
-        "<environment>\n\
-os: {os} ({arch})\n\
-cwd: {cwd}\n\
-shell_tool: {tool}\n\
-interpreter: {label} ({program})\n\
-</environment>\n\n\
-<shell>\n\
-{guidance}\n\
-</shell>",
-        cwd = cwd.display(),
-        tool = shell.kind.tool_name(),
-        label = shell_label(shell.kind),
-        program = shell.program.display(),
-        guidance = guidance(shell.kind),
-    )
+pub fn render_environment_block(
+    os: &str,
+    arch: &str,
+    cwd: &Path,
+    shell: Option<&DetectedShell>,
+) -> String {
+    let mut block = format!("<environment>\nos: {os} ({arch})\ncwd: {}\n", cwd.display());
+    if let Some(shell) = shell {
+        let _ = writeln!(
+            block,
+            "shell_tool: {}\ninterpreter: {} ({})",
+            shell.kind.tool_name(),
+            shell_label(shell.kind),
+            shell.program.display()
+        );
+    }
+    block.push_str("</environment>");
+    block
 }
 
 macro_rules! shared_description {
@@ -175,48 +155,9 @@ const CMD_DESCRIPTION: &str = concat!(
     shared_description!()
 );
 
-macro_rules! snippet {
-    ($tool:literal, $interpreter:literal) => {
-        concat!(
-            $tool,
-            ": mode script (default) runs one ",
-            $interpreter,
-            " command (`command`); mode program runs one program with `args` and no shell."
-        )
-    };
-}
-
-const POWERSHELL_SNIPPET: &str = snippet!("powershell", "PowerShell");
-const BASH_SNIPPET: &str = snippet!("bash", "bash");
-const ZSH_SNIPPET: &str = snippet!("zsh", "zsh");
-const SH_SNIPPET: &str = snippet!("sh", "POSIX sh");
-const CMD_SNIPPET: &str = snippet!("cmd", "cmd.exe");
-
-const POWERSHELL7_GUIDANCE: &str = "\
-The `powershell` tool runs PowerShell 7 (`pwsh`). Write PowerShell, not bash or cmd.
-- Each call starts a new process in the session cwd; `cd` and `$env:` do not persist.
-- `&&` and `||` are allowed. Use `$env:NAME`, `2>$null`, `Get-Command`, and `@'...'@` instead of bash syntax.";
-
-const POWERSHELL51_GUIDANCE: &str = "\
-The `powershell` tool runs Windows PowerShell 5.1 (`powershell.exe`).
-- Do not use `&&` or `||`; chain with `;` and test `$LASTEXITCODE`.
-- Use `$env:NAME`, `2>$null`, `Get-Command`, and `@'...'@` instead of bash syntax.";
-
-const BASH_GUIDANCE: &str = "\
-The `bash` tool runs `bash -c`. Each call starts a new process in the session cwd.";
-
-const ZSH_GUIDANCE: &str = "\
-The `zsh` tool runs `zsh -c`. Each call starts a new process in the session cwd.";
-
-const SH_GUIDANCE: &str = "\
-The `sh` tool runs `sh -c`. Each call starts a new process in the session cwd.";
-
-const CMD_GUIDANCE: &str = "\
-The `cmd` tool runs `cmd.exe /d /s /c`. Each call starts a new process in the session cwd.";
-
 #[cfg(test)]
 mod tests {
-    use super::{guidance, render_environment_block};
+    use super::render_environment_block;
     use crate::tools::builtin::shell::{DetectedShell, ShellKind};
     use std::path::{Path, PathBuf};
 
@@ -236,10 +177,11 @@ mod tests {
                 kind,
                 program: PathBuf::from(program),
             };
-            let block = render_environment_block("windows", "x86_64", cwd, &shell);
+            let block = render_environment_block("windows", "x86_64", cwd, Some(&shell));
             assert!(block.contains(&format!("shell_tool: {}", kind.tool_name())));
             assert!(block.contains(&format!("interpreter: {label} ({program})")));
-            assert!(block.contains(guidance(kind)));
         }
+        let block = render_environment_block("windows", "x86_64", cwd, None);
+        assert!(!block.contains("shell_tool"), "{block}");
     }
 }

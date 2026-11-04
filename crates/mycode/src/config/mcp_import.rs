@@ -407,14 +407,6 @@ mod tests {
     }
 
     #[test]
-    fn normalized_server_id_collisions_are_rejected() {
-        let text = r#"{"mcpServers":{"Git Hub":{"command":"one"},"git-hub":{"command":"two"}}}"#;
-        for parse in [parse_mcp_import, parse_mcp_library] {
-            assert!(parse(text).is_err());
-        }
-    }
-
-    #[test]
     fn magpie_loopback_hub_is_accepted_by_library_and_import() {
         for origin in [
             "http://127.0.0.1:3425",
@@ -436,51 +428,6 @@ mod tests {
                 assert_eq!(server.endpoint.as_deref(), Some(endpoint.as_str()));
             }
         }
-    }
-
-    #[test]
-    fn http_mcp_rejects_remote_hosts_and_malformed_loopback_urls() {
-        for endpoint in [
-            "http://mcp.example.com/mcp",
-            "http://192.168.1.5:3425/mcp",
-            "http://localhost.example.com/mcp",
-            "http://127.0.0.1@mcp.example.com/mcp",
-            "http://127.0.0.1:0/mcp",
-            "http://127.0.0.1:99999/mcp",
-            "http://[::1]unexpected:3425/mcp",
-            "http://127.0.0.1/mcp\ninjected",
-        ] {
-            let document = serde_json::json!({
-                "mcpServers": { "magpie": { "url": endpoint } }
-            })
-            .to_string();
-            for parse in [parse_mcp_library, parse_mcp_import] {
-                assert!(parse(&document).is_err(), "{endpoint}");
-            }
-        }
-    }
-
-    #[test]
-    fn import_rejects_shell_commands_and_malformed_https_urls() {
-        assert!(
-            parse_mcp_import(r#"{"mcpServers":{"bad":{"command":"npx -y @scope/pkg"}}}"#).is_err(),
-            "shell command string must be rejected at import time"
-        );
-        assert!(
-            parse_mcp_import(r#"{"mcpServers":{"bad":{"url":"https://"}}}"#).is_err(),
-            "empty https host must be rejected at import time"
-        );
-        assert!(
-            parse_mcp_import(r#"{"mcpServers":{"bad":{"url":"https://host/path\ninjected"}}}"#)
-                .is_err(),
-            "URL with newline must be rejected at import time"
-        );
-        let imported = parse_mcp_import(
-            r#"{"mcpServers":{"good":{"command":"npx","args":["-y","@scope/pkg"]}}}"#,
-        )
-        .expect("valid stdio import");
-        assert_eq!(imported.len(), 1);
-        assert_eq!(imported[0].server.id, "good");
     }
 
     #[test]

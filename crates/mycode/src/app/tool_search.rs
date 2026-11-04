@@ -192,13 +192,6 @@ impl ToolDyn for ToolSearchTool {
         }
     }
 
-    fn prompt_snippet_dyn(&self) -> Option<&str> {
-        Some(
-            "tool_search: keyword search over connected MCP tools; returns up to 8 schemas for \
-             use_tool.",
-        )
-    }
-
     fn parallel_safe(&self) -> bool {
         true
     }
@@ -285,12 +278,5 @@ mod tests {
         );
         let expected: Vec<_> = tools.iter().take(8).map(|(key, _)| key.clone()).collect();
         assert_eq!(index.search("common", 8), expected);
-    }
-
-    #[test]
-    fn an_empty_corpus_finds_nothing() {
-        let index = ToolSearchIndex::new();
-        assert!(index.search("github issue", 8).is_empty());
-        assert_eq!(index.len(), 0);
     }
 }

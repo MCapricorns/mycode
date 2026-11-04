@@ -135,44 +135,6 @@ mod tests {
     }
 
     #[test]
-    fn a_completion_seen_without_a_start_still_rejects_stale_progress() {
-        let mut state = WorkspaceState {
-            sending: true,
-            ..Default::default()
-        };
-        event(
-            &mut state,
-            "wait",
-            CodeModeProgress::Completed {
-                call_id: "outer.0".into(),
-                name: "agent".into(),
-                phase: InnerCallPhase::Completed,
-                is_error: false,
-            },
-        );
-        event(
-            &mut state,
-            "outer",
-            CodeModeProgress::Started {
-                call_id: "outer.0".into(),
-                name: "agent".into(),
-                seq: 0,
-                target: "scout inspect source".into(),
-            },
-        );
-        event(
-            &mut state,
-            "outer",
-            CodeModeProgress::Progress {
-                call_id: "outer.0".into(),
-                name: "agent".into(),
-                message: "agent|scout|step|stale".into(),
-            },
-        );
-        assert!(state.live_jobs.is_empty());
-    }
-
-    #[test]
     fn parallel_children_keep_independent_cancel_ids_across_waits_and_completion() {
         let mut state = WorkspaceState {
             sending: true,

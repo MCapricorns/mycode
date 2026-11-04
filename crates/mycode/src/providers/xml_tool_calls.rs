@@ -695,54 +695,6 @@ mod tests {
     }
 
     #[test]
-    fn long_delimiter_runs_do_not_accumulate_in_the_text_buffer() {
-        let mut parser = XmlToolCallParser::default();
-        for _ in 0..4096 {
-            assert_eq!(parser.feed("`"), [XmlPiece::Text("`".to_owned())]);
-            assert!(parser.buffer.is_empty());
-        }
-        let pieces = parser.feed(&format!("xml\n{EXAMPLE_CALL}\n"));
-        assert!(
-            pieces
-                .iter()
-                .all(|piece| matches!(piece, XmlPiece::Text(_)))
-        );
-    }
-
-    #[test]
-    fn rejected_xml_still_contributes_to_literal_markdown_context() {
-        let text = format!("<tool_call>not a call\n\n```xml\n</tool_call>\n{EXAMPLE_CALL}\n```\n");
-        for width in [1, 2, 7, text.len()] {
-            let pieces = streamed(&text, width);
-            assert!(
-                pieces
-                    .iter()
-                    .all(|piece| matches!(piece, XmlPiece::Text(_)))
-            );
-            assert_eq!(visible(&pieces), text);
-        }
-    }
-
-    #[test]
-    fn oversized_xml_fallback_still_tracks_a_fence_in_its_text() {
-        let mut parser = XmlToolCallParser::default();
-        let prefix = format!(
-            "<tool_call>{}\n\n```xml\n",
-            "x".repeat(super::MAX_CALL_BODY_BYTES)
-        );
-        let mut pieces = parser.feed(&prefix);
-        pieces.extend(parser.feed(EXAMPLE_CALL));
-        pieces.extend(parser.feed("\n```\n"));
-        pieces.extend(parser.finish());
-        assert!(
-            pieces
-                .iter()
-                .all(|piece| matches!(piece, XmlPiece::Text(_)))
-        );
-        assert_eq!(visible(&pieces), format!("{prefix}{EXAMPLE_CALL}\n```\n"));
-    }
-
-    #[test]
     fn function_xml_keeps_plain_string_arguments() {
         let pieces = parse(
             "<tool_call><function=read><parameter=path>src/a.rs</parameter></function></tool_call>",

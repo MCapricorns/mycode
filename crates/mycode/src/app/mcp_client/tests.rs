@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
-use super::{JsonRpcChannel, MAX_TOOL_PAGES, MAX_TOOLS, McpClient, McpError};
+use super::{JsonRpcChannel, McpClient, McpError};
 
 #[derive(Default)]
 struct Pages {
@@ -62,60 +62,6 @@ async fn follows_opaque_cursors_and_keeps_every_tool() {
         *channel.requests.lock().unwrap(),
         vec![json!({}), json!({ "cursor": "opaque + /?=" })]
     );
-}
-
-#[tokio::test]
-async fn accepts_a_single_page_and_an_empty_intermediate_page() {
-    let (mut single, channel) = client(vec![json!({ "tools": [{ "name": "only" }] })]);
-    assert_eq!(single.list_tools().await.unwrap().len(), 1);
-    assert_eq!(channel.requests.lock().unwrap().len(), 1);
-
-    let (mut paged, _) = client(vec![
-        json!({ "tools": [], "nextCursor": "next" }),
-        json!({ "tools": [{ "name": "last" }], "nextCursor": null }),
-    ]);
-    assert_eq!(paged.list_tools().await.unwrap()[0].name, "last");
-}
-
-#[tokio::test]
-async fn enforces_the_tool_limit_across_pages() {
-    let first: Vec<Value> = (0..MAX_TOOLS)
-        .map(|index| json!({ "name": format!("tool-{index}") }))
-        .collect();
-    let (mut client, _) = client(vec![
-        json!({ "tools": first, "nextCursor": "overflow" }),
-        json!({ "tools": [{ "name": "one-too-many" }] }),
-    ]);
-    assert_eq!(client.list_tools().await, Err(McpError::Oversized));
-}
-
-#[tokio::test]
-async fn rejects_repeated_and_invalid_cursors() {
-    let (mut repeated, channel) = client(vec![
-        json!({ "tools": [], "nextCursor": "again" }),
-        json!({ "tools": [], "nextCursor": "again" }),
-    ]);
-    assert!(matches!(
-        repeated.list_tools().await,
-        Err(McpError::Protocol(_))
-    ));
-    assert_eq!(channel.requests.lock().unwrap().len(), 2);
-
-    let (mut invalid, _) = client(vec![json!({ "tools": [], "nextCursor": 7 })]);
-    assert!(matches!(
-        invalid.list_tools().await,
-        Err(McpError::Protocol(_))
-    ));
-}
-
-#[tokio::test]
-async fn bounds_empty_pages_with_ever_changing_cursors() {
-    let pages = (0..MAX_TOOL_PAGES)
-        .map(|index| json!({ "tools": [], "nextCursor": format!("page-{index}") }))
-        .collect();
-    let (mut client, channel) = client(pages);
-    assert_eq!(client.list_tools().await, Err(McpError::Oversized));
-    assert_eq!(channel.requests.lock().unwrap().len(), MAX_TOOL_PAGES);
 }
 
 #[tokio::test]

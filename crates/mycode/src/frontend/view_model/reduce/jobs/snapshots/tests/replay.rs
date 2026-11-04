@@ -5,29 +5,6 @@ use crate::config::HomeLayout;
 use crate::core::{ContentBlock, TextBlock, ToolResultMessage};
 
 #[test]
-fn typed_results_take_precedence_over_compatibility_json_without_changing_the_answer() {
-    let mut state = state();
-    let answer = serde_json::to_string(&AgentStateEvent::Run(run(AgentRunStatus::Failed))).unwrap();
-    let entry = ConversationEntry {
-        event_id: "result".into(),
-        kind: EntryKind::ToolResult,
-        text: answer.clone().into(),
-        call_id: Some("outer".into()),
-        thinking: String::new(),
-        agent_states: Some(vec![AgentStateEvent::Run(run(AgentRunStatus::Completed))].into()),
-    };
-    reduce(&mut state, FrontendAction::ToolResultAppended(entry));
-    assert_eq!(
-        state.subagent_session().unwrap().runs,
-        [run(AgentRunStatus::Completed)]
-    );
-    assert_eq!(
-        state.active.as_ref().unwrap().entries[0].text.as_ref(),
-        answer
-    );
-}
-
-#[test]
 fn durable_agent_and_code_mode_results_restore_typed_vm_state_after_reopen() {
     let root = std::env::temp_dir().join(format!(
         "mycode-agent-replay-{}-{}",

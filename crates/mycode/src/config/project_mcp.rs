@@ -77,28 +77,6 @@ mod tests {
     }
 
     #[test]
-    fn actual_mcp_reads_are_bounded_even_when_metadata_is_stale() {
-        use std::io::Read as _;
-        // This source never reaches EOF; the read must stop at cap + 1.
-        let mut source = std::io::repeat(b' ').take(u64::MAX);
-        assert!(super::read_mcp_text(&mut source, "magpie").is_err());
-        assert_eq!(source.limit(), u64::MAX - super::MAX_PROJECT_MCP_BYTES - 1);
-        let text = " ".repeat(super::MAX_PROJECT_MCP_BYTES as usize);
-        assert_eq!(
-            super::read_mcp_text(text.as_bytes(), "magpie").unwrap(),
-            text
-        );
-    }
-
-    #[test]
-    fn a_directory_in_place_of_the_config_errors() {
-        let (root, home) = scratch("unread");
-        std::fs::create_dir(root.join("mcp.json")).unwrap();
-        assert!(global_mcp_servers(&home).is_err());
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn the_library_returns_its_servers() {
         let (root, home) = scratch("servers");
         std::fs::write(

@@ -52,8 +52,7 @@
         "crates/mycode/examples/code_mode_latency.rs",
         "crates/mycode/src/tools/code_mode/dispatch.rs",
         "crates/mycode/src/tools/code_mode/journal.rs",
-        "crates/mycode/src/tools/code_mode/tests.rs",
-        "crates/mycode/src/tools/code_mode/image_tests.rs"
+        "crates/mycode/src/tools/code_mode/tests.rs"
       ]
     },
     {

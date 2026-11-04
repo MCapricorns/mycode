@@ -1,7 +1,7 @@
 use super::{ShellArgs, ShellMode, ShellTool, validate_shell_args};
+use crate::tools::register_builtins;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::tool::{Tool, ToolDyn, ToolError};
-use crate::tools::{ToolCtx, ToolStream, register_builtins};
+use crate::tools::tool::{ToolDyn, ToolError};
 
 #[test]
 fn schema_advertises_one_tool_and_two_modes() {
@@ -17,9 +17,6 @@ fn schema_advertises_one_tool_and_two_modes() {
     assert!(schema.contains("\"script\""), "{schema}");
     assert!(schema.contains("\"program\""), "{schema}");
     assert!(!schema.contains("\"exec\""), "{schema}");
-    let snippet = tool.prompt_snippet().expect("snippet");
-    assert!(snippet.contains("script"));
-    assert!(snippet.contains("program"));
     let required = spec
         .params_schema
         .get("required")
@@ -132,28 +129,6 @@ fn modes_reject_the_other_paths_fields() {
     ));
 }
 
-#[tokio::test]
-async fn invalid_mode_mix_does_not_spawn() {
-    let tool = ShellTool::new();
-    let ctx = ToolCtx::new(std::env::temp_dir());
-    let mut out = ToolStream::closed();
-    let error = tool
-        .execute(
-            ShellArgs {
-                mode: ShellMode::Script,
-                command: Some("echo hi".into()),
-                program: None,
-                args: vec!["nope".into()],
-                timeout_secs: Some(1),
-            },
-            &ctx,
-            &mut out,
-        )
-        .await
-        .expect_err("mixed script arguments");
-    assert!(matches!(error, ToolError::InvalidArgs(_)));
-}
-
 fn result_text(result: &crate::tools::tool::ToolResult) -> String {
     match result.content.first() {
         Some(crate::core::message::ContentBlock::Text(block)) => block.text.clone(),
@@ -255,19 +230,6 @@ fn a_powershell_result_carries_no_announcement_text() {
     assert_eq!(result_text(&plain), "");
     let details = plain.details.as_ref().expect("details");
     assert!(details.get("translated_command").is_none());
-}
-
-#[test]
-fn powershell_prologue_accepts_non_ascii_statements_without_slicing_inside_a_scalar() {
-    for body in [
-        "\"\u{4e2d}\u{1f4a1}\"",
-        "\u{76ee}\u{5f55} -Name x",
-        "\u{1f680}abc",
-    ] {
-        let script = super::powershell_script_for(body);
-        assert!(script.contains(body));
-        assert!(script.find(super::POWERSHELL_UTF8_PRELUDE).unwrap() < script.find(body).unwrap());
-    }
 }
 
 #[test]

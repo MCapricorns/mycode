@@ -211,12 +211,12 @@ pub enum ReadOutcome {
         /// Capability key the path resolved to.
         key: String,
     },
-    /// The text window [`read_file`] returns.
+    /// One text window of the file.
     Text(FileRead),
 }
 
 /// Reads one path once: image bytes when the content is a supported picture,
-/// otherwise the text window [`read_file`] returns.
+/// otherwise one text window.
 ///
 /// # Errors
 ///
@@ -267,39 +267,16 @@ pub fn read_any(
     }))
 }
 
-/// Reads a prepared (or internally prepared) UTF-8 file. Test-only: the
-/// `read` tool goes through [`read_any`], which also accepts pictures.
+/// Reads a prepared (or internally prepared) UTF-8 file as a full snapshot.
+///
+/// Unlike [`read_any`], this does not window or strip a UTF-8 BOM. Cancel
+/// and timeout never return a partial snapshot.
 ///
 /// # Errors
 ///
 /// Returns [`ToolError`] when the capability is missing, encoding is rejected,
 /// the file exceeds [`MAX_READ_SCAN_BYTES`], identity changes, or the call is
-/// cancelled. A picture is not text and is reported as such.
-#[cfg(test)]
-pub fn read_file(
-    prepared: Option<&PreparedFile>,
-    cwd: &Path,
-    path: &str,
-    offset: Option<usize>,
-    limit: Option<usize>,
-    cancel: &CancellationToken,
-) -> Result<FileRead, ToolError> {
-    match read_any(prepared, cwd, path, offset, limit, cancel)? {
-        ReadOutcome::Text(read) => Ok(read),
-        ReadOutcome::Image { .. } => Err(ToolError::Execution(format!(
-            "{path}: the file is an image, not text"
-        ))),
-    }
-}
-
-/// Reads a prepared (or internally prepared) UTF-8 file as a full snapshot.
-///
-/// Unlike [`read_file`], this does not window or strip a UTF-8 BOM. Cancel
-/// and timeout never return a partial snapshot.
-///
-/// # Errors
-///
-/// Same as [`read_file`].
+/// cancelled.
 pub(crate) fn read_file_snapshot(
     prepared: Option<&PreparedFile>,
     cwd: &Path,
@@ -362,12 +339,7 @@ pub async fn read_any_async(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use tokio_util::sync::CancellationToken;
-
-    use super::{MAX_BYTES, MAX_MEDIA_INGEST_BYTES, read_file, window_text};
-    use crate::tools::tool::ToolError;
+    use super::{MAX_BYTES, MAX_MEDIA_INGEST_BYTES, window_text};
 
     #[test]
     fn the_ingest_cap_encodes_to_the_provider_ceiling() {
@@ -417,31 +389,5 @@ mod tests {
         assert_eq!(body, format!("first\n{line}"));
         assert!(notice.ends_with("continue with offset=3]"));
         assert_eq!(window_text(&file, Some(3), None).0, "after");
-    }
-
-    #[test]
-    fn an_oversized_unicode_line_keeps_a_valid_bounded_prefix() {
-        let line = "界".repeat(MAX_BYTES);
-        let (text, total, shown, truncated) = window_text(&line, None, None);
-        assert!(truncated);
-        assert_eq!((total, shown), (1, 1));
-        let (body, notice) = text.rsplit_once('\n').unwrap();
-        assert_eq!(body.len(), MAX_BYTES / 3 * 3);
-        assert!(body.chars().all(|ch| ch == '界'));
-        assert!(notice.contains("line 1 alone exceeds"));
-    }
-
-    #[test]
-    fn offset_zero_is_rejected_before_any_io() {
-        let error = read_file(
-            None,
-            Path::new("/no/such"),
-            "missing.txt",
-            Some(0),
-            None,
-            &CancellationToken::new(),
-        )
-        .expect_err("offset 0");
-        assert!(matches!(error, ToolError::InvalidArgs(message) if message.contains("1-based")));
     }
 }

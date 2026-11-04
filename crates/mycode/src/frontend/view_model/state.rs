@@ -258,14 +258,6 @@ impl WorkspaceState {
         )
     }
 
-    /// Whether the inspector has retained or active agent records to display.
-    pub fn has_subagents(&self) -> bool {
-        !self.live_jobs.is_empty()
-            || self
-                .subagent_session()
-                .is_some_and(|session| !session.runs.is_empty())
-    }
-
     /// Final runtime of a finished subagent call, in milliseconds. The
     /// latest entry wins when a call id was reused.
     pub fn job_elapsed(&self, call_id: &str) -> Option<u64> {
@@ -450,11 +442,6 @@ pub enum FrontendAction {
     /// A settings save failed. The document stays dirty and a chat turn's
     /// `sending` flag is left alone.
     SettingsSaveFailed(String),
-    /// One MCP server's API key was stored or cleared; refreshes key markers.
-    ProviderKeySaved {
-        /// MCP server ids with a stored key.
-        mcp_keys: Vec<String>,
-    },
     /// The user steered the running turn: the text goes to the model
     /// before its next step, without stopping the turn. It shows as
     /// pending until the ledger commits it.

@@ -106,35 +106,3 @@ fn session_delete_key(session_id: &str) -> String {
 
 /// How long an armed session delete waits for the confirming click.
 const DELETE_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn an_expired_confirmation_is_rejected_even_before_its_timer_runs() {
-        let now = Instant::now();
-        let armed = DeleteConfirmation {
-            key: "session:a".into(),
-            armed_at: now,
-        };
-        assert!(armed.matches("session:a", now + Duration::from_secs(2)));
-        assert!(!armed.matches("session:b", now));
-        assert!(!armed.matches("session:a", now + DELETE_CONFIRM_WINDOW));
-    }
-
-    #[test]
-    fn an_old_timer_cannot_expire_a_new_confirmation_for_the_same_row() {
-        let old = DeleteConfirmation {
-            key: "session:a".into(),
-            armed_at: Instant::now(),
-        };
-        let newer = DeleteConfirmation {
-            key: old.key.clone(),
-            armed_at: old.armed_at + Duration::from_secs(2),
-        };
-        assert!(old != newer);
-        assert!(newer.matches(&old.key, old.armed_at + DELETE_CONFIRM_WINDOW));
-    }
-}

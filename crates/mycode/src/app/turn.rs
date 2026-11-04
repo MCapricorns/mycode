@@ -28,8 +28,7 @@ use self::compact::{DeferredSummaries, publish_visible_summary};
 use self::control::TurnControl;
 use self::prompt::SessionPrompt;
 pub(crate) use self::prompt::{
-    MCP_CALL_GUIDANCE, push_scratch_note, push_workspace_path_guidance, push_workspace_skills,
-    split_scratch_root, workspace_extra_roots,
+    push_mcp_section, push_workspace_roots, push_workspace_skills, workspace_extra_roots,
 };
 
 /// One model turn: resolve the provider, stream the reply into the event
@@ -312,35 +311,11 @@ async fn run_chat_turn_on(
         }
         registry
     });
-    // Code mode: `run_code` holds the registry so a script's `call(name, …)`
-    // is a runtime lookup. It registers before the MCP meta tools, so the
-    // native-name snapshot below already contains `run_code`/`wait_code`.
-    // The cell table is process-wide, so both tools carry this session's id
-    // and can only start or collect that session's cells.
-    registry.register(Arc::new(crate::tools::RunCodeTool::new(
-        Arc::clone(&registry),
-        Arc::clone(&state.code_cells),
-        session_id.to_owned(),
-    )));
-    registry.register(Arc::new(crate::tools::WaitCodeTool::new(
-        Arc::clone(&state.code_cells),
-        session_id.to_owned(),
-    )));
-    // Code-mode-only: the model's top-level list is the shell plus the two
-    // code-mode tools; every other registered tool (read/write/edit/grep/
-    // find/ask_user/agent and the MCP bridge) is reachable through `call`
-    // inside a script. The names list already holds the platform shell.
-    {
-        let names = registry.names();
-        let mut exposed = vec!["run_code", "wait_code"];
-        exposed.extend(
-            names
-                .iter()
-                .map(String::as_str)
-                .filter(|name| crate::tools::ShellKind::is_tool_name(name)),
-        );
-        registry.expose_only(&exposed);
-    }
+    // Code mode registers before the MCP meta tools, so the native-name
+    // snapshot below already contains `run_code`/`wait_code`. The cell table
+    // is process-wide; the session id keeps these tools on this session's
+    // cells.
+    crate::tools::enable_code_mode(&registry, &state.code_cells, session_id);
     // Reconcile the live Library between requests; handshakes remain
     // progressive, and an initially empty catalog can gain servers mid-turn.
     let mcp_refresh = crate::app::mcp_tools::McpRefresh::new(
@@ -359,8 +334,7 @@ async fn run_chat_turn_on(
         cwd: cwd.clone(),
         registry: Arc::clone(&registry),
         extra_roots: extra_roots.clone(),
-        subagents: settings.subagents.clone(),
-        skills: settings.skills.clone(),
+        settings: settings.clone(),
     };
     let system_prompt = control
         .unless_cancelled(prompt_refresh.render(mcp_note))

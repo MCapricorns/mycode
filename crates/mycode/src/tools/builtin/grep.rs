@@ -373,10 +373,6 @@ impl Tool for GrepTool {
          gitignored files are skipped."
     }
 
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some("grep: search file contents (pattern, optional is_regex/path/include/exclude).")
-    }
-
     fn search_access(&self) -> Option<SearchAccess> {
         Some(SearchAccess::Content)
     }

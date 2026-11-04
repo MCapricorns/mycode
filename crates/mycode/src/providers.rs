@@ -49,8 +49,6 @@ const MAGPIE_SESSION_HEADER: &str = "x-magpie-session";
 /// One resolved streaming provider endpoint.
 #[derive(Clone)]
 pub struct ResolvedProvider {
-    /// Provider id from settings, used on the usage log line.
-    pub id: String,
     /// Wire protocol kind from settings.
     pub kind: String,
     /// Full request endpoint URL.
@@ -126,7 +124,6 @@ impl ResolvedProvider {
         let mut headers = vec![("user-agent".to_owned(), user_agent.to_owned())];
         headers.extend(extra);
         Ok(Self {
-            id: settings.id.clone(),
             kind: settings.kind.clone(),
             endpoint,
             model: model.to_owned(),

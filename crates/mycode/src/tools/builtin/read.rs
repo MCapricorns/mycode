@@ -58,13 +58,6 @@ impl Tool for ReadTool {
          them. Hidden files are readable."
     }
 
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(
-            "read: fetch file contents (path, optional 1-based offset / limit); \
-             images are shown to the model.",
-        )
-    }
-
     fn file_access(&self) -> Option<FileAccess> {
         Some(FileAccess::ExistingContent)
     }

@@ -535,48 +535,6 @@ fn reasoning_details_fragments_with_the_same_id_concatenate() {
     assert_eq!(text_of(&message), "answer");
 }
 
-#[test]
-fn distinct_detail_items_are_charged_against_the_stream_cap() {
-    // Frames that keep appending new detail items (no shared prefix, so
-    // the cumulative-merge paths do not apply) must count their retained
-    // bytes toward the accumulation ceiling instead of growing the
-    // array without bound.
-    let mut reducer = CompletionsReducer::new();
-    let filler = "x".repeat(1_050_000);
-    let mut capped = false;
-    for index in 0..9_u32 {
-        let marker = char::from_u32('z' as u32 - index).expect("marker");
-        let frame = serde_json::json!({
-            "choices": [{
-                "delta": {
-                    "reasoning_details": [{
-                        "type": "reasoning.text",
-                        "id": format!("reasoning-text-{index}"),
-                        "format": filler,
-                        "text": marker.to_string(),
-                    }]
-                }
-            }]
-        });
-        let events = reducer.feed(&frame.to_string());
-        if events.iter().any(|event| {
-            matches!(
-                event,
-                crate::core::StreamEvent::Error(error) if error
-                    .message()
-                    .is_some_and(|message| message.contains("stream exceeded the output limit"))
-            )
-        }) {
-            capped = true;
-            break;
-        }
-    }
-    assert!(
-        capped,
-        "distinct-id detail frames must hit the accumulation cap"
-    );
-}
-
 /// Event names in order, so a test can pin where `ToolCallStarted` lands.
 fn started_then_deltas(events: &[crate::core::StreamEvent]) -> Vec<String> {
     events

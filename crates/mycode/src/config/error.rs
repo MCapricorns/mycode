@@ -20,8 +20,6 @@ pub enum ConfigErrorKind {
     AccessControl,
     /// A source file could not be opened, read, or inspected.
     Io,
-    /// JSON input was not valid UTF-8.
-    NonUtf8,
     /// A byte bound was exceeded.
     Oversized,
     /// An owned authority document or value failed strict validation.
@@ -122,7 +120,6 @@ impl ConfigError {
             ConfigErrorKind::LinkEscape => "owned path link traversal was rejected",
             ConfigErrorKind::AccessControl => "owned path access control failed",
             ConfigErrorKind::Io => "configuration file I/O failed",
-            ConfigErrorKind::NonUtf8 => "configuration JSON is not UTF-8",
             ConfigErrorKind::Oversized => "configuration size limit was exceeded",
             ConfigErrorKind::AuthorityValidation => "owned authority document is invalid",
             ConfigErrorKind::RevisionConflict => "owned authority revision conflict",

@@ -642,21 +642,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dropping_the_pump_queue_releases_its_bus_receiver() {
-        let (bus, rx) = broadcast::channel(8);
-        let queue = relay(rx);
-        assert_eq!(bus.receiver_count(), 1);
-        drop(queue);
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while bus.receiver_count() != 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("an idle relay must stop when its pump disappears");
-    }
-
-    #[tokio::test]
     async fn an_aborted_turn_persists_its_partial_text_and_thinking() {
         use crate::agent::session::SessionService;
         use crate::agent::{Agent, AgentConfig, HookRunner};

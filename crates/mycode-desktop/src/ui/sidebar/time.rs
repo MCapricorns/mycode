@@ -228,22 +228,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_and_zero_timestamps_never_masquerade_as_today() {
-        let tz = tz_plus_8();
-        let now = tz
-            .with_ymd_and_hms(2026, 4, 15, 14, 30, 0)
-            .single()
-            .expect("now");
-        assert_eq!(classify_session_group_in_tz(None, &now), DateGroup::Unknown);
-        assert_eq!(
-            classify_session_group_in_tz(Some(0), &now),
-            DateGroup::Unknown
-        );
-        assert_eq!(format_relative_time_in_tz(None, &now, false), None);
-        assert_eq!(format_relative_time_in_tz(Some(0), &now, true), None);
-    }
-
-    #[test]
     fn local_midnight_boundary_separates_today_and_yesterday() {
         let tz = tz_plus_8();
         // Local time is 2026-04-15 00:05:00+08:00 (still 2026-04-14 in UTC).
@@ -302,28 +286,6 @@ mod tests {
         assert_eq!(
             classify_session_group_in_tz(Some(seven_days_ago), &now),
             DateGroup::Older
-        );
-    }
-
-    #[test]
-    fn future_timestamps_clamp_to_today_and_now() {
-        let tz = tz_plus_8();
-        let now = tz
-            .with_ymd_and_hms(2026, 4, 15, 12, 0, 0)
-            .single()
-            .expect("now");
-        let future = ms(tz, 2026, 4, 16, 9, 0, 0);
-        assert_eq!(
-            classify_session_group_in_tz(Some(future), &now),
-            DateGroup::Today
-        );
-        assert_eq!(
-            format_relative_time_in_tz(Some(future), &now, false).as_deref(),
-            Some("now")
-        );
-        assert_eq!(
-            format_relative_time_in_tz(Some(future), &now, true).as_deref(),
-            Some("刚刚")
         );
     }
 

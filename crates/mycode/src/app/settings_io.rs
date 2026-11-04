@@ -1,17 +1,16 @@
-//! Durable settings and secrets I/O: reads with revision tracking, CAS
-//! saves, and key storage. A document that fails strict validation is
-//! quarantined and reset by the repair layer rather than edited here.
+//! Durable settings and secrets I/O: reads with revision tracking and CAS
+//! saves. A document that fails strict validation is quarantined and reset
+//! by the repair layer rather than edited here.
 
 use crate::config::{
     AppSettings, AuthorityRevision, DocumentRepair, HomeLayout, read_app_settings_snapshot,
-    read_provider_secrets_with_repair, replace_app_settings, update_provider_key,
+    read_provider_secrets_with_repair, replace_app_settings,
 };
 
 /// Settings loaded for the UI, including any documents reset on this read.
 pub(crate) struct LoadedSettings {
     pub settings: AppSettings,
     pub revision: AuthorityRevision,
-    pub provider_keys: Vec<String>,
     pub mcp_keys: Vec<String>,
     pub repairs: Vec<DocumentRepair>,
 }
@@ -28,12 +27,11 @@ pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String>
     if let Some(repair) = secrets_repair {
         repairs.push(repair);
     }
-    let (provider_keys, mcp_keys) = split_key_ids(&secrets);
+    let mcp_keys = mcp_key_ids(&secrets);
     apply_network(&settings);
     Ok(LoadedSettings {
         settings,
         revision,
-        provider_keys,
         mcp_keys,
         repairs,
     })
@@ -59,42 +57,13 @@ pub(crate) fn render_config_error(error: &crate::config::ConfigError) -> String 
     format!("settings error: {}", error.summary())
 }
 
-/// Splits stored secret ids into provider and MCP key markers.
-fn split_key_ids(secrets: &crate::config::ProviderSecrets) -> (Vec<String>, Vec<String>) {
-    let mut provider_keys = Vec::new();
-    let mut mcp_keys = Vec::new();
-    for id in secrets.provider_ids() {
-        if let Some(server_id) = id.strip_prefix("mcp-") {
-            if !server_id.is_empty() {
-                mcp_keys.push(server_id.to_owned());
-            }
-        } else {
-            provider_keys.push(id.to_owned());
-        }
-    }
-    (provider_keys, mcp_keys)
-}
-
-/// Stores or clears one provider key, returning the refreshed key-id lists
-/// so the UI updates its markers in place.
-///
-/// The key lands in one locked read-modify-write: concurrent saves (several
-/// keys from one `mcp.json` import) each apply to the current document
-/// instead of failing a revision check against one another.
-pub(crate) fn save_provider_key(
-    home: &HomeLayout,
-    provider_id: &str,
-    api_key: &str,
-) -> Result<(Vec<String>, Vec<String>), String> {
-    // A damaged store is quarantined and reset (keeping intact keys) first;
-    // the locked update below rejects a document it cannot decode.
-    read_provider_secrets_with_repair(home).map_err(|error| render_config_error(&error))?;
-    let api_key = crate::config::normalize_api_key(api_key);
-    let updated = update_provider_key(
-        home,
-        provider_id,
-        (!api_key.is_empty()).then_some(api_key.as_str()),
-    )
-    .map_err(|error| render_config_error(&error))?;
-    Ok(split_key_ids(&updated))
+/// MCP server ids that have a stored key marker.
+fn mcp_key_ids(secrets: &crate::config::ProviderSecrets) -> Vec<String> {
+    secrets
+        .provider_ids()
+        .into_iter()
+        .filter_map(|id| id.strip_prefix("mcp-"))
+        .filter(|server_id| !server_id.is_empty())
+        .map(str::to_owned)
+        .collect()
 }

@@ -98,13 +98,6 @@ pub enum BridgeCommand {
         /// The complete replacement settings.
         settings: crate::config::AppSettings,
     },
-    /// Store or clear one provider API key in the secret store.
-    SaveProviderKey {
-        /// Provider identity from settings.
-        provider_id: String,
-        /// The key; empty clears the stored entry.
-        api_key: String,
-    },
     /// Run one model turn over stored history and stream the reply. The
     /// turn reads the branch's durable head itself, so a snapshot that is
     /// behind cannot fail it.
@@ -538,8 +531,6 @@ pub struct SettingsSnapshot {
     pub settings: crate::config::AppSettings,
     /// Revision to send back with the next save.
     pub revision: crate::config::AuthorityRevision,
-    /// Provider ids that already have a stored key.
-    pub provider_keys: Vec<String>,
     /// MCP server ids that already have a stored key.
     pub mcp_keys: Vec<String>,
     /// Product documents backed up and replaced with defaults on this load.
@@ -574,8 +565,6 @@ pub enum BridgeReply {
     Settings(Result<SettingsSnapshot, String>),
     /// Settings save result: the new revision.
     SettingsSaved(Result<crate::config::AuthorityRevision, String>),
-    /// Provider key save result: refreshed key-id lists (providers, MCP).
-    ProviderKeySaved(Result<(Vec<String>, Vec<String>), String>),
     /// Chat turn acceptance; streaming continues over the event channel.
     ChatStarted(Result<(), String>),
     /// Chat cancel acceptance. The turn ends with [`BridgeEvent::ChatFailed`]

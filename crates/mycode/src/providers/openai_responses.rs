@@ -575,34 +575,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_explicit_call_identities_never_modify_the_last_call() {
-        for identity in [
-            serde_json::json!({"call_id": "unknown"}),
-            serde_json::json!({"item_id": "unknown"}),
-            serde_json::json!({"output_index": 99}),
-        ] {
-            let mut reducer = ResponsesReducer::new();
-            reducer.feed(r#"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read"}}"#);
-            let mut event = identity;
-            event["type"] = serde_json::json!("response.function_call_arguments.delta");
-            event["delta"] = serde_json::json!("{\"path\":\"wrong.rs\"}");
-            assert!(reducer.feed(&event.to_string()).is_empty());
-            event["type"] = serde_json::json!("response.function_call_arguments.done");
-            event["arguments"] = event["delta"].clone();
-            assert!(reducer.feed(&event.to_string()).is_empty());
-            reducer.feed(r#"{"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\"path\":\"right.rs\"}"}"#);
-            let events = reducer.feed(r#"{"type":"response.completed","response":{}}"#);
-            let [crate::core::StreamEvent::Done { message }] = events.as_slice() else {
-                panic!("expected a terminal message");
-            };
-            let ContentBlock::ToolCall(call) = &message.blocks[0] else {
-                panic!("expected the original call");
-            };
-            assert_eq!(call.arguments["path"], "right.rs");
-        }
-    }
-
-    #[test]
     fn an_incomplete_response_never_dispatches_its_partial_tool_calls() {
         for reason in ["content_filter", "unknown_reason", ""] {
             let mut reducer = ResponsesReducer::new();

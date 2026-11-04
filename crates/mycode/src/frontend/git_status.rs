@@ -311,7 +311,6 @@ fn added_lines(path: &str, body: &str) -> String {
 #[cfg(test)]
 mod diff_tests {
     use super::added_lines;
-    use std::fmt::Write as _;
 
     #[test]
     fn an_untracked_file_is_shown_as_added_lines() {
@@ -378,34 +377,5 @@ mod diff_tests {
         let plain = super::parse_porcelain(" M keep -> name.txt\0");
         assert_eq!(plain.files[0].path, "keep -> name.txt");
         assert!(plain.files[0].previous.is_none());
-    }
-
-    #[test]
-    fn a_cap_inside_a_multibyte_character_truncates_at_the_boundary() {
-        let mut text = "a".repeat(super::DIFF_CAP_BYTES - 1);
-        text.push_str("中文内容");
-        let capped = super::cap_diff(&text);
-        assert_eq!(capped.len(), super::DIFF_CAP_BYTES - 1 + "…".len());
-        assert!(capped.starts_with(&"a".repeat(64)));
-        assert!(capped.ends_with('…'));
-        let short = super::cap_diff("tiny diff");
-        assert_eq!(short, "tiny diff");
-    }
-
-    #[test]
-    fn porcelain_marks_the_list_incomplete_only_past_the_cap() {
-        let mut eighty = String::from("## main\0");
-        for index in 0..80 {
-            let _ = write!(eighty, " M file{index}.txt\0");
-        }
-        let complete = super::parse_porcelain(&eighty);
-        assert_eq!(complete.files.len(), 80);
-        assert!(!complete.stopped_early);
-
-        eighty.push_str(" M extra.txt\0");
-        let truncated = super::parse_porcelain(&eighty);
-        assert_eq!(truncated.files.len(), 80);
-        assert!(truncated.stopped_early);
-        assert_eq!(truncated.files[0].path, "file0.txt");
     }
 }

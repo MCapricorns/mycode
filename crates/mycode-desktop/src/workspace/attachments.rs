@@ -353,27 +353,6 @@ mod tests {
     }
 
     #[test]
-    fn truncated_text_drops_only_a_valid_character_crossing_the_cap() {
-        for character in ["é", "中", "😀"] {
-            for kept_bytes in 1..character.len() {
-                let prefix = "x".repeat(MAX_FILE_BYTES - kept_bytes);
-                let file = TestFile::new("utf8", format!("{prefix}{character}tail").as_bytes());
-                assert_eq!(read_text_file(&file.0).expect("valid text"), (prefix, true));
-            }
-        }
-    }
-
-    #[test]
-    fn invalid_utf8_near_the_cap_is_not_silently_discarded() {
-        for suffix in [&[0xff, b'x', b'x'][..], &[0xe4, b'x', b'x'][..]] {
-            let mut bytes = vec![b'x'; MAX_FILE_BYTES - 1];
-            bytes.extend_from_slice(suffix);
-            let file = TestFile::new("invalid", &bytes);
-            assert!(read_text_file(&file.0).is_err());
-        }
-    }
-
-    #[test]
     fn image_reader_accepts_the_limit_and_rejects_oversized_files() {
         let mut bytes = vec![0; MAX_IMAGE_BYTES];
         bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");

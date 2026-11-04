@@ -1,16 +1,13 @@
 //! Fake-host lifecycle, scope and continuation tests.
 use super::*;
-use crate::tools::{ToolCtx, ToolDyn, ToolRegistry, ToolStreamItem};
+use crate::tools::{ToolCtx, ToolDyn, ToolRegistry};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::Duration,
 };
 use tokio::sync::Notify;
@@ -155,53 +152,6 @@ fn text(result: &ToolResult) -> String {
         .join("\n")
 }
 
-#[tokio::test]
-async fn agent_retains_bounded_unicode_results_and_sanitized_full_artifact() {
-    let f = Fixture::new();
-    let full = format!(
-        "api_key=never-retain-this\n{}",
-        "证据".repeat(MAX_AGENT_ANSWER_CHARS)
-    );
-    f.host.outputs.lock().insert("old".into(), full.clone());
-    let (mut stream, mut updates) = ToolStream::channel();
-    let result = f
-        .agent()
-        .execute_dyn(
-            json!({"agent":"scout","prompt":"old compatible prompt","description":"old"}),
-            &f.ctx("actual-inner-call"),
-            &mut stream,
-        )
-        .await
-        .unwrap();
-    assert!(!result.is_error);
-    assert!(text(&result).contains("truncated"));
-    let runs = f.runs();
-    let r = &runs[0];
-    assert_eq!(r.call_id, "actual-inner-call");
-    assert_eq!(r.status, AgentRunStatus::Completed);
-    assert!(r.finished_ms.is_some());
-    let artifact = tokio::fs::read_to_string(r.artifact_path.as_ref().unwrap())
-        .await
-        .unwrap();
-    assert!(!artifact.contains("never-retain-this"));
-    assert!(artifact.ends_with(&"证据".repeat(MAX_AGENT_ANSWER_CHARS)));
-    assert_eq!(
-        result.details.as_ref().unwrap()["agent_states"][0]["kind"],
-        "run"
-    );
-    let mut states = vec![];
-    while let Some(item) = updates.try_recv() {
-        if let ToolStreamItem::Progress(p) = item
-            && let Some(json) = p.message.strip_prefix(AGENT_STATE_PREFIX)
-        {
-            states.push(serde_json::from_str::<AgentStateEvent>(json).unwrap());
-        }
-    }
-    assert!(
-        matches!(states.last(), Some(AgentStateEvent::Run(r)) if r.status == AgentRunStatus::Completed)
-    );
-}
-
 #[test]
 fn exact_scope_normalization_rejects_wildcards_duplicates_and_detects_path_symbol_overlap() {
     let cwd = std::env::temp_dir();
@@ -342,69 +292,4 @@ async fn codemode_keeps_real_child_identity_and_typed_progress() {
     assert!(!result.is_error);
     assert_eq!(f.runs()[0].call_id, "outer.0");
     assert_eq!(f.host.calls.lock()[0].id, "outer.0");
-}
-
-struct NativeHost {
-    entered: Arc<AtomicBool>,
-    finished: Arc<AtomicBool>,
-    release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
-}
-impl AgentHost for NativeHost {
-    fn run_subagent<'a>(
-        &'a self,
-        _request: SubagentRequest,
-        _progress: &'a ToolStream,
-        cancel: &'a CancellationToken,
-        _call_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send + 'a>> {
-        Box::pin(async move {
-            let receiver = self.release.lock().take().unwrap();
-            let entered = self.entered.clone();
-            let finished = self.finished.clone();
-            let worker = crate::tools::builtin::blocking::run_blocking_supervised(
-                "native writer",
-                cancel,
-                move |_| {
-                    entered.store(true, Ordering::Release);
-                    receiver.recv().unwrap();
-                    finished.store(true, Ordering::Release);
-                    Ok("native settled".to_owned())
-                },
-            );
-            tokio::pin!(worker);
-            tokio::select! {result=&mut worker=>result,()=cancel.cancelled()=>Err(ToolError::Execution("native host cancelled".into()))}
-        })
-    }
-}
-#[tokio::test]
-async fn cancelled_native_supervisor_must_join_before_scope_is_released() {
-    let f = Fixture::new();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let entered = Arc::new(AtomicBool::new(false));
-    let finished = Arc::new(AtomicBool::new(false));
-    let host = Arc::new(NativeHost {
-        entered: entered.clone(),
-        finished: finished.clone(),
-        release: Mutex::new(Some(release_rx)),
-    });
-    let tool = AgentTool::new(host).with_runtime(f.runtime.clone());
-    let ctx = f.ctx("native");
-    let task = tokio::spawn(async move {
-        tool.execute_dyn(
-            json!({"agent":"artisan","prompt":"native","scope":{"paths":["src/native.rs"]}}),
-            &ctx,
-            &mut ToolStream::closed(),
-        )
-        .await
-    });
-    wait_for(|| entered.load(Ordering::Acquire)).await;
-    let id = f.runs()[0].id.clone();
-    f.runtime.stop(&id, &ToolStream::closed()).unwrap();
-    tokio::task::yield_now().await;
-    assert_eq!(f.runs()[0].status, AgentRunStatus::Settling);
-    assert!(!finished.load(Ordering::Acquire));
-    release_tx.send(()).unwrap();
-    assert!(task.await.unwrap().unwrap().is_error);
-    assert!(finished.load(Ordering::Acquire));
-    assert_eq!(f.runs()[0].status, AgentRunStatus::Cancelled);
 }

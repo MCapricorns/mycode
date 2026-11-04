@@ -193,7 +193,6 @@ impl Drop for UnresumedChild {
 /// the same way as `tokio::process::Child`.
 pub struct WindowsStdioProcess {
     process: OwnedHandle,
-    pid: u32,
     /// Parent write end when stdin was requested as a pipe.
     pub stdin: Option<tokio::process::ChildStdin>,
     /// Parent read end of the stdout pipe.
@@ -375,7 +374,6 @@ impl WindowsStdioProcess {
         let stderr = Some(adopt_stderr(stderr_read).map_err(reap)?);
         Ok(Self {
             process,
-            pid: information.dwProcessId,
             stdin,
             stdout,
             stderr,
@@ -383,27 +381,6 @@ impl WindowsStdioProcess {
             kill_on_drop,
             exit: None,
         })
-    }
-
-    /// Process id while the child has not been observed to exit.
-    #[must_use]
-    pub fn id(&self) -> Option<u32> {
-        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
-        use windows_sys::Win32::System::Threading::WaitForSingleObject;
-
-        if self.exit.is_some() {
-            return None;
-        }
-        // SAFETY: `process` is a live process handle. A zero timeout only
-        // observes whether it is already signaled.
-        let waited = unsafe { WaitForSingleObject(self.process.as_raw_handle(), 0) };
-        if waited == WAIT_TIMEOUT {
-            Some(self.pid)
-        } else if waited == WAIT_OBJECT_0 {
-            None
-        } else {
-            Some(self.pid)
-        }
     }
 
     /// Ends the kill-on-close Job, including descendants.
@@ -817,71 +794,4 @@ fn env_os<'a>(env: &'a [(OsString, OsString)], key: &str) -> Option<&'a OsStr> {
     env.iter()
         .find(|(name, _)| name.to_string_lossy().eq_ignore_ascii_case(key))
         .map(|(_, value)| value.as_os_str())
-}
-
-#[cfg(test)]
-mod resolve_tests {
-    use std::ffi::OsString;
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use super::resolve_bare_program;
-
-    static SCRATCH: AtomicU64 = AtomicU64::new(0);
-
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        fn new(label: &str) -> Self {
-            let n = SCRATCH.fetch_add(1, Ordering::Relaxed);
-            let dir = std::env::temp_dir()
-                .join(format!("mycode-bare-{label}-{}-{n}", std::process::id()));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).expect("scratch dir");
-            Self(dir)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn touch(dir: &Path, name: &str) {
-        fs::write(dir.join(name), b"").expect("touch");
-    }
-
-    fn env_with(path: &Path, pathext: &str) -> Vec<(OsString, OsString)> {
-        vec![
-            (OsString::from("PATH"), path.as_os_str().to_os_string()),
-            (OsString::from("PATHEXT"), OsString::from(pathext)),
-        ]
-    }
-
-    #[test]
-    fn bare_npx_resolves_to_npx_cmd() {
-        let scratch = Scratch::new("cmd");
-        touch(&scratch.0, "npx.cmd");
-        let found =
-            resolve_bare_program(Path::new("npx"), &env_with(&scratch.0, "")).expect("npx.cmd");
-        assert_eq!(found, scratch.0.join("npx.cmd"));
-    }
-
-    #[test]
-    fn pathext_order_picks_exe_before_cmd_and_honors_a_cmd_first_list() {
-        let scratch = Scratch::new("order");
-        touch(&scratch.0, "npx.exe");
-        touch(&scratch.0, "npx.cmd");
-        let exe = resolve_bare_program(
-            Path::new("npx"),
-            &env_with(&scratch.0, ".COM;.EXE;.BAT;.CMD"),
-        )
-        .expect("exe");
-        assert_eq!(exe, scratch.0.join("npx.exe"));
-        let cmd = resolve_bare_program(Path::new("npx"), &env_with(&scratch.0, ".CMD;.EXE"))
-            .expect("cmd");
-        assert_eq!(cmd, scratch.0.join("npx.cmd"));
-    }
 }

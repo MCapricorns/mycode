@@ -442,16 +442,6 @@ fn candidate_starts(
         for (index, tok) in haystack.tokens.iter().enumerate() {
             if tok.orig_end >= next_cancel_check {
                 check_cancel(Some(cancel))?;
-                // Test hook only. Production cancel still uses the token above.
-                // The threshold defaults to `usize::MAX`, so a real search never
-                // takes this arm. It lets a test prove the byte checkpoint runs
-                // before the token index would have been a multiple of the interval.
-                #[cfg(test)]
-                if tok.orig_end >= fuzzy_test_cancel_at() {
-                    return Err(ToolError::Execution(format!(
-                        "file operation cancelled before completion{INTERRUPTED_NOTE}"
-                    )));
-                }
                 next_cancel_check = tok.orig_end.saturating_add(FUZZY_CANCEL_INTERVAL);
             }
             if !tok.is_word {
@@ -646,91 +636,4 @@ fn preview_excerpt(
         excerpt.insert(0, '…');
     }
     excerpt
-}
-
-#[cfg(test)]
-std::thread_local! {
-    static FUZZY_TEST_CANCEL_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
-}
-
-#[cfg(test)]
-fn fuzzy_test_cancel_at() -> usize {
-    FUZZY_TEST_CANCEL_AT.with(std::cell::Cell::get)
-}
-
-#[cfg(test)]
-struct FuzzyCancelGuard(usize);
-
-#[cfg(test)]
-impl FuzzyCancelGuard {
-    fn set(at: usize) -> Self {
-        let previous = FUZZY_TEST_CANCEL_AT.with(|cell| cell.replace(at));
-        Self(previous)
-    }
-}
-
-#[cfg(test)]
-impl Drop for FuzzyCancelGuard {
-    fn drop(&mut self) {
-        let restore = self.0;
-        FUZZY_TEST_CANCEL_AT.with(|cell| cell.set(restore));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{FUZZY_CANCEL_INTERVAL, FuzzyCancelGuard, FuzzyPlan, plan_fuzzy};
-    use crate::tools::tool::ToolError;
-    use tokio_util::sync::CancellationToken;
-
-    #[test]
-    fn automatic_fallback_keeps_the_fuzzy_needle_bound() {
-        let needle = "word ".repeat(100);
-        let mut planned = Vec::new();
-        let error = super::plan_fuzzy_fallback(
-            &needle,
-            FuzzyPlan {
-                pattern: &needle,
-                replacement: "x",
-                max_distance: 1,
-            },
-            0,
-            &mut planned,
-            &mut 0,
-            &CancellationToken::new(),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("256 normalized characters"));
-        assert!(planned.is_empty());
-    }
-
-    #[test]
-    fn fuzzy_cancel_checks_bytes_during_candidate_scan() {
-        let _guard = FuzzyCancelGuard::set(FUZZY_CANCEL_INTERVAL);
-        let body = "zzzz ".repeat(900);
-        assert!(body.len() > FUZZY_CANCEL_INTERVAL);
-        assert!(body.split_whitespace().count() < FUZZY_CANCEL_INTERVAL);
-        let cancel = CancellationToken::new();
-        let mut planned = Vec::new();
-        let mut replacement_bytes = 0usize;
-        let error = plan_fuzzy(
-            &body,
-            FuzzyPlan {
-                pattern: "a b c d e f g h i j",
-                replacement: "x",
-                max_distance: 1,
-            },
-            0,
-            &mut planned,
-            &mut replacement_bytes,
-            &cancel,
-        )
-        .expect_err("byte checkpoint");
-        match error {
-            ToolError::Execution(message) => {
-                assert!(message.contains("cancelled"), "{message}");
-            }
-            other => panic!("unexpected error: {other}"),
-        }
-    }
 }

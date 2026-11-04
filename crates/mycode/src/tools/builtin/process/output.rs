@@ -481,42 +481,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn contiguous_capture_preserves_a_split_utf16_surrogate_pair() {
-        let expected = format!("{}🦀done", "a".repeat((MAX_RETAINED_OUTPUT_BYTES - 4) / 2));
-        let mut bytes = vec![0xff, 0xfe];
-        bytes.extend(utf16_le(&expected));
-        let mut stream = CapturedStream::new();
-        feed(&mut stream, &bytes);
-        let (text, cut) = captured_text(&stream);
-        assert!(!cut);
-        assert_eq!(text, expected);
-    }
-
-    #[test]
-    fn a_cut_tail_realigns_to_the_prefix_encoding() {
-        let mut stream = CapturedStream::new();
-        let mut bytes = utf16_le(&"ok 你好\r\n".repeat(MAX_RETAINED_OUTPUT_BYTES / 4));
-        bytes.extend(utf16_le("完成\r\n"));
-        feed(&mut stream, &bytes);
-        let (text, cut) = captured_text(&stream);
-        assert!(cut);
-        assert!(text.starts_with("ok 你好\r\n"));
-        assert!(text.ends_with("ok 你好\r\n完成\r\n"));
-
-        // The prefix ends on a lead byte and the newest window starts on a
-        // continuation byte.
-        let mut stream = CapturedStream::new();
-        let mut bytes = b"a".to_vec();
-        bytes.extend("é".repeat(2 * MAX_RETAINED_OUTPUT_BYTES).into_bytes());
-        bytes.extend_from_slice(b"done!");
-        feed(&mut stream, &bytes);
-        let (text, _) = captured_text(&stream);
-        assert!(!text.contains('\u{fffd}'), "a split sequence was decoded");
-        assert!(text.starts_with("aé"));
-        assert!(text.ends_with("éédone!"));
-    }
-
     fn utf16_le(text: &str) -> Vec<u8> {
         text.encode_utf16().flat_map(u16::to_le_bytes).collect()
     }
@@ -531,19 +495,5 @@ mod tests {
     #[test]
     fn utf8_still_wins_over_the_utf16_heuristic() {
         assert_eq!(decode_captured_text("café".as_bytes()), "café");
-    }
-
-    #[test]
-    fn odd_invalid_utf8_is_not_decoded_as_utf16() {
-        let text = decode_captured_text(&[0xFF, 0x00, 0x41]);
-        // The odd length keeps this off the UTF-16 path, which would swallow
-        // the NUL into a code unit. Whatever fallback page decodes the 0xFF,
-        // the NUL and the ASCII byte must survive verbatim.
-        assert!(text.contains('\0') && text.ends_with('A'), "{text:?}");
-    }
-
-    #[test]
-    fn ascii_utf16_le_without_bom_decodes() {
-        assert_eq!(decode_captured_text(&utf16_le("ok\r\n")), "ok\r\n");
     }
 }

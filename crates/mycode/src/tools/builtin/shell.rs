@@ -20,7 +20,6 @@
 //! not a sandbox. Valid calls run directly with no Core permission prompt.
 //! `write` and `edit` stay available. `read`, `grep`, and `find` stay
 //! in-process. File edits from either path are not undone.
-use std::fmt::Write as _;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -46,8 +45,8 @@ use crate::tools::builtin::exec::{
     snapshot_child_environment,
 };
 use crate::tools::builtin::process::{
-    CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, captured_text,
-    collection_error, command_cancelled_error, display_exit, mark_timed_out,
+    CapturedStream, ExecutionLease, acquire_execution_lease, captured_text, collection_error,
+    command_cancelled_error, display_exit, mark_timed_out, render_command_output, timeout_notice,
 };
 use crate::tools::ctx::ToolCtx;
 use crate::tools::stream::ToolStream;
@@ -236,10 +235,6 @@ impl Tool for ShellTool {
 
     fn description(&self) -> &str {
         prompt::tool_description(self.resolved().kind)
-    }
-
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(prompt::prompt_snippet(self.resolved().kind))
     }
 
     fn params_schema(&self) -> serde_json::Value {
@@ -488,20 +483,7 @@ fn timed_out_result(
     teardown: Result<(), std::io::Error>,
     started: bool,
 ) -> ToolResult {
-    let notice = match (started, teardown.as_ref().err()) {
-        (_, Some(err)) => format!(
-            "[command timed out after {}s; termination failed: {err}]",
-            timeout.as_secs()
-        ),
-        (true, None) => format!(
-            "[command timed out after {}s and was killed]",
-            timeout.as_secs()
-        ),
-        (false, None) => format!(
-            "[command timed out after {}s before the shell started]",
-            timeout.as_secs()
-        ),
-    };
+    let notice = timeout_notice(timeout, started, teardown.as_ref().err(), "shell");
     mark_timed_out(format_result(
         None,
         command,
@@ -542,52 +524,15 @@ fn format_result(
     forced_error: bool,
     notice: Option<&str>,
 ) -> ToolResult {
-    let (stdout_text, stdout_cut) = captured_text(&stdout);
-    let (stderr_text, stderr_cut) = captured_text(&stderr);
-    let stdout_text = sanitize_captured_shell_text(&stdout_text);
-    let stderr_text = sanitize_captured_shell_text(&stderr_text);
-
-    let mut text = String::new();
-    if !stdout_text.trim().is_empty() {
-        text.push_str(&stdout_text);
-    }
-    if !stderr_text.trim().is_empty() {
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str("[stderr]\n");
-        text.push_str(&stderr_text);
-    }
-
-    let (mut text, cut) = crate::tools::builtin::truncate_middle(&text, MAX_OUTPUT_BYTES);
-    let truncated = cut || stdout_cut || stderr_cut;
-    if truncated {
-        let total = stdout.total_bytes.saturating_add(stderr.total_bytes);
-        let _ = write!(
-            text,
-            "\n[output truncated: showed the start and end of {total} bytes]"
-        );
-    }
-
-    let is_error = forced_error || status.is_some_and(|s| !s.success());
-    if is_error {
-        match &status {
-            Some(s) => {
-                let _ = write!(text, "\n[exit code: {}]", display_exit(s));
-            }
-            None => match notice {
-                Some(notice) => {
-                    text.push('\n');
-                    text.push_str(notice);
-                }
-                None => text.push_str("\n[no exit status: command did not finish]"),
-            },
-        }
-    } else if let Some(notice) = notice {
-        text.push('\n');
-        text.push_str(notice);
-    }
-
+    let sanitized = |(text, cut): (String, bool)| (sanitize_captured_shell_text(&text), cut);
+    let (text, truncated, is_error) = render_command_output(
+        status,
+        sanitized(captured_text(&stdout)),
+        sanitized(captured_text(&stderr)),
+        stdout.total_bytes.saturating_add(stderr.total_bytes),
+        forced_error,
+        notice,
+    );
     let mut details = json!({
         "command": command,
         "shell": shell,

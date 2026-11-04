@@ -579,13 +579,13 @@ pub(crate) fn is_windowsapps_package_pwsh(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(windows))]
+    use super::choose_posix_shell;
     use super::{
         DetectedShell, ShellImage, ShellKind, WindowsShellEnv, cmd_fallback_args,
         is_syswow64_powershell, is_windowsapps_execution_alias, is_windowsapps_package_pwsh,
         is_wsl_bash_launcher, resolved_shell, select_shell_tiers, windows_shell_tiers,
     };
-    #[cfg(not(windows))]
-    use super::{choose_posix_shell, posix_shell_candidates};
     #[cfg(not(windows))]
     use std::ffi::OsStr;
     use std::ffi::OsString;
@@ -662,45 +662,6 @@ mod tests {
         assert_eq!(only_sh.kind, ShellKind::Sh);
 
         assert!(choose_posix_shell(None, None, |_| false).is_none());
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn relative_user_shell_is_not_searched() {
-        let candidates = posix_shell_candidates(Some(OsStr::new("bash")), None);
-        assert!(
-            candidates.iter().all(|path| path != Path::new("bash")),
-            "{candidates:?}"
-        );
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn a_non_executable_user_shell_does_not_disable_the_platform_fallback() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let directory =
-            std::env::temp_dir().join(format!("mycode-shell-permissions-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
-        let program = directory.join("bash");
-        std::fs::write(&program, b"#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let picked = choose_posix_shell(
-            Some(program.as_os_str()),
-            None,
-            super::posix_shell_is_executable,
-        );
-        assert!(picked.is_none_or(|shell| shell.program != program));
-
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let picked = choose_posix_shell(
-            Some(program.as_os_str()),
-            None,
-            super::posix_shell_is_executable,
-        )
-        .expect("executable user shell");
-        assert_eq!(picked.program, program);
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

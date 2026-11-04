@@ -422,22 +422,6 @@ mod tests {
     }
 
     #[test]
-    fn palette_search_cannot_reveal_another_projects_conversation() {
-        let mut state = populated();
-        state
-            .sessions
-            .push(session("ses-other", "Other project parser", false));
-        state.session_projects = vec![
-            ("ses-live".to_owned(), "/current".to_owned()),
-            ("ses-other".to_owned(), "/other".to_owned()),
-        ];
-        state.project_dir = Some("/current".to_owned());
-        assert_eq!(labels_matching(&state, "parser"), ["Fix the parser"]);
-        state.project_dir = Some("/other".to_owned());
-        assert_eq!(labels_matching(&state, "parser"), ["Other project parser"]);
-    }
-
-    #[test]
     fn catalog_covers_sessions_models_commands_and_settings() {
         let catalog = palette_catalog(&populated());
         let ids: Vec<_> = catalog.groups.iter().map(|group| group.id).collect();

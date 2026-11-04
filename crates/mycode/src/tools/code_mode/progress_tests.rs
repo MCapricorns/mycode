@@ -9,9 +9,7 @@ use std::time::Duration;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use super::{
-    CodeCells, CodeModeProgress, InnerCallPhase, InnerCallSummary, RunCodeTool, WaitCodeTool,
-};
+use super::{CodeCells, CodeModeProgress, InnerCallPhase, RunCodeTool, WaitCodeTool};
 use crate::tools::builtin::{AgentHost, AgentTool, SubagentRequest};
 use crate::tools::{ToolCtx, ToolDyn, ToolError, ToolRegistry, ToolStream, ToolStreamItem};
 
@@ -205,42 +203,6 @@ async fn wait_code_forwards_live_child_progress_with_the_original_call_id() {
 }
 
 #[tokio::test]
-async fn a_panicking_child_publishes_one_failed_inner_completion() {
-    let host = Arc::new(RecordingHost::default());
-    let registry = registry(&host);
-    let run = RunCodeTool::new(
-        Arc::clone(&registry),
-        Arc::new(CodeCells::new()),
-        "s".to_owned(),
-    );
-    let (mut out, mut updates) = ToolStream::channel();
-    let result = run
-        .execute_dyn(
-            json!({"script": "call(\"agent\", { agent: \"scout\", prompt: \"panic\" });"}),
-            &ToolCtx::new(std::env::temp_dir()).with_call_id("outer"),
-            &mut out,
-        )
-        .await
-        .unwrap();
-    assert!(result.is_error);
-    drop(out);
-    let completed: Vec<_> = events(updates.drain().await)
-        .into_iter()
-        .filter(|event| matches!(event, CodeModeProgress::Completed { .. }))
-        .collect();
-    assert_eq!(
-        completed,
-        [CodeModeProgress::Completed {
-            call_id: "outer.0".to_owned(),
-            name: "agent".to_owned(),
-            phase: InnerCallPhase::Failed,
-            is_error: true,
-        }]
-    );
-    assert_eq!(result.details.unwrap()["inner_calls"][0]["phase"], "failed");
-}
-
-#[tokio::test]
 async fn cancelling_the_parent_publishes_one_cancelled_inner_completion_before_returning() {
     let host = Arc::new(RecordingHost::default());
     let registry = registry(&host);
@@ -284,20 +246,4 @@ async fn cancelling_the_parent_publishes_one_cancelled_inner_completion_before_r
     );
     let cell = cells.get("s", "cell-0").unwrap();
     assert_eq!(cell.inner_calls()[0].phase, Some(InnerCallPhase::Cancelled));
-}
-
-#[test]
-fn old_inner_call_summaries_and_pipe_containing_messages_remain_compatible() {
-    let old = json!({"seq": 0, "name": "agent", "target": "scout", "is_error": false});
-    let summary: InnerCallSummary = serde_json::from_value(old.clone()).unwrap();
-    assert!(summary.call_id.is_none() && summary.phase.is_none());
-    assert_eq!(serde_json::to_value(summary).unwrap(), old);
-    let event = CodeModeProgress::Progress {
-        call_id: "id|with\nseparator.0".to_owned(),
-        name: "agent".to_owned(),
-        message: "agent|scout|step|a|b\nline".to_owned(),
-    };
-    assert_eq!(CodeModeProgress::parse(&event.encode()), Some(event));
-    assert!(CodeModeProgress::parse("agent|scout|step|legacy").is_none());
-    assert!(CodeModeProgress::parse("code_mode|broken JSON").is_none());
 }

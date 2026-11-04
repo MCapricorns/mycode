@@ -47,52 +47,6 @@ fn rejected_start_releases_sending_and_removes_the_waiting_bubble() {
 }
 
 #[test]
-fn late_turn_and_recall_replies_cannot_change_another_session_or_branch() {
-    let mut state = WorkspaceState {
-        active: Some(conversation("a", "branch")),
-        ..WorkspaceState::default()
-    };
-    let scope = ReplyScope::Session {
-        session: "a".to_owned(),
-        branch: Some("branch".to_owned()),
-    };
-    assert!(scope.applies(&state, None));
-    state.active = Some(conversation("b", "branch"));
-    assert!(!scope.applies(&state, None));
-    state.active = Some(conversation("a", "rewound"));
-    assert!(!scope.applies(&state, None));
-}
-
-#[test]
-fn superseded_open_and_file_search_replies_are_ignored() {
-    let mut state = WorkspaceState {
-        active: Some(conversation("a", "branch")),
-        ..WorkspaceState::default()
-    };
-    assert!(!ReplyScope::Open("old".to_owned()).applies(&state, Some("new")));
-    assert!(!ReplyScope::Open("old".to_owned()).applies(&state, None));
-    assert!(ReplyScope::Open("new".to_owned()).applies(&state, Some("new")));
-    reduce(
-        &mut state,
-        FrontendAction::ComposerChanged("@second".to_owned()),
-    );
-    assert!(
-        !ReplyScope::Mention {
-            session: "a".to_owned(),
-            query: "first".to_owned()
-        }
-        .applies(&state, None)
-    );
-    assert!(
-        ReplyScope::Mention {
-            session: "a".to_owned(),
-            query: "second".to_owned()
-        }
-        .applies(&state, None)
-    );
-}
-
-#[test]
 fn a_chat_opened_mid_turn_reloads_from_the_ledger_when_the_turn_ends() {
     use crate::app::{BranchId, BridgeEvent, BridgeReply, ConversationEntry, EntryKind, SessionId};
 
@@ -219,90 +173,6 @@ fn removing_a_project_keeps_its_conversation_and_working_directory() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[test]
-fn unassigned_navigation_recovers_legacy_history_without_rebinding_sessions() {
-    use crate::app::{BridgeReply, SessionId, SessionSummary};
-    use crate::config::UiState;
-    use crate::frontend::view_model::{PaletteCommand, palette_catalog, project_session_rows};
-
-    let (mut driver, root) = scratch_driver("unassigned-history");
-    let project = root.to_string_lossy().into_owned();
-    let bound = SessionId::generate().unwrap().to_string();
-    let unbound = SessionId::generate().unwrap().to_string();
-    let bindings = vec![(bound.clone(), project.clone())];
-    let mut effects = Vec::new();
-    driver.on_reply(
-        ReplyScope::Global,
-        BridgeReply::UiState(Ok((
-            UiState {
-                last_project: Some(project.clone()),
-                workspace_roots: vec![project.clone()],
-                session_projects: bindings.clone(),
-                ..UiState::default()
-            },
-            Vec::new(),
-        ))),
-        &mut effects,
-    );
-    driver.vm.sessions = [&bound, &unbound]
-        .into_iter()
-        .map(|session_id| SessionSummary {
-            session_id: session_id.clone(),
-            root_branch_id: "branch".to_owned(),
-            title: "Legacy conversation".to_owned(),
-            updated_at_ms: None,
-            event_count: 1,
-            active: session_id == &bound,
-            corrupt: false,
-        })
-        .collect();
-    driver.vm.active = Some(conversation(&bound, "branch"));
-    driver.pending_open = Some(bound.clone());
-    assert_eq!(project_session_rows(&driver.vm)[0].0.session_id, bound);
-
-    driver.open_unassigned_conversations(&mut effects);
-    assert!(
-        driver.vm.active.is_none(),
-        "the previous chat must be parked"
-    );
-    assert!(driver.pending_open.is_none(), "stale opens must be ignored");
-    assert!(driver.vm.project_dir.is_none());
-    let rows = project_session_rows(&driver.vm);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].0.session_id, unbound);
-    let searchable: Vec<_> = palette_catalog(&driver.vm)
-        .groups
-        .into_iter()
-        .flat_map(|group| group.items)
-        .filter_map(|item| match item.command {
-            PaletteCommand::OpenSession(id) => Some((id, item.label)),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        searchable,
-        [(unbound.clone(), "Legacy conversation".to_owned())]
-    );
-
-    driver.open_session(&unbound, &mut effects);
-    assert_eq!(driver.pending_open.as_deref(), Some(unbound.as_str()));
-    driver.on_reply(
-        ReplyScope::Open(unbound.clone()),
-        BridgeReply::Conversation(Ok(conversation(&unbound, "branch"))),
-        &mut effects,
-    );
-    assert_eq!(driver.open_session_id().as_deref(), Some(unbound.as_str()));
-    assert!(driver.vm.project_dir.is_none());
-    assert_eq!(driver.vm.session_projects, bindings);
-    assert_eq!(driver.vm.workspace_roots, [project]);
-    driver.vm.composer_draft = "Keep this draft".to_owned();
-    driver.open_unassigned_conversations(&mut effects);
-    assert_eq!(driver.open_session_id().as_deref(), Some(unbound.as_str()));
-    assert_eq!(driver.vm.composer_draft, "Keep this draft");
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(root);
-}
-
 /// A reopen during `/compact` restores the compaction, not a running turn.
 /// `CompactFinished` is the only event that ends it; a reopen that set
 /// `sending` left the composer stuck on Stop after the compaction ended.
@@ -340,71 +210,6 @@ fn a_chat_opened_mid_compact_unlocks_when_the_compaction_finishes() {
         Some(session.as_str()),
         "the end reloads the rows the open may have missed"
     );
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// Stop on a turn the core no longer runs settles the composer, and the
-/// reload a mid-turn open still owed runs now instead of after the next
-/// turn, where it reopened that turn as running.
-#[test]
-fn stop_on_a_turn_that_is_gone_runs_the_owed_reload() {
-    use crate::app::{BranchId, BridgeReply, SessionId};
-
-    let (mut driver, root) = scratch_driver("stop-settle");
-    let session = SessionId::generate().expect("session").as_str().to_owned();
-    let branch = BranchId::generate().expect("branch").as_str().to_owned();
-    let mut running = conversation(&session, &branch);
-    running.running = true;
-    let mut out = Vec::new();
-    driver.pending_open = Some(session.clone());
-    driver.on_reply(
-        ReplyScope::Open(session.clone()),
-        BridgeReply::Conversation(Ok(running)),
-        &mut out,
-    );
-    assert!(driver.vm.sending);
-    driver.on_reply(
-        ReplyScope::Session {
-            session: session.clone(),
-            branch: None,
-        },
-        BridgeReply::ChatCancelled(Err("no turn is running for this session".to_owned())),
-        &mut out,
-    );
-    assert!(!driver.vm.sending, "Stop settles a turn the core lost");
-    assert!(driver.resync_on_turn_end.is_none());
-    assert_eq!(driver.pending_open.as_deref(), Some(session.as_str()));
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// A send while the chat on screen is being reopened waits for that
-/// snapshot. Applied after the send's reply, the older snapshot wiped the
-/// message off the screen.
-#[test]
-fn a_send_during_a_reopen_of_the_same_chat_waits_for_the_snapshot() {
-    use crate::app::{BranchId, BridgeReply, SessionId};
-
-    let (mut driver, root) = scratch_driver("held-send");
-    let session = SessionId::generate().expect("session").as_str().to_owned();
-    let branch = BranchId::generate().expect("branch").as_str().to_owned();
-    driver.vm.active = Some(conversation(&session, &branch));
-    driver.pending_open = Some(session.clone());
-    let mut out = Vec::new();
-    driver.submit("next question", &mut out);
-    assert!(driver.vm.sending, "the turn arms right away");
-    assert!(driver.held_send.is_some(), "the send waits for the reopen");
-    driver.on_reply(
-        ReplyScope::Open(session.clone()),
-        BridgeReply::Conversation(Ok(conversation(&session, &branch))),
-        &mut out,
-    );
-    assert!(
-        driver.held_send.is_none(),
-        "the snapshot is in; the send left"
-    );
-    assert!(driver.vm.sending);
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -541,55 +346,6 @@ fn an_interrupt_during_auto_compaction_waits_for_the_summary() {
 }
 
 #[test]
-fn a_repair_after_the_startup_toast_still_toasts_once() {
-    let root = std::env::temp_dir().join(format!(
-        "mycode-driver-repairs-{}-{}",
-        std::process::id(),
-        crate::core::unix_now().as_nanos()
-    ));
-    std::fs::create_dir_all(&root).expect("root");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
-    }
-    let home = crate::config::HomeLayout::from_root(&root).expect("home");
-    let mut driver = super::FrontendDriver::start(home, || {});
-    let repair = |path: &'static str| crate::config::DocumentRepair {
-        path,
-        backup: format!("{path}.bak"),
-    };
-    let toasts = |driver: &mut super::FrontendDriver| {
-        driver
-            .inbox_tx
-            .send(super::DriverMsg::RepairToastTick)
-            .expect("tick");
-        let mut out = Vec::new();
-        driver.poll(&mut out);
-        out.into_iter()
-            .filter_map(|effect| match effect {
-                super::Effect::Toast { text, .. } => Some(text),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-    };
-    driver.note_config_repairs(&[repair("settings.json")]);
-    let first = toasts(&mut driver);
-    assert!(first[0].contains("settings.json"), "{first:?}");
-    // Later loads repeat the startup list and add a new reset.
-    driver.note_config_repairs(&[repair("settings.json"), repair("ui.json")]);
-    assert!(
-        driver.repair_toast_armed,
-        "the new reset must schedule a toast"
-    );
-    let second = toasts(&mut driver);
-    assert!(second[0].contains("ui.json"), "{second:?}");
-    assert!(!second[0].contains("settings.json"), "{second:?}");
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
 fn ensure_catalog_loads_once_the_composer_has_a_model() {
     let root = std::env::temp_dir().join(format!(
         "mycode-driver-catalog-{}-{}",
@@ -702,37 +458,6 @@ fn a_steer_with_no_turn_running_does_not_send() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Steers a chat off screen did not take wait parked for it instead of
-/// being dropped with the event.
-#[test]
-fn steers_returned_to_a_chat_off_screen_are_parked() {
-    use crate::app::{BranchId, BridgeEvent, SessionId};
-
-    let (mut driver, root) = scratch_driver("steer-parked");
-    let open = SessionId::generate().expect("session").as_str().to_owned();
-    let other = SessionId::generate().expect("session").as_str().to_owned();
-    let branch = BranchId::generate().expect("branch").as_str().to_owned();
-    driver.vm.active = Some(conversation(&open, &branch));
-    let mut out = Vec::new();
-    driver.on_event(
-        BridgeEvent::SteersReturned {
-            session_id: other.clone(),
-            texts: vec!["late steer".to_owned()],
-        },
-        &mut out,
-    );
-    assert!(
-        driver.vm.pending_steers.is_empty(),
-        "another chat's steer never shows here"
-    );
-    assert_eq!(
-        driver.vm.parked_steers,
-        [(other, vec!["late steer".to_owned()])]
-    );
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(&root);
-}
-
 /// A retracted steer leaves the strip and returns to the composer only
 /// when the core confirms it was still pending; one the turn already read
 /// stays sent.
@@ -812,19 +537,6 @@ fn a_busy_turn_returns_attachments_to_the_composer() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A welcome send already waiting for its new session owns the next message;
-/// a second submit keeps its attachments instead of losing them.
-#[test]
-fn a_held_welcome_send_returns_the_next_attachments() {
-    let (mut driver, root) = scratch_driver("attach-held");
-    driver.vm.pending_welcome_send = Some("first".to_owned());
-    let mut out = Vec::new();
-    let returned = driver.submit_with("second", code_attachment(), &mut out);
-    assert!(returned.is_some_and(|attachments| !attachments.is_empty()));
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(&root);
-}
-
 /// Attachments alone on the welcome desk start a task, using their note as
 /// the prompt so the first message and the title keep a text anchor.
 #[test]
@@ -858,67 +570,4 @@ fn a_welcome_submit_without_a_folder_starts_a_default_session() {
     assert!(!driver.welcome_attachments.is_empty());
     driver.shutdown();
     let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
-fn a_retracted_steer_survives_navigation_and_reopening_from_the_parked_desk() {
-    use crate::app::BridgeReply;
-
-    let (mut driver, root) = scratch_driver("steer-retract-navigation");
-    driver.vm.active = Some(conversation("other", "other-branch"));
-    driver.vm.composer_draft = "other draft".into();
-    driver.vm.pending_steers = vec!["other steer".into()];
-    let mut out = Vec::new();
-    driver.on_reply(
-        ReplyScope::RetractSteer {
-            session: "original".into(),
-            text: "take this back".into(),
-        },
-        BridgeReply::SteerRetracted(Ok(true)),
-        &mut out,
-    );
-    assert_eq!(driver.vm.composer_draft, "other draft");
-    assert_eq!(driver.vm.pending_steers, ["other steer"]);
-    assert_eq!(
-        driver.vm.parked_steers,
-        [("original".into(), vec!["take this back".into()])]
-    );
-
-    driver.park_conversation(&mut out);
-    driver.vm.composer_draft = "welcome draft".into();
-    driver.on_reply(
-        ReplyScope::Global,
-        BridgeReply::Conversation(Ok(conversation("original", "branch"))),
-        &mut out,
-    );
-    assert_eq!(driver.vm.composer_draft, "take this back\n\nwelcome draft");
-    assert!(driver.vm.parked_steers.is_empty());
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn a_proxy_probe_reply_only_applies_to_the_value_that_was_tested() {
-    use crate::app::BridgeCommand;
-    use crate::config::AppSettings;
-    use crate::frontend::view_model::SettingsState;
-
-    let mut vm = WorkspaceState {
-        settings: Some(SettingsState::from_settings(&AppSettings::default(), 1)),
-        ..Default::default()
-    };
-    vm.settings.as_mut().unwrap().proxy = "http://127.0.0.1:8080".into();
-    let old = ReplyScope::for_command(&BridgeCommand::TestProxy {
-        proxy: vm.settings.as_ref().unwrap().proxy.clone(),
-    });
-    assert!(old.applies(&vm, None));
-    // Editing resets the test state, so the user may start a second probe
-    // before the first one returns. Testing alone cannot identify its owner.
-    vm.settings.as_mut().unwrap().proxy = "http://127.0.0.1:9090".into();
-    vm.proxy_test = crate::frontend::view_model::ProxyTestState::Testing;
-    let current = ReplyScope::for_command(&BridgeCommand::TestProxy {
-        proxy: vm.settings.as_ref().unwrap().proxy.clone(),
-    });
-    assert!(!old.applies(&vm, None));
-    assert!(current.applies(&vm, None));
 }

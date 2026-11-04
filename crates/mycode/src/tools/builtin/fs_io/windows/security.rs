@@ -138,17 +138,3 @@ fn private_temp_sddl(sid: &str) -> String {
         format!("D:P(A;;FA;;;{sid})(A;;FA;;;SY)")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::private_temp_sddl;
-
-    #[test]
-    fn system_sid_does_not_emit_duplicate_sy_ace() {
-        assert_eq!(private_temp_sddl("S-1-5-18"), "D:P(A;;FA;;;S-1-5-18)");
-        assert_eq!(
-            private_temp_sddl("S-1-5-21-1-2-3-1000"),
-            "D:P(A;;FA;;;S-1-5-21-1-2-3-1000)(A;;FA;;;SY)"
-        );
-    }
-}

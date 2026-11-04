@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use super::MAGPIE_PROVIDER_ID;
 
-/// Maximum models listed by one provider entry.
-pub const MAX_MODELS_PER_PROVIDER: usize = 128;
 /// Maximum hidden model ids on one provider entry.
 pub const MAX_HIDDEN_MODELS_PER_PROVIDER: usize = 2048;
 

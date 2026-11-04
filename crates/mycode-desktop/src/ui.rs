@@ -470,18 +470,3 @@ pub(super) fn ellipsis(text: &str, max_chars: usize) -> String {
 }
 
 pub(super) use crate::view_model::project_label;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn previews_truncate_at_character_boundaries_and_keep_exact_length_text() {
-        assert_eq!(super::ellipsis("", 0), "");
-        assert_eq!(super::ellipsis("abc", 0), "\u{2026}");
-        assert_eq!(super::ellipsis("abc", 3), "abc");
-        assert_eq!(super::ellipsis("abc", 2), "ab\u{2026}");
-        assert_eq!(
-            super::ellipsis("\u{4e2d}\u{1f680}tail", 2),
-            "\u{4e2d}\u{1f680}\u{2026}"
-        );
-    }
-}

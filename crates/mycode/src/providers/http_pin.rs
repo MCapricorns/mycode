@@ -72,8 +72,6 @@ enum RedirectStep {
 pub enum PinnedBody {
     /// Raw bytes, sent as the request body.
     Bytes(Bytes),
-    /// Form fields, encoded by reqwest.
-    Form(Vec<(String, String)>),
 }
 
 /// One pinned request.
@@ -511,7 +509,6 @@ async fn send_once(call: OnceCall<'_>) -> Result<reqwest::Response, String> {
     }
     request = match call.body {
         Some(PinnedBody::Bytes(bytes)) => request.body(bytes.clone()),
-        Some(PinnedBody::Form(fields)) => request.form(fields),
         None => request,
     };
     let pending = request.send();

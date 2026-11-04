@@ -162,15 +162,6 @@ impl Tool for AskTool {
          Use when a decision needs human input before proceeding."
     }
 
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(
-            "ask_user: batch every clarification into one call; the turn waits \
-             until the user answers. A dismissed question fails the call and the \
-             turn continues without an answer. Set multiple on a question when \
-             more than one choice may be selected.",
-        )
-    }
-
     fn prepare_args(&self, args: serde_json::Value) -> serde_json::Value {
         normalize_ask_args(args)
     }

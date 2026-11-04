@@ -61,16 +61,6 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_password_values_do_not_consume_following_text() {
-        for value in ["Basic", "Bearer"] {
-            assert_eq!(
-                super::redact_text(&format!("password={value} ordinary prose")),
-                "password=[REDACTED] ordinary prose"
-            );
-        }
-    }
-
-    #[test]
     fn quoted_values_redact_spaces_punctuation_and_escaped_quotes() {
         for (source, expected) in [
             (

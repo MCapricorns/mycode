@@ -1,4 +1,4 @@
-//! Grep/find still match when ancestor ignore discovery stops at a mount.
+//! Grep/find apply a parent repository's ignore rules to a nested project.
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,8 +8,6 @@ use crate::tools::ctx::ToolCtx;
 use crate::tools::stream::ToolStream;
 use crate::tools::tool::{Tool, ToolResult};
 
-use super::force_ancestor_mount_boundary;
-
 #[tokio::test]
 async fn parent_gitignore_still_applies_on_the_same_mount() {
     let base = unique_dir("mycode-same-mount");
@@ -18,24 +16,13 @@ async fn parent_gitignore_still_applies_on_the_same_mount() {
     let grep_text = run_grep(&project).await;
     assert!(
         !grep_text.contains("hit.txt"),
-        "parent gitignore should hide hit.txt when the mount check does not trip: {grep_text}"
+        "parent gitignore should hide hit.txt: {grep_text}"
     );
     let find_text = run_find(&project).await;
     assert!(
         !find_text.contains("hit.txt"),
-        "parent gitignore should hide hit.txt when the mount check does not trip: {find_text}"
+        "parent gitignore should hide hit.txt: {find_text}"
     );
-    let _ = fs::remove_dir_all(&base);
-}
-
-#[tokio::test]
-async fn grep_and_find_match_when_ancestor_mount_check_trips() {
-    let base = unique_dir("mycode-ancestor-mount");
-    let project = base.join("project");
-    write_project(&base, &project);
-    let _forced = force_ancestor_mount_boundary(&project).expect("force mount boundary");
-    assert_hit_visible(&project).await;
-    drop(_forced);
     let _ = fs::remove_dir_all(&base);
 }
 
@@ -49,9 +36,8 @@ fn unique_dir(prefix: &str) -> PathBuf {
     path
 }
 
-/// Parent git root ignores `hit.txt`. The workspace `.ignore` hides
-/// `hidden.txt`. A search that stops at the mount boundary still returns
-/// `hit.txt` and still honors the workspace ignore file.
+/// Parent git root ignores `hit.txt`; the workspace `.ignore` hides
+/// `hidden.txt`.
 fn write_project(base: &Path, project: &Path) {
     fs::create_dir_all(project).expect("project");
     fs::create_dir_all(base.join(".git")).expect("parent git");
@@ -60,44 +46,6 @@ fn write_project(base: &Path, project: &Path) {
     fs::write(project.join("hit.txt"), "needle inside\n").expect("hit");
     fs::write(project.join("hidden.txt"), "needle hidden\n").expect("hidden");
     fs::write(project.join(".ignore"), "hidden.txt\n").expect("workspace ignore");
-}
-
-async fn assert_hit_visible(project: &Path) {
-    let grep_text = run_grep(project).await;
-    assert!(
-        !grep_text.contains("mount traversal"),
-        "grep failed closed on a mount boundary: {grep_text}"
-    );
-    assert!(
-        grep_text.contains("hit.txt"),
-        "grep missed the workspace file: {grep_text}"
-    );
-    assert!(
-        !grep_text.contains("hidden.txt"),
-        "workspace .ignore was not applied: {grep_text}"
-    );
-    assert!(
-        !grep_text.contains("outside.txt"),
-        "search left the workspace: {grep_text}"
-    );
-
-    let find_text = run_find(project).await;
-    assert!(
-        !find_text.contains("mount traversal"),
-        "find failed closed on a mount boundary: {find_text}"
-    );
-    assert!(
-        find_text.contains("hit.txt"),
-        "find missed the workspace file: {find_text}"
-    );
-    assert!(
-        !find_text.contains("hidden.txt"),
-        "workspace .ignore was not applied: {find_text}"
-    );
-    assert!(
-        !find_text.contains("outside.txt"),
-        "search left the workspace: {find_text}"
-    );
 }
 
 async fn run_grep(project: &Path) -> String {

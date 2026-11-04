@@ -34,7 +34,7 @@ pub(crate) fn workspace_extra_roots(
 }
 
 /// Splits extra roots into user workspace folders and the OS scratch root.
-pub(crate) fn split_scratch_root(
+fn split_scratch_root(
     roots: &[std::path::PathBuf],
 ) -> (Vec<&std::path::Path>, Option<&std::path::Path>) {
     let scratch = crate::tools::os_scratch_root();
@@ -50,31 +50,47 @@ pub(crate) fn split_scratch_root(
     (workspace, found)
 }
 
-pub(crate) fn push_scratch_note(system: &mut String, scratch: Option<&std::path::Path>) {
+/// Lists the extra workspace folders, then the scratch directory, in a
+/// stable order so repeated renders share one cached prefix.
+pub(crate) fn push_workspace_roots(system: &mut String, extra_roots: &[std::path::PathBuf]) {
+    let (mut roots, scratch) = split_scratch_root(extra_roots);
+    roots.sort();
+    if !roots.is_empty() {
+        system.push_str("\n\nWorkspace folders besides the cwd:\n");
+        for root in &roots {
+            let _ = writeln!(system, "- {}", root.display());
+        }
+        system.push_str(
+            "Relative paths resolve against the cwd; use absolute paths for these folders.",
+        );
+    }
     if let Some(scratch) = scratch {
         let _ = write!(
             system,
             "\n\nScratch directory (OS temp): {}\nWhen your tools and task permit writing, \
-put temporary artifacts here with absolute paths instead of the project tree. Read supplied \
-artifacts by exact path. This is not project code: do not search it.",
+put temporary artifacts here instead of the project tree. Read supplied artifacts by exact \
+path. This is not project code: do not search it.",
             scratch.display()
         );
     }
 }
 
-pub(crate) fn environment_block(cwd: &std::path::Path) -> String {
-    crate::tools::render_environment_block(
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-        cwd,
-        &crate::tools::resolved_shell(),
-    )
+/// The `<mcp>` section: the catalog note, then the calling guidance shared by
+/// the parent and every child prompt.
+pub(crate) fn push_mcp_section(system: &mut String, note: &str, read_only: bool) {
+    system.push_str("\n\n<mcp>\n");
+    system.push_str(note.trim_end());
+    system.push('\n');
+    system.push_str(MCP_CALL_GUIDANCE);
+    if read_only {
+        system.push_str(" Only read-only MCP tools are available to this role.");
+    }
+    system.push_str("\n</mcp>");
 }
 
 /// Opening of every session prompt.
 const SESSION_IDENTITY: &str = "\
-You are MYCode, a coding agent working in the user's workspace. The environment block \
-names this OS and the one shell tool; write that shell's syntax.
+You are MYCode, a coding agent working in the user's workspace.
 
 <working_style>
 - Finish the requested outcome. Inspect relevant code and callers, make the smallest coherent \
@@ -85,9 +101,10 @@ write against the versions the project pins.
 - Get explicit approval before destructive or external actions (deleting user files, hard resets, \
 force-push, history rewrites, commits, pushes, or PRs). Reuse authorization already given for that \
 scope. Never expose secrets or `.env` values.
-- Stop requests cancellation; partial edits can remain. On continuation or steering, inspect current \
-workspace state and available results, then finish the remaining work. Inspect tool errors before \
-retrying; do not rerun completed mutations or duplicate a yielded task.
+- Stopping cancels running work but keeps partial edits, and editing or recalling a chat message \
+does not restore files. On continuation or steering, inspect the current workspace and available \
+results, then finish the remaining work. Inspect tool errors before retrying; do not rerun \
+completed mutations or duplicate a yielded task.
 - Give concise progress updates and report the outcome, changed paths, checks run, and material gaps.
 - The AGENTS.md and MYCODE.md sections of this prompt, applicable project instruction files \
 (including .mycode/agents.md and .agents/AGENTS.md), and matching SKILL.md files are standing \
@@ -102,29 +119,19 @@ pub(super) struct SessionPrompt {
     pub cwd: std::path::PathBuf,
     pub registry: std::sync::Arc<ToolRegistry>,
     pub extra_roots: Vec<std::path::PathBuf>,
-    pub subagents: crate::config::SubagentSettings,
-    pub skills: crate::config::SkillsSettings,
+    /// Used until a settings document is saved.
+    pub settings: crate::config::AppSettings,
 }
 
 impl SessionPrompt {
     pub async fn render(&self, mcp_note: Option<String>) -> Result<String, String> {
         let snapshot = self.clone();
         tokio::task::spawn_blocking(move || {
-            let (skills, subagents) = if snapshot
-                .home
-                .root()
-                .join(crate::config::SETTINGS_PATH)
-                .exists()
-            {
-                let settings = crate::config::read_app_settings(&snapshot.home)
-                    .map_err(|error| format!("prompt settings: {error}"))?;
-                (settings.skills, settings.subagents)
-            } else {
-                (snapshot.skills, snapshot.subagents)
-            };
+            let settings = crate::config::read_app_settings_or(&snapshot.home, snapshot.settings)
+                .map_err(|error| format!("prompt settings: {error}"))?;
             let directive = if snapshot.registry.get("agent").is_some() {
                 let catalog = crate::config::discover_roles(&snapshot.home, Some(&snapshot.cwd));
-                crate::app::subagent::delegation_directive(&catalog, &subagents)
+                crate::app::subagent::delegation_directive(&catalog, &settings.subagents)
             } else {
                 String::new()
             };
@@ -135,7 +142,7 @@ impl SessionPrompt {
                 mcp_note.as_deref(),
                 &snapshot.extra_roots,
                 &directive,
-                &skills,
+                &settings.skills,
             ))
         })
         .await
@@ -159,71 +166,30 @@ pub(crate) fn session_system_prompt(
     system_prompt.push_str(&crate::agent::build_system_prompt(registry));
     system_prompt.push_str(directive);
     system_prompt.push_str("\n\n");
-    system_prompt.push_str(&environment_block(cwd));
+    system_prompt.push_str(&crate::tools::render_environment_block(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        cwd,
+        Some(&crate::tools::resolved_shell()),
+    ));
     for part in crate::config::render_resource_prompt(&resources) {
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&part);
     }
     push_workspace_skills(&mut system_prompt, Some(home.root()), skill_settings);
     if let Some(note) = mcp_note {
-        system_prompt.push_str("\n\n<mcp>\n");
-        system_prompt.push_str(note);
-        if !note.ends_with('\n') {
-            system_prompt.push('\n');
-        }
-        system_prompt.push_str(MCP_CALL_GUIDANCE);
-        system_prompt.push_str("\n</mcp>");
+        push_mcp_section(&mut system_prompt, note, false);
     }
-    let (mut roots, scratch) = split_scratch_root(extra_roots);
-    roots.sort();
-    if !roots.is_empty() {
-        system_prompt.push_str("\n\nWorkspace folders besides the session cwd:\n");
-        for root in &roots {
-            let _ = writeln!(system_prompt, "- {}", root.display());
-        }
-        push_workspace_path_guidance(&mut system_prompt, registry);
-    }
-    push_scratch_note(&mut system_prompt, scratch);
+    push_workspace_roots(&mut system_prompt, extra_roots);
     system_prompt
 }
 
-/// Shared MCP guidance for the parent and every filtered child catalog.
-pub(crate) const MCP_CALL_GUIDANCE: &str = "`search_tool` and `tool_search` discover schemas; then call `use_tool` with the exact `name` \
-and matching `arguments` returned. Follow the tool_calling section for direct versus run_code \
-calls; call() is synchronous. A connecting server is still handshaking, not an empty catalog. \
-Reuse discovered schemas; refresh when a tool is missing or its schema changes.";
-
-/// Names only file tools available to this run, using their actual call surface.
-pub(crate) fn push_workspace_path_guidance(system: &mut String, registry: &ToolRegistry) {
-    let code_mode = registry.get("run_code").is_some() && registry.is_exposed("run_code");
-    let names: Vec<_> = ["read", "write", "edit", "find", "grep"]
-        .into_iter()
-        .filter(|name| registry.get(name).is_some())
-        .filter_map(|name| {
-            if registry.is_exposed(name) {
-                Some(format!("`{name}`"))
-            } else if code_mode {
-                Some(format!("`call(\"{name}\", …)`"))
-            } else {
-                None
-            }
-        })
-        .collect();
-    system.push_str("Relative paths stay in this run's cwd.");
-    if !names.is_empty() {
-        let _ = write!(
-            system,
-            " For other folders, pass an absolute path to {}.",
-            names.join(", ")
-        );
-    }
-    if let Some(shell) = crate::agent::shell_tool_name(registry) {
-        let _ = write!(
-            system,
-            " Use an absolute path inside a `{shell}` script (`mode` `script`) for other folders. `{shell}` starts in this run's cwd."
-        );
-    }
-}
+/// How every prompt with an MCP catalog loads and calls remote tools.
+const MCP_CALL_GUIDANCE: &str = "Load MCP tool schemas with `search_tool` (exact names, \
+keywords, or \"list\") or `tool_search` (keywords), then call `use_tool` with the exact \
+`name` and matching `arguments`. Never guess parameters; reuse loaded schemas and reload one \
+when its tool is missing or changed. A server that is still connecting has not registered its \
+tools yet.";
 
 pub(crate) fn push_workspace_skills(
     prompt: &mut String,
@@ -339,15 +305,14 @@ mod tests {
             cwd: cwd.clone(),
             registry,
             extra_roots: Vec::new(),
-            subagents: Default::default(),
-            skills: Default::default(),
+            settings: Default::default(),
         };
         let first = prompt.render(None).await.unwrap();
         assert!(first.contains("initial workspace rule"));
         assert!(first.contains("Deploy the project."));
         assert!(!first.contains("secret full skill body"));
         assert!(first.contains("initial role description"));
-        assert!(first.contains("`scout`"));
+        assert!(first.contains("\n- scout: "));
         write_role("changed role description");
         fs::write(cwd.join("AGENTS.md"), "changed workspace rule").unwrap();
         let mut settings = crate::config::AppSettings::default();
@@ -364,7 +329,7 @@ mod tests {
         assert!(!second.contains("Deploy the project."));
         assert!(second.contains("new MCP catalog"));
         assert!(second.contains("changed role description"));
-        assert!(!second.contains("`scout`"));
+        assert!(!second.contains("\n- scout: "));
     }
 
     struct TempDir(PathBuf);

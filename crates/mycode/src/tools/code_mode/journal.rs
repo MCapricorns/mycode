@@ -78,12 +78,6 @@ impl ScriptJournal {
     pub fn entries(&self) -> &[JournalEntry] {
         &self.entries
     }
-
-    /// Whether nothing was recorded.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 /// blake3 of a value's canonical JSON form.

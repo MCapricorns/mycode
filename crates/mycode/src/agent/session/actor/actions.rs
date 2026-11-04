@@ -204,23 +204,6 @@ impl SessionCore {
         )))
     }
 
-    pub(super) fn action_read(
-        &mut self,
-        session: &SessionId,
-        branch: &BranchId,
-        snapshot_head: &HeadStamp,
-        after: Option<&SessionEventId>,
-        limit: u16,
-    ) -> Result<SessionPull, OpFail> {
-        let Some(ledger) = self.sessions.get(session) else {
-            return Err(OpFail::Domain(SessionError::NotFound));
-        };
-        let result = ledger
-            .page(branch, snapshot_head, after, limit)
-            .map_err(OpFail::Domain)?;
-        Ok(SessionPull::Complete(SessionResult::Events(result)))
-    }
-
     pub(super) fn action_reserve_branch(
         &mut self,
         session: &SessionId,

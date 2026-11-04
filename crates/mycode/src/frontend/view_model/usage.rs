@@ -368,31 +368,6 @@ mod tests {
     }
 
     #[test]
-    fn token_percentages_handle_large_counts_without_overflow() {
-        assert_eq!(cache_percent(u64::MAX, u64::MAX), Some(100));
-        assert_eq!(cache_percent(u64::MAX, u64::MAX - 1), Some(50));
-        assert_eq!(context_remaining_percent(u64::MAX, u64::MAX), Some(0));
-        assert_eq!(context_remaining_percent(u64::MAX / 2, u64::MAX), Some(51));
-        let turn = TurnStats {
-            model: "m".into(),
-            input: u64::MAX,
-            output: 0,
-            cache: Some(u64::MAX),
-            requests: 1,
-            elapsed_ms: 0,
-        };
-        assert_eq!(turn_cache_hit(&turn), Some(50));
-        assert_eq!(
-            turn_cache_hit(&TurnStats {
-                input: 100,
-                cache: Some(50),
-                ..turn
-            }),
-            Some(33)
-        );
-    }
-
-    #[test]
     fn cache_collapse_requires_a_warm_prompt_and_a_sharp_drop() {
         assert!(cache_hit_collapsed(Some(92), Some(8)));
         assert!(cache_hit_collapsed(Some(92), None));

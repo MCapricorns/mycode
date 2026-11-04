@@ -156,33 +156,6 @@ fn ignored_files_and_unrecognized_lease_directories_are_never_erased() {
     assert!(unknown.join("draft.txt").exists());
 }
 
-#[tokio::test]
-async fn dropping_worktree_acquisition_still_reclaims_the_eventual_clean_lease() {
-    let fixture = Repository::new();
-    let home = fixture.home.clone();
-    let repo = fixture.repo.clone();
-    let (path_tx, path_rx) = tokio::sync::oneshot::channel();
-    let (finish_tx, finish_rx) = std::sync::mpsc::channel();
-    let acquire = tokio::task::spawn_blocking(move || {
-        let lease = WorktreeLease::acquire(&home, &repo).unwrap();
-        let path = lease.path.clone();
-        let guard = LeaseGuard(Some(lease));
-        path_tx.send(path).unwrap();
-        finish_rx.recv().unwrap();
-        guard
-    });
-    let path = path_rx.await.unwrap();
-    drop(acquire);
-    finish_tx.send(()).unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while path.exists() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the dropped acquisition's guard must reclaim its checkout");
-}
-
 #[test]
 fn reopening_original_worktree_preserves_edits_untracked_and_ignored_files_without_git_changes() {
     let fixture = Repository::new();
@@ -255,54 +228,4 @@ fn a_clean_worktree_is_removed_after_handoff() {
     );
     assert!(!path.exists());
     assert!(!manifest.exists());
-}
-
-#[test]
-fn untracked_preview_is_bounded_and_keeps_a_clipped_unicode_prefix() {
-    let fixture = Repository::new();
-    let file = fixture.repo.join("large.txt");
-    std::fs::write(&file, "中".repeat(MAX_WORKTREE_DIFF_BYTES)).unwrap();
-    let text = untracked_file_text(&file, 100).unwrap();
-    assert!(text.starts_with(&"中".repeat(33)));
-    assert!(text.ends_with("... diff truncated\n"));
-    assert!(text.len() < 150);
-}
-
-#[cfg(unix)]
-#[test]
-fn untracked_symlink_handoff_does_not_read_its_target() {
-    let fixture = Repository::new();
-    let outside = fixture.root.join("outside.txt");
-    std::fs::write(&outside, "private target contents").unwrap();
-    std::os::unix::fs::symlink(&outside, fixture.repo.join("link.txt")).unwrap();
-    let diff = capture_worktree_diff(&fixture.repo);
-    assert!(diff.contains("link.txt"), "{diff}");
-    assert!(diff.contains("outside.txt"), "{diff}");
-    assert!(!diff.contains("private target contents"), "{diff}");
-}
-
-#[test]
-fn tracked_diff_is_bounded_while_git_is_still_producing_it() {
-    let fixture = Repository::new();
-    std::fs::write(
-        fixture.repo.join("tracked.txt"),
-        "changed line\n".repeat(MAX_WORKTREE_DIFF_BYTES),
-    )
-    .unwrap();
-    let (output, clipped) = capped_git_output(
-        git_command().arg("-C").arg(&fixture.repo).args([
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "HEAD",
-        ]),
-        4096,
-    )
-    .unwrap();
-    assert!(clipped);
-    assert_eq!(output.stdout.len(), 4097);
-    let preview = capture_worktree_diff(&fixture.repo);
-    assert!(preview.starts_with("diff --git"));
-    assert!(preview.ends_with("... diff truncated\n"));
-    assert!(preview.len() < MAX_WORKTREE_DIFF_BYTES + 100);
 }

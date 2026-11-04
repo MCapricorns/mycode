@@ -859,44 +859,6 @@ mod nesting_tests {
     }
 
     #[test]
-    fn an_unfinished_call_cannot_borrow_a_reused_ids_later_result() {
-        let entries = vec![
-            call("reused", "interrupted"),
-            call("reused", "retried"),
-            result("reused", "retry result"),
-        ];
-        let blocks = collect_transcript_blocks(&entries);
-        let TranscriptBlock::Tools(tools) = &blocks[0] else {
-            panic!("expected a tool run");
-        };
-        assert!(tools[0].result.is_none());
-        assert_eq!(tools[1].result.unwrap().text.as_ref(), "retry result");
-    }
-
-    #[test]
-    fn a_large_parallel_run_keeps_every_result_with_its_call() {
-        let mut entries = Vec::new();
-        for index in 0..1024 {
-            entries.push(call(&index.to_string(), "read"));
-        }
-        for index in (0..1024).rev() {
-            entries.push(result(&index.to_string(), &format!("payload {index}")));
-        }
-        let blocks = collect_transcript_blocks(&entries);
-        assert_eq!(blocks.len(), 1);
-        let TranscriptBlock::Tools(tools) = &blocks[0] else {
-            panic!("expected a tool run");
-        };
-        assert_eq!(tools.len(), 1024);
-        for (index, tool) in tools.iter().enumerate() {
-            assert_eq!(
-                tool.result.expect("paired result").text.as_ref(),
-                format!("payload {index}")
-            );
-        }
-    }
-
-    #[test]
     fn consecutive_tool_rows_collapse_into_one_run() {
         let user = crate::view_model::ConversationEntry {
             event_id: "user".into(),

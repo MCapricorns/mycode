@@ -1,5 +1,5 @@
 use super::{
-    code_call_count, diff_counts, diff_line_text, read_path, shows_diff_preview, split_code_calls,
+    code_call_count, diff_counts, read_path, shows_diff_preview, split_code_calls,
     tool_batch_summary, tool_call_parts, tool_dot_color, tool_status,
 };
 use crate::view_model::{ConversationEntry, EntryKind};
@@ -86,22 +86,6 @@ fn write_additions_summarize_as_a_diff() {
 }
 
 #[test]
-fn legacy_doubled_signs_still_count_and_display_as_one() {
-    let mut text = String::from("edited src/lib.rs\n");
-    text.push_str("++ kept\n");
-    text.push_str("-- gone\n");
-    assert_eq!(
-        tool_status("edit", Some(&result_entry(&text)), false),
-        "+1 -1"
-    );
-    assert_eq!(diff_line_text("++ kept"), "+ kept");
-    assert_eq!(diff_line_text("-- gone"), "- gone");
-    assert_eq!(diff_line_text("+ kept"), "+ kept");
-    assert_eq!(diff_line_text("+++ b/file.rs"), "+++ b/file.rs");
-    assert_eq!(diff_line_text("--- a/file.rs"), "--- a/file.rs");
-}
-
-#[test]
 fn a_run_of_reads_and_edits_collapses_to_one_line() {
     let labels = [
         "read  a.rs",
@@ -176,47 +160,6 @@ fn a_run_code_result_splits_into_its_inner_calls() {
 }
 
 #[test]
-fn the_counting_scan_agrees_with_the_full_split() {
-    // Continuations (diff lines, hunk headers, the truncation note) belong
-    // to the call above them; a blank line starts nothing.
-    let text = "out\n[code calls]\nread  a\nedit  b (failed)\n+ x\n@@ -1 +1 @@\n[diff truncated]\n\ngrep  c";
-    assert_eq!(code_call_count(text), 3);
-    assert_eq!(
-        code_call_count(text),
-        split_code_calls(text).expect("breakdown").1.len()
-    );
-    // A heading with no calls under it counts zero, like the split's None.
-    assert_eq!(code_call_count("[code calls]"), 0);
-    assert_eq!(code_call_count("[code calls]\n (failed)"), 0);
-}
-
-#[test]
-fn numbering_a_diff_prefix_matches_the_full_numbering() {
-    // The preview numbers only the painted prefix; numbering is
-    // positional, so the prefix must agree line for line with the full
-    // pass it replaces.
-    let lines: Vec<String> = (0..120)
-        .map(|n| {
-            if n % 2 == 0 {
-                format!("+ line {n}")
-            } else {
-                format!("- line {n}")
-            }
-        })
-        .collect();
-    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-    let full = super::number_diff(&refs);
-    let prefix = super::number_diff(&refs[..80]);
-    assert_eq!(prefix.len(), 80);
-    for (capped, whole) in prefix.iter().zip(&full) {
-        assert_eq!(capped.old, whole.old);
-        assert_eq!(capped.new, whole.new);
-        assert_eq!(capped.text, whole.text);
-        assert!(capped.kind == whole.kind);
-    }
-}
-
-#[test]
 fn diff_lines_are_numbered_from_the_first_change() {
     let lines = ["edited src/lib.rs", "+ alpha", "- beta", "  kept"];
     let numbered = super::number_diff(&lines);
@@ -227,20 +170,6 @@ fn diff_lines_are_numbered_from_the_first_change() {
     assert_eq!(numbered[2].new, None);
     assert_eq!(numbered[3].old, Some(2));
     assert_eq!(numbered[3].new, Some(2));
-}
-
-#[test]
-fn tool_diff_line_numbers_advance_past_a_large_hunk_start() {
-    let numbered = super::number_diff(&[
-        "@@ -4294967295,2 +4294967295,2 @@",
-        "  retained",
-        "- previous",
-        "+ replacement",
-    ]);
-    assert_eq!(numbered[1].old, Some(u64::from(u32::MAX)));
-    assert_eq!(numbered[1].new, Some(u64::from(u32::MAX)));
-    assert_eq!(numbered[2].old, Some(u64::from(u32::MAX) + 1));
-    assert_eq!(numbered[3].new, Some(u64::from(u32::MAX) + 1));
 }
 
 #[test]

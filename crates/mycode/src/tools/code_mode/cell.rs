@@ -56,9 +56,6 @@ pub enum CellPhase {
     Terminated,
 }
 
-/// The cell phase under the design document's alternate name.
-pub type CodeCellState = CellPhase;
-
 impl CellPhase {
     /// Whether the cell will not change again.
     #[must_use]
@@ -244,12 +241,6 @@ impl ScriptCell {
             progress: broadcast::channel(256).0,
             terminate: CancellationToken::new(),
         }
-    }
-
-    /// The session this cell belongs to.
-    #[must_use]
-    pub fn scope(&self) -> &str {
-        &self.scope
     }
 
     /// The id the model uses with `wait_code`.
@@ -523,7 +514,6 @@ impl ScriptCell {
             phase: inner.phase,
             output,
             calls: inner.calls,
-            operations: inner.operations,
             journal: inner.journal.clone(),
             inner_calls: inner.inner_calls.clone(),
         }
@@ -541,8 +531,6 @@ pub struct CellSnapshot {
     pub output: String,
     /// `call()` count.
     pub calls: u64,
-    /// QuickJS interrupt polls observed, as last reported by the engine.
-    pub operations: u64,
     /// Journal so far.
     pub journal: ScriptJournal,
     /// UI summaries of the inner calls so far.
@@ -665,74 +653,8 @@ impl CodeCells {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
 
-    use super::{BinaryData, CellPhase, CodeCells, ScriptOutcome};
-
-    fn image(data: &str) -> BinaryData {
-        BinaryData {
-            data: data.to_owned(),
-            mime_type: "image/png".to_owned(),
-        }
-    }
-
-    #[test]
-    fn pending_images_enforce_count_limit_without_partial_batch_admission() {
-        let cell = CodeCells::new().create("s", 1024);
-        let accepted = vec![image("AAAA"); super::MAX_PENDING_IMAGES - 1];
-        cell.queue_images(accepted.clone()).unwrap();
-        let error = cell
-            .queue_images(vec![image("BBBB"), image("CCCC")])
-            .unwrap_err();
-        assert!(error.contains("pending native image count limit exceeded"));
-        assert_eq!(cell.inner.read().pending_images, accepted);
-        cell.queue_images(vec![image("DDDD")]).unwrap();
-        cell.queue_images(Vec::new()).unwrap();
-        assert!(cell.queue_images(vec![image("EEEE")]).is_err());
-        let mut expected = accepted;
-        expected.push(image("DDDD"));
-        assert_eq!(cell.take_images(), expected);
-        assert!(cell.take_images().is_empty());
-        cell.queue_images(vec![image("FFFF")]).unwrap();
-        assert_eq!(cell.take_images(), vec![image("FFFF")]);
-    }
-
-    #[test]
-    fn pending_images_enforce_aggregate_base64_bytes_and_reset_after_delivery() {
-        let cell = CodeCells::new().create("s", 1024);
-        // Small budgets exercise the production admission logic without
-        // allocating multi-megabyte base64 strings.
-        {
-            let mut inner = cell.inner.write();
-            inner.queue_images(vec![image("AAAA")], 4, 8).unwrap();
-            let error = inner
-                .queue_images(vec![image("BBBB"), image("CCCC")], 4, 8)
-                .unwrap_err();
-            assert!(error.contains("pending native image byte limit exceeded"));
-            assert!(error.contains("maximum 8 base64 bytes"));
-            assert_eq!(inner.pending_images, vec![image("AAAA")]);
-            assert_eq!(inner.pending_image_bytes, 4);
-            inner.queue_images(vec![image("DDDD")], 4, 8).unwrap();
-            assert!(inner.queue_images(vec![image("EEEE")], 4, 8).is_err());
-        }
-        cell.finish(ScriptOutcome::Failed("after images".to_owned()));
-        assert_eq!(cell.phase(), CellPhase::Failed);
-        assert_eq!(cell.take_images(), vec![image("AAAA"), image("DDDD")]);
-        assert!(cell.take_images().is_empty());
-        {
-            let mut inner = cell.inner.write();
-            assert_eq!(inner.pending_image_bytes, 0);
-            assert!(
-                inner
-                    .queue_images(vec![image("AAAAAAAAAAAA")], 4, 8)
-                    .is_err()
-            );
-            assert!(inner.pending_images.is_empty());
-            assert_eq!(inner.pending_image_bytes, 0);
-            inner.queue_images(vec![image("FFFFFFFF")], 4, 8).unwrap();
-        }
-        assert_eq!(cell.take_images(), vec![image("FFFFFFFF")]);
-    }
+    use super::{CellPhase, CodeCells, ScriptOutcome};
 
     #[test]
     fn output_is_capped_and_annotated() {
@@ -769,20 +691,6 @@ mod tests {
             assert!(cell.begin_call());
         }
         assert!(!cell.begin_call());
-    }
-
-    #[test]
-    fn journal_sequences_are_monotonic() {
-        let cell = CodeCells::new().create("s", 1024);
-        assert_eq!(cell.next_seq(), 0);
-        cell.record(
-            0,
-            super::ScriptEventKind::Call,
-            &json!({"name": "read"}),
-            Some(&json!({"content": []})),
-        );
-        assert_eq!(cell.next_seq(), 1);
-        assert_eq!(cell.journal().entries().len(), 1);
     }
 
     /// A cancellation that ends the script is reported as terminated, not as

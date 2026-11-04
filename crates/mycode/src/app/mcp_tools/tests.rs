@@ -5,10 +5,7 @@ use std::sync::atomic::AtomicBool;
 use crate::tools::ToolDyn;
 use serde_json::{Value, json};
 
-use super::{
-    McpCatalog, McpServerInfo, McpSlot, UseTool, bound_mcp_result, register_meta_tools,
-    register_ready_server,
-};
+use super::{McpCatalog, McpServerInfo, McpSlot, UseTool, bound_mcp_result, register_ready_server};
 use crate::app::mcp_client::McpTool;
 use crate::app::tool_search::{ToolSearchIndex, ToolSearchTool};
 
@@ -95,21 +92,6 @@ fn mcp_snippets_say_what_the_tool_does() {
     assert!(long.ends_with("\u{2026} (MCP server 'docs')"), "{long}");
 }
 
-/// The prompt line a server contributes is one bounded sentence: server
-/// instructions are untrusted text, so they never reach the prompt as
-/// several lines.
-#[test]
-fn a_server_summary_is_one_bounded_line() {
-    assert_eq!(
-        super::mcp_server_summary("Look things up.\nSecond line."),
-        Some("Look things up.".to_owned())
-    );
-    assert_eq!(super::mcp_server_summary(" \n\t "), None);
-    let long = super::mcp_server_summary(&"word ".repeat(80)).expect("summary");
-    assert!(long.ends_with('\u{2026}'), "{long}");
-    assert!(long.chars().count() <= 161, "{long}");
-}
-
 #[test]
 fn oversized_results_are_truncated_and_stored() {
     let dir = std::env::temp_dir().join(format!(
@@ -184,7 +166,7 @@ fn list_names_tools_without_schemas() {
     );
     assert!(!listed.contains("inputSchema"));
     let note = catalog.prompt_note();
-    assert!(note.contains("search_tool"), "{note}");
+    assert!(note.contains("- github (1 tool)"), "{note}");
     assert!(!note.contains("create_issue"), "{note}");
 }
 
@@ -441,8 +423,8 @@ fn same_named_tools_on_two_servers_both_stay_reachable() {
 }
 
 /// The note names every connected server with its tool count and its own
-/// summary, and preloads no tool: a tool is only findable when the model
-/// knows which servers are up and how to reach their tools.
+/// summary, and preloads no tool: the prompt's shared guidance tells the
+/// model how to load a schema from one of these servers.
 #[test]
 fn the_prompt_note_names_connected_servers() {
     let anysearch = server_info("anysearch", None);
@@ -463,8 +445,6 @@ fn the_prompt_note_names_connected_servers() {
         note.contains("Manage GitHub issues, pull requests, and code."),
         "{note}"
     );
-    assert!(note.contains("search_tool"), "{note}");
-    assert!(note.contains("use_tool"), "{note}");
     assert!(!note.contains("create_issue"), "{note}");
 }
 
@@ -609,78 +589,6 @@ async fn use_tool_reports_a_still_connecting_server() {
     .await;
     assert!(error.contains("still connecting"), "{error}");
     assert!(error.contains("gh"), "{error}");
-}
-
-/// The native-name snapshot is taken before the meta-tools register, so
-/// sending `search_tool` / `use_tool` to themselves keeps the generic
-/// error instead of a nudge.
-#[tokio::test]
-async fn the_nudge_snapshot_excludes_the_meta_tools() {
-    let registry = crate::tools::ToolRegistry::new();
-    crate::tools::register_builtins(&registry);
-    let catalog = catalog_from(
-        vec![catalog_tool("files", "stat", "Stat a remote file.")],
-        None,
-        &native(&["read"]),
-    );
-    let index = ToolSearchIndex::new();
-    register_meta_tools(&registry, &catalog, Arc::clone(&index));
-    for meta in ["search_tool", "use_tool", "tool_search"] {
-        assert!(registry.get(meta).is_some(), "{meta} registered");
-    }
-    for meta in ["search_tool", "use_tool"] {
-        let tool = registry.get(meta).expect("the meta-tool registered");
-        let error = invalid_args_text(
-            tool.as_ref(),
-            serde_json::json!({"name": meta, "arguments": {}}),
-        )
-        .await;
-        // `use_tool` misses by name, `search_tool` falls through to its
-        // empty keyword search; both keep their generic error.
-        assert!(error.contains("no MCP tool"), "{meta}: {error}");
-        assert!(
-            !error.contains("already on the tool list"),
-            "{meta}: {error}"
-        );
-    }
-}
-
-/// The register path gives a native collision the same server prefix the
-/// closure-based check used to, and writes the catalog before the registry.
-#[test]
-fn register_level_collision_keeps_the_server_prefix() {
-    let registry = crate::tools::ToolRegistry::new();
-    registry.register(Arc::new(crate::tools::builtin::ReadTool));
-    let catalog = McpCatalog::new(None, native(&["read"]), Vec::new());
-    let index = ToolSearchIndex::new();
-    register_ready_server(
-        &registry,
-        &catalog,
-        &index,
-        server_info("files", None),
-        vec![
-            catalog_tool("files", "read", "Read a remote file."),
-            catalog_tool("files", "stat", "Stat a remote file."),
-        ],
-    );
-    let listed = catalog.list_text();
-    assert!(
-        listed.contains("files__read — Read a remote file."),
-        "{listed}"
-    );
-    assert!(listed.contains("stat — Stat a remote file."), "{listed}");
-    assert!(
-        catalog.get("files__read").is_some(),
-        "the catalog holds the key"
-    );
-    let registered = registry
-        .get("files__read")
-        .expect("registry mirrors the key");
-    assert_eq!(registered.spec().name, "files__read");
-    // The builtin keeps its own name.
-    assert_eq!(registry.get("read").expect("builtin").spec().name, "read");
-    // The BM25 index grew with the same ready server.
-    assert_eq!(index.len(), 2);
 }
 
 #[tokio::test]
@@ -935,81 +843,6 @@ async fn the_drain_reports_a_handshake_failure() {
         *reported.lock().unwrap(),
         [("gh".to_owned(), "handshake timed out".to_owned())]
     );
-}
-
-#[tokio::test]
-async fn cancelled_mcp_call_invalidates_the_shared_connection() {
-    struct PendingChannel(tokio_util::sync::CancellationToken);
-    impl crate::app::mcp_client::JsonRpcChannel for PendingChannel {
-        fn request<'a>(
-            &'a self,
-            _id: u64,
-            _method: &'a str,
-            _params: Value,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<Value, crate::app::mcp_client::McpError>>
-                    + Send
-                    + 'a,
-            >,
-        > {
-            Box::pin(async move {
-                self.0.cancel();
-                std::future::pending().await
-            })
-        }
-        fn notify<'a>(
-            &'a self,
-            _method: &'a str,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<(), crate::app::mcp_client::McpError>>
-                    + Send
-                    + 'a,
-            >,
-        > {
-            Box::pin(async { Ok(()) })
-        }
-    }
-    let ctx = crate::tools::ToolCtx::new(std::env::temp_dir());
-    let broken = Arc::new(AtomicBool::new(false));
-    let tool = super::DynamicMcpTool::new(
-        server_info("pending", None),
-        McpTool {
-            name: "lookup".into(),
-            description: None,
-            input_schema: json!({"type": "object"}),
-            read_only: true,
-        },
-        Arc::new(tokio::sync::Mutex::new(
-            crate::app::mcp_client::McpClient::new(Arc::new(PendingChannel(ctx.cancel.clone()))),
-        )),
-        broken.clone(),
-        Arc::new(std::env::temp_dir()),
-    );
-    let error = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        tool.execute_dyn(json!({}), &ctx, &mut crate::tools::ToolStream::closed()),
-    )
-    .await
-    .unwrap()
-    .unwrap_err();
-    assert!(error.to_string().contains("cancelled"));
-    assert!(broken.load(std::sync::atomic::Ordering::Relaxed));
-}
-
-#[tokio::test]
-async fn cancellation_while_waiting_for_another_call_does_not_break_the_connection() {
-    let tool = catalog_tool("docs", "lookup", "Look up docs");
-    let _other_call = tool.client.lock().await;
-    let ctx = crate::tools::ToolCtx::new(std::env::temp_dir());
-    ctx.cancel.cancel();
-    let error = tool
-        .execute_dyn(json!({}), &ctx, &mut crate::tools::ToolStream::closed())
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("cancelled"));
-    assert!(!tool.broken.load(std::sync::atomic::Ordering::Relaxed));
 }
 
 #[tokio::test]

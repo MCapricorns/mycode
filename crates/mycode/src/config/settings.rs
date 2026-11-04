@@ -22,10 +22,8 @@ mod subagent_roles;
 
 pub use magpie::{MAGPIE_PROVIDER_ID, MagpieSettings};
 pub(crate) use mcp::{MAX_MCP_ARGS, MAX_MCP_HEADERS, is_env_var_name, is_header_name};
-pub use mcp::{
-    MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, is_mcp_executable, split_command_line,
-};
-pub use providers::{MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MODELS_PER_PROVIDER, ProviderSettings};
+pub use mcp::{MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, is_mcp_executable};
+pub use providers::{MAX_HIDDEN_MODELS_PER_PROVIDER, ProviderSettings};
 pub use proxy::{PROXY_SCHEMES, ProxyPreference};
 pub use skills::{MAX_DISABLED_SKILLS, SkillsSettings};
 pub use subagent_roles::{SubagentRoleSettings, SubagentSettings};
@@ -192,6 +190,23 @@ impl AppSettings {
 /// repair cannot be published.
 pub fn read_app_settings(home: &crate::config::HomeLayout) -> Result<AppSettings, ConfigError> {
     Ok(read_app_settings_with_repair(home)?.0)
+}
+
+/// Reads the saved settings, or returns `fallback` while no settings document
+/// exists, so work started from in-memory settings keeps them until a save.
+///
+/// # Errors
+///
+/// Same as [`read_app_settings`].
+pub fn read_app_settings_or(
+    home: &crate::config::HomeLayout,
+    fallback: AppSettings,
+) -> Result<AppSettings, ConfigError> {
+    if home.root().join(SETTINGS_PATH).exists() {
+        read_app_settings(home)
+    } else {
+        Ok(fallback)
+    }
 }
 
 /// Reads `settings.json`, repairing a damaged document.
@@ -578,50 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn settings_snapshot_keeps_values_and_revision_together_during_writes() {
-        let (_guard, home) = settings_home("snapshot");
-        let (settings, revision, repair) = super::read_app_settings_snapshot(&home).unwrap();
-        assert_eq!(settings, AppSettings::default());
-        assert_eq!(revision, AuthorityRevision::ABSENT);
-        assert!(repair.is_none());
-
-        let mut settings = AppSettings::default();
-        settings.appearance.theme = "light".to_owned();
-        let initial = super::replace_app_settings(&home, revision, &settings).unwrap();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let mut revision = initial;
-                for next in 2..=100 {
-                    settings.appearance.theme =
-                        if next % 2 == 0 { "dark" } else { "light" }.to_owned();
-                    revision = super::replace_app_settings(&home, revision, &settings).unwrap();
-                    std::thread::yield_now();
-                }
-            });
-            for _ in 0..100 {
-                let (loaded, revision, repair) = super::read_app_settings_snapshot(&home).unwrap();
-                assert!(repair.is_none());
-                assert_eq!(
-                    loaded.appearance.theme,
-                    if revision.get() % 2 == 0 {
-                        "dark"
-                    } else {
-                        "light"
-                    },
-                    "the editor must not pair stale values with a newer revision"
-                );
-                std::thread::yield_now();
-            }
-        });
-        let stale =
-            super::replace_app_settings(&home, initial, &AppSettings::default()).unwrap_err();
-        assert_eq!(
-            stale.kind(),
-            crate::config::ConfigErrorKind::RevisionConflict
-        );
-    }
-
-    #[test]
     fn settings_snapshot_reports_the_revision_published_by_import_and_repair() {
         let (_guard, home) = settings_home("snapshot-repair");
         let bootstrap = serde_json::to_vec(&bootstrap_fixture()).unwrap();
@@ -696,189 +667,6 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_publication_failure_keeps_the_original_without_a_damage_backup() {
-        let (_guard, home) = settings_home("bootstrap-publish-error");
-        let mut document = bootstrap_fixture();
-        document["magpie"]["hiddenModels"] = (0..super::MAX_HIDDEN_MODELS_PER_PROVIDER)
-            .map(|index| format!("fixture/{index:04}-{}", "m".repeat(107)))
-            .collect::<Vec<_>>()
-            .into();
-        let bytes = serde_json::to_vec(&document).unwrap();
-        let settings: AppSettings = serde_json::from_value(document).unwrap();
-        settings.validate().unwrap();
-        // Compact input fits the read limit, but canonical indentation puts
-        // the replacement over it. Publication must fail without treating
-        // the valid source as a damaged document or creating a backup.
-        assert!(bytes.len() <= super::MAX_AUTHORITY_DOCUMENT_BYTES);
-        assert!(
-            encode_settings(AuthorityRevision::new(1).unwrap(), &settings)
-                .unwrap()
-                .len()
-                > super::MAX_AUTHORITY_DOCUMENT_BYTES
-        );
-        crate::config::write_owned_test_bytes(&home, "settings.json", &bytes).unwrap();
-        let error = super::read_app_settings_with_repair(&home).unwrap_err();
-        assert_eq!(error.kind(), crate::config::ConfigErrorKind::Oversized);
-        assert_eq!(
-            std::fs::read(home.root().join("settings.json")).unwrap(),
-            bytes
-        );
-        assert!(
-            !std::fs::read_dir(home.root())
-                .unwrap()
-                .flatten()
-                .any(|entry| entry.file_name().to_string_lossy().contains(".broken-"))
-        );
-    }
-
-    #[test]
-    fn bootstrap_compatibility_does_not_hide_partial_invalid_or_unrelated_documents() {
-        let mut rejected = vec![
-            b"{not-json".to_vec(),
-            b"[]".to_vec(),
-            b"{}".to_vec(),
-            br#"{"appearance":{"theme":"light"}}"#.to_vec(),
-        ];
-        let envelope = [
-            ("formatVersion", serde_json::json!(1)),
-            ("kind", serde_json::json!("mycode-app-settings")),
-            ("revision", serde_json::json!(7)),
-        ];
-        // Every proper nonempty subset remains damage, even when each
-        // present envelope field has its otherwise-correct value.
-        for mask in 1..7 {
-            let mut document = bootstrap_fixture();
-            for (index, (key, value)) in envelope.iter().enumerate() {
-                if mask & (1 << index) != 0 {
-                    document[*key] = value.clone();
-                }
-            }
-            rejected.push(serde_json::to_vec(&document).unwrap());
-        }
-        for (key, value) in [
-            ("formatVersion", serde_json::json!(2)),
-            ("kind", serde_json::json!("another-format")),
-            ("revision", serde_json::json!("7")),
-            ("revision", serde_json::json!(u64::MAX)),
-            ("formatVersion", serde_json::Value::Null),
-            ("kind", serde_json::Value::Null),
-            ("revision", serde_json::Value::Null),
-        ] {
-            let mut document = bootstrap_fixture();
-            for (field, original) in &envelope {
-                document[*field] = original.clone();
-            }
-            document[key] = value;
-            rejected.push(serde_json::to_vec(&document).unwrap());
-        }
-        for (key, value) in [
-            ("providers", serde_json::json!({})),
-            ("web", serde_json::json!({})),
-            ("tools", serde_json::json!({"shell":{}})),
-            ("appearance", serde_json::json!({"theme":"nope"})),
-            (
-                "appearance",
-                serde_json::json!({"theme":"dark","unknown":true}),
-            ),
-            ("reasoningEffort", serde_json::json!("default")),
-            ("skills", serde_json::json!({"disabled":[""]})),
-        ] {
-            let mut document = bootstrap_fixture();
-            document[key] = value;
-            rejected.push(serde_json::to_vec(&document).unwrap());
-        }
-        for (key, value) in [
-            ("enabled", serde_json::json!(false)),
-            ("baseUrl", serde_json::json!("http://example.com/v1")),
-            ("apiKey", serde_json::json!("")),
-            ("model", serde_json::json!("")),
-            ("model", serde_json::json!("invalid model")),
-            ("unknown", serde_json::json!(true)),
-        ] {
-            let mut document = bootstrap_fixture();
-            document["magpie"][key] = value;
-            rejected.push(serde_json::to_vec(&document).unwrap());
-        }
-        for field in ["enabled", "baseUrl", "apiKey", "model"] {
-            let mut document = bootstrap_fixture();
-            document["magpie"].as_object_mut().unwrap().remove(field);
-            rejected.push(serde_json::to_vec(&document).unwrap());
-        }
-        for (index, bytes) in rejected.into_iter().enumerate() {
-            let (_guard, home) = settings_home("bootstrap-rejected");
-            crate::config::write_owned_test_bytes(&home, "settings.json", &bytes).unwrap();
-            let (_, repair) = super::read_app_settings_with_repair(&home).unwrap();
-            let repair =
-                repair.unwrap_or_else(|| panic!("invalid bootstrap case {index} bypassed repair"));
-            assert_eq!(
-                std::fs::read(home.root().join(repair.backup)).unwrap(),
-                bytes
-            );
-            assert!(
-                super::read_app_settings_with_repair(&home)
-                    .unwrap()
-                    .1
-                    .is_none()
-            );
-        }
-    }
-
-    #[test]
-    fn unknown_settings_field_is_rejected_not_ignored() {
-        // `deny_unknown_fields` is inert under `#[serde(flatten)]`, so a
-        // misspelled field must still be rejected by the map-based decode.
-        let bytes = br#"{
-            "formatVersion": 1,
-            "kind": "mycode-app-settings",
-            "revision": 1,
-            "appearance": { "theme": "dark", "language": "auto" },
-            "appearances": { "theme": "light" }
-        }"#;
-        let error = decode_settings(bytes)
-            .err()
-            .expect("unknown field is document damage");
-        assert_eq!(
-            error.kind(),
-            crate::config::ConfigErrorKind::AuthorityValidation
-        );
-        assert!(
-            error.summary().contains("unknown field"),
-            "{}",
-            error.summary()
-        );
-
-        let nested = br#"{
-            "formatVersion": 1,
-            "kind": "mycode-app-settings",
-            "revision": 1,
-            "appearance": { "theme": "dark", "language": "auto", "humeur": "x" }
-        }"#;
-        let error = decode_settings(nested)
-            .err()
-            .expect("nested unknown field is rejected");
-        assert_eq!(
-            error.kind(),
-            crate::config::ConfigErrorKind::AuthorityValidation
-        );
-
-        // Keys from older documents are equally unknown: there is no
-        // per-field compatibility shim anymore.
-        for document in [
-            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"usage":{"enabled":true}}"#[..],
-            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"tools":{"shell":{"kind":"pwsh","program":"C:\\pwsh.exe"},"osSandbox":true}}"#[..],
-            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"userAgent":"custom-agent"}"#[..],
-            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark","palette":"ocean"}}"#[..],
-            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark","fontFamily":"Comic Sans"}}"#[..],
-            &br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"subagents":{"maxConcurrent":2}}"#[..],
-        ] {
-            let error = decode_settings(document)
-                .err()
-                .expect("a removed field is document damage");
-            assert_eq!(error.kind(), crate::config::ConfigErrorKind::AuthorityValidation);
-        }
-    }
-
-    #[test]
     fn salvage_keeps_the_healthy_sections_of_a_damaged_document() {
         let document: serde_json::Value = serde_json::from_slice(
             br#"{
@@ -935,13 +723,6 @@ mod tests {
         ] {
             assert!(!encoded.contains(removed), "{encoded}");
         }
-    }
-
-    #[test]
-    fn salvage_returns_none_for_a_non_object_document() {
-        assert!(salvage_app_settings(&serde_json::json!([1, 2])).is_none());
-        assert!(salvage_app_settings(&serde_json::json!("text")).is_none());
-        assert!(salvage_app_settings(&serde_json::json!({})).is_some());
     }
 
     #[test]

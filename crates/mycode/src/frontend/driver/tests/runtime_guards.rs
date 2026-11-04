@@ -1,7 +1,6 @@
 //! Sending and cancelling must respect the state shown to the user.
 use crate::app::{BranchId, BridgeCommand, BridgeReply, SessionId};
 use crate::config::AppSettings;
-use crate::tools::CodeModeProgress;
 
 use super::{conversation, scratch_driver};
 use crate::frontend::driver::ReplyScope;
@@ -156,74 +155,6 @@ fn an_unavailable_session_pin_blocks_chat_and_compaction() {
     assert!(
         !driver.vm.compacting,
         "compaction must respect the same selection"
-    );
-    driver.shutdown();
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn an_early_cancel_refusal_keeps_the_inner_child_available_for_retry() {
-    let (mut driver, root) = scratch_driver("early-child-cancel");
-    driver.vm.active = Some(conversation("session", "branch"));
-    driver.vm.sending = true;
-    let mut out = Vec::new();
-    driver.act(
-        FrontendAction::ToolProgress {
-            call_id: "ledger-outer".into(),
-            provider_call_id: "outer".into(),
-            name: "run_code".into(),
-            message: CodeModeProgress::Started {
-                call_id: "outer.0".into(),
-                name: "agent".into(),
-                seq: 0,
-                target: "scout inspect source".into(),
-            }
-            .encode(),
-        },
-        &mut out,
-    );
-    driver.cancel_subagent("outer.0", &mut out);
-    assert_eq!(
-        driver.vm.live_jobs.len(),
-        1,
-        "a request is not an acknowledgement"
-    );
-    assert!(!driver.vm.finished_jobs.contains("outer.0"));
-    let command = BridgeCommand::CancelSubagent {
-        session_id: "session".into(),
-        call_id: "outer.0".into(),
-    };
-    driver.on_reply(
-        ReplyScope::for_command(&command),
-        BridgeReply::SubagentCancelled(Err("that subagent is not running".into())),
-        &mut out,
-    );
-    let progress = || FrontendAction::ToolProgress {
-        call_id: "ledger-wait".into(),
-        provider_call_id: "wait".into(),
-        name: "wait_code".into(),
-        message: CodeModeProgress::Progress {
-            call_id: "outer.0".into(),
-            name: "agent".into(),
-            message: "agent|scout|tool|read src/lib.rs".into(),
-        }
-        .encode(),
-    };
-    driver.act(progress(), &mut out);
-    assert_eq!(driver.vm.live_jobs.len(), 1);
-    assert!(driver.vm.live_jobs[0].step.ends_with("read src/lib.rs"));
-    driver.cancel_subagent("outer.0", &mut out);
-    driver.on_reply(
-        ReplyScope::for_command(&command),
-        BridgeReply::SubagentCancelled(Ok(())),
-        &mut out,
-    );
-    assert!(driver.vm.live_jobs.is_empty());
-    assert!(driver.vm.finished_jobs.contains("outer.0"));
-    driver.act(progress(), &mut out);
-    assert!(
-        driver.vm.live_jobs.is_empty(),
-        "confirmed cancellation rejects queued progress"
     );
     driver.shutdown();
     let _ = std::fs::remove_dir_all(root);

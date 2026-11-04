@@ -166,7 +166,7 @@ fn push_effort(efforts: &mut Vec<String>, effort: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_MODELS_PER_PROVIDER, PROVIDER_ID, provider_from_models};
+    use super::{PROVIDER_ID, provider_from_models};
 
     #[test]
     fn the_gateway_list_becomes_one_provider_row() {
@@ -360,90 +360,6 @@ mod tests {
             assert_eq!(provider.model("model").expect("bare row").id, "model");
             assert!(provider.models.iter().all(|model| model.aliases.is_empty()));
         }
-    }
-
-    #[test]
-    fn invalid_owners_never_establish_alias_routes() {
-        for owner in [
-            String::new(),
-            "team/name".to_owned(),
-            "team:name".to_owned(),
-            "co\npilot".to_owned(),
-            "co pilot".to_owned(),
-            "x".repeat(129),
-        ] {
-            let body = serde_json::to_vec(&serde_json::json!({"data": [
-                {"id": "model", "owned_by": owner},
-                {"id": format!("{owner}/model"), "owned_by": owner}
-            ]}))
-            .expect("body");
-            let provider = provider_from_models(&body, "http://localhost:1/v1").expect("provider");
-            assert_eq!(provider.model("model").expect("bare row").id, "model");
-            assert!(provider.models.iter().all(|model| model.aliases.is_empty()));
-        }
-    }
-
-    #[test]
-    fn qualified_ids_are_never_treated_as_bare_aliases() {
-        let body = br#"{"data":[
-            {"id":"team/model","owned_by":"copilot"},
-            {"id":"copilot/team/model","owned_by":"copilot"}
-        ]}"#;
-        let provider = provider_from_models(body, "http://localhost:1/v1").expect("provider");
-        assert_eq!(provider.models.len(), 2);
-        assert!(provider.models.iter().all(|model| model.aliases.is_empty()));
-    }
-
-    #[test]
-    fn duplicate_exact_ids_keep_the_first_metadata_and_owner() {
-        for first_owner in ["copilot", "codex"] {
-            let body = serde_json::to_vec(&serde_json::json!({"data": [
-                {"id": "copilot/model", "owned_by": first_owner, "display_name": "First", "context_window": 128_000},
-                {"id": "model", "owned_by": "copilot"},
-                {"id": "copilot/model", "owned_by": "copilot", "display_name": "Duplicate", "context_window": 4096},
-                {"id": "model", "owned_by": "codex"}
-            ]})).expect("body");
-            let provider = provider_from_models(&body, "http://localhost:1/v1").expect("provider");
-            let route = provider.model("copilot/model").expect("first route");
-            assert_eq!(route.name, "First");
-            assert_eq!(route.context, 128_000);
-            if first_owner == "copilot" {
-                assert_eq!(provider.models.len(), 1);
-                assert_eq!(route.aliases, ["model"]);
-                assert_eq!(provider.model("model"), Some(route));
-            } else {
-                assert_eq!(provider.models.len(), 2);
-                assert!(route.aliases.is_empty());
-                assert_eq!(
-                    provider.model("model").expect("unmatched bare row").id,
-                    "model"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn alias_resolution_keeps_the_scan_and_catalog_limits() {
-        let mut items = vec![serde_json::json!({"id": "000-bare", "owned_by": "copilot"})];
-        items.extend(
-            (1..MAX_MODELS_PER_PROVIDER * 4)
-                .map(|index| serde_json::json!({"id": format!("model-{index:04}")})),
-        );
-        items.push(serde_json::json!({"id": "copilot/000-bare", "owned_by": "copilot"}));
-        let body = serde_json::to_vec(&serde_json::json!({"data": items})).expect("body");
-        let provider = provider_from_models(&body, "http://localhost:1/v1").expect("provider");
-        assert_eq!(provider.models.len(), MAX_MODELS_PER_PROVIDER);
-        assert!(provider.model("copilot/000-bare").is_none());
-        assert_eq!(
-            provider.model("000-bare").expect("bare row within scan").id,
-            "000-bare"
-        );
-        assert!(
-            provider
-                .models
-                .windows(2)
-                .all(|pair| pair[0].id < pair[1].id)
-        );
     }
 
     #[test]

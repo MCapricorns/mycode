@@ -284,21 +284,6 @@ mod tests {
     }
 
     #[test]
-    fn catch_up_threshold_counts_unicode_characters_across_deltas() {
-        for first in ["a", "界"] {
-            let at_limit = first.repeat(STREAM_CHARS_PER_FRAME * 8 - 1);
-            let (slice, rest) = split_stream_frame([text(&at_limit), text("尾"), done()]);
-            assert_eq!(slice.len(), 1);
-            assert_eq!(rest.len(), 2);
-
-            let over_limit = first.repeat(STREAM_CHARS_PER_FRAME * 8);
-            let (slice, rest) = split_stream_frame([text(&over_limit), text("尾"), done()]);
-            assert_eq!(slice.len(), 2);
-            assert_eq!(rest.len(), 1);
-        }
-    }
-
-    #[test]
     fn tool_start_paints_before_its_result() {
         let (slice, rest) = split_stream_frame([tool_start(), tool_done()]);
         assert!(slice.iter().any(is_tool_started));

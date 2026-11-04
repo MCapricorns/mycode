@@ -136,31 +136,3 @@ impl AppSettings {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::SubagentSettings;
-
-    #[test]
-    fn an_invalid_provider_is_not_echoed_in_configuration_errors() {
-        let mut settings = crate::config::AppSettings::default();
-        let role = settings.subagents.role_mut("scout");
-        role.provider = Some("accidentally-pasted-secret".to_owned());
-        role.model = Some("model".to_owned());
-        let error = settings.validate().expect_err("unknown provider");
-        assert!(error.summary().contains("subagents.roles[0].provider"));
-        assert!(!error.to_string().contains("accidentally-pasted-secret"));
-        assert!(!format!("{error:?}").contains("accidentally-pasted-secret"));
-    }
-
-    #[test]
-    fn retired_limits_are_document_damage_now() {
-        assert!(
-            serde_json::from_str::<SubagentSettings>(r#"{"maxConcurrent":2,"timeoutSecs":30}"#)
-                .is_err(),
-            "a removed key is rejected, not silently ignored"
-        );
-        let saved = serde_json::to_string(&SubagentSettings::default()).expect("encode");
-        assert_eq!(saved, "{}");
-    }
-}

@@ -1,6 +1,6 @@
 //! Typed session requests and results.
 //!
-//! `create`, `open`, `append`, `read`, `fork`, and `rewind` are the durable
+//! `create`, `open`, `append`, `fork`, and `rewind` are the durable
 //! operations; `evict` drops one ledger in memory. `reserve-event` and
 //! `reserve-branch` issue single-use reservations, and `load-event`,
 //! `read-payloads`, and `read-payload-window` read payloads inside the
@@ -182,17 +182,6 @@ pub enum SessionRequest {
         expected_head: HeadStamp,
         reservation: EventReservationView,
     },
-    /// Reads one bounded page of one immutable snapshot.
-    Read {
-        session: SessionId,
-        branch: BranchId,
-        /// The snapshot boundary head.
-        snapshot_head: HeadStamp,
-        /// Exclusive start cursor; `None` starts at the first event.
-        after: Option<SessionEventId>,
-        /// Page size (`1..=256`).
-        limit: u16,
-    },
     /// Issues one single-use branch mutation reservation.
     ReserveBranch {
         session: SessionId,
@@ -279,7 +268,6 @@ pub enum SessionResult {
     Opened(OpenedResult),
     Evicted,
     Appended(AppendedResult),
-    Events(EventsResult),
     Branched(BranchedResult),
     /// `reserve-event` finished (first-party only).
     ReservedEvent(EventReservationView),
@@ -332,15 +320,6 @@ pub struct OpenedResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppendedResult {
     pub head: HeadStamp,
-}
-
-/// `read` result page.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EventsResult {
-    /// Metadata rows in ledger order.
-    pub items: Vec<SessionEvent>,
-    /// Cursor of the last returned event; `None` only at snapshot EOF.
-    pub next: Option<SessionEventId>,
 }
 
 /// `fork`/`rewind` result.

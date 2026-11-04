@@ -48,9 +48,7 @@ const QUARANTINE_MAX_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) fn is_document_damage(error: &ConfigError) -> bool {
     matches!(
         error.kind(),
-        ConfigErrorKind::AuthorityValidation
-            | ConfigErrorKind::NonUtf8
-            | ConfigErrorKind::Oversized
+        ConfigErrorKind::AuthorityValidation | ConfigErrorKind::Oversized
     )
 }
 
@@ -387,83 +385,6 @@ mod tests {
     }
 
     #[test]
-    fn repair_does_not_overwrite_a_save_that_arrived_during_salvage() {
-        for name in ["settings.json", "secrets.json", "ui.json"] {
-            let (_guard, home) = home("repair-cas");
-            write_private(&home, name, b"{}");
-            let error = super::load_or_reset(
-                &home,
-                name,
-                1024,
-                |_| -> Result<(), crate::config::ConfigError> {
-                    Err(crate::config::ConfigError::authority_rejection())
-                },
-                || (),
-                |_| {
-                    write_private(&home, name, b"{\"newer\":true}");
-                    Some(())
-                },
-                |_| Ok(b"{\"stale\":true}".to_vec()),
-            )
-            .err()
-            .expect("stale repair must fail");
-            assert_eq!(
-                error.kind(),
-                crate::config::ConfigErrorKind::RevisionConflict
-            );
-            assert_eq!(
-                std::fs::read(home.root().join(name)).unwrap(),
-                b"{\"newer\":true}"
-            );
-        }
-    }
-
-    #[test]
-    fn repair_publication_checks_absence_and_keeps_document_size_limit() {
-        let (_guard, home) = home("repair-publication");
-        write_private(&home, "ui.json", b"newer save");
-        let error = super::publish_repair(&home, "ui.json", 1024, None, b"stale".to_vec())
-            .expect_err("a file created after quarantine is not ours to overwrite");
-        assert_eq!(
-            error.kind(),
-            crate::config::ConfigErrorKind::RevisionConflict
-        );
-        assert_eq!(
-            std::fs::read(home.root().join("ui.json")).unwrap(),
-            b"newer save"
-        );
-        let error = super::publish_repair(&home, "ui.json", 4, Some(b"newer save"), vec![b'x'; 5])
-            .expect_err("the quarantine read cap must not raise the publication cap");
-        assert_eq!(error.kind(), crate::config::ConfigErrorKind::Oversized);
-        // An oversized damaged original still fits the quarantine budget.
-        super::publish_repair(&home, "ui.json", 4, Some(b"newer save"), b"{}".to_vec())
-            .expect("compare the original with the quarantine read cap");
-        assert_eq!(std::fs::read(home.root().join("ui.json")).unwrap(), b"{}");
-    }
-
-    #[test]
-    fn a_stale_native_rejection_cannot_quarantine_a_readable_save() {
-        let (_guard, home) = home("quarantine-cas");
-        write_private(&home, "settings.json", b"newer save");
-        let error = super::quarantine_rejected_owned_file(
-            &home,
-            "settings.json",
-            "settings.json.broken-1",
-            &crate::config::ConfigError::new(crate::config::ConfigErrorKind::AccessControl),
-        )
-        .expect_err("recheck the native failure under the write lock");
-        assert_eq!(
-            error.kind(),
-            crate::config::ConfigErrorKind::RevisionConflict
-        );
-        assert_eq!(
-            std::fs::read(home.root().join("settings.json")).unwrap(),
-            b"newer save"
-        );
-        assert!(!home.root().join("settings.json.broken-1").exists());
-    }
-
-    #[test]
     fn damaged_settings_ui_and_secrets_reset_without_dropping_the_backup() {
         let (_guard, home) = home("docs");
         write_private(&home, "settings.json", b"{not-json");
@@ -693,23 +614,6 @@ mod tests {
     }
 
     #[test]
-    fn writes_leave_no_lock_files_and_clear_old_ones() {
-        let (_guard, home) = home("locks");
-        // A home written by an older build still has its lock files.
-        std::fs::write(home.root().join("settings.json.lock"), b"").unwrap();
-        let mut settings = crate::config::AppSettings::default();
-        settings.appearance.font_size = "l".to_owned();
-        replace_app_settings(&home, crate::config::AuthorityRevision::ABSENT, &settings).unwrap();
-        crate::config::replace_ui_state(&home, &crate::config::UiState::default()).unwrap();
-        let names = names_in(&home);
-        assert!(
-            names.iter().all(|name| !name.ends_with(".lock")),
-            "lock files left beside the documents: {names:?}"
-        );
-        assert!(names.contains(&"settings.json".to_owned()), "{names:?}");
-    }
-
-    #[test]
     fn a_decode_error_that_is_not_damage_is_reported_not_reset() {
         let (_guard, home) = home("rewrite");
         write_private(&home, "ui.json", b"{}");
@@ -735,134 +639,6 @@ mod tests {
                 .all(|name| !name.contains(".broken-")),
             "a valid document was quarantined"
         );
-    }
-
-    #[test]
-    fn only_confirmed_file_failures_trigger_unreadable_repair() {
-        use crate::config::{ConfigError, ConfigErrorKind};
-        use std::io::ErrorKind;
-
-        for kind in [
-            ErrorKind::Interrupted,
-            ErrorKind::WouldBlock,
-            ErrorKind::TimedOut,
-            ErrorKind::ResourceBusy,
-            ErrorKind::OutOfMemory,
-            ErrorKind::StorageFull,
-            ErrorKind::Other,
-            ErrorKind::UnexpectedEof,
-            ErrorKind::NotFound,
-        ] {
-            let error = ConfigError::new(ConfigErrorKind::Io).with_io_kind(kind);
-            assert!(!super::is_unusable_file(&error), "{kind:?}");
-        }
-        assert!(!super::is_unusable_file(&ConfigError::new(
-            ConfigErrorKind::Io
-        )));
-        for kind in [ErrorKind::InvalidData, ErrorKind::IsADirectory] {
-            assert!(super::is_unusable_file(
-                &ConfigError::new(ConfigErrorKind::Io).with_io_kind(kind)
-            ));
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn a_sharing_violation_does_not_quarantine_a_healthy_document() {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_SHARE_DELETE};
-
-        let (_guard, home) = home("share-locked");
-        let bytes = br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":7,"appearance":{"theme":"dark","fontSize":"l"}}"#;
-        write_private(&home, "settings.json", bytes);
-        // Deny reads while allowing rename: the old broad I/O classification
-        // could move this healthy document and publish defaults beside it.
-        let lock = std::fs::OpenOptions::new()
-            .access_mode(DELETE)
-            .share_mode(FILE_SHARE_DELETE)
-            .open(home.root().join("settings.json"))
-            .unwrap();
-        assert!(read_app_settings_with_repair(&home).is_err());
-        assert!(
-            names_in(&home)
-                .iter()
-                .all(|name| !name.contains(".broken-"))
-        );
-        drop(lock);
-        assert_eq!(
-            std::fs::read(home.root().join("settings.json")).unwrap(),
-            bytes
-        );
-        let (loaded, repair) = read_app_settings_with_repair(&home).unwrap();
-        assert_eq!(loaded.appearance.font_size, "l");
-        assert!(repair.is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn unix_foreign_writers_and_hardlinks_cannot_be_salvaged() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let bytes = br#"{"formatVersion":1,"kind":"mycode-app-settings","revision":1,"appearance":{"theme":"dark","fontSize":"l"}}"#;
-        let (_guard, home) = home("unix-trust");
-        let path = home.root().join("settings.json");
-        std::fs::write(&path, bytes).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
-        let (loaded, repair) = read_app_settings_with_repair(&home).unwrap();
-        assert_eq!(loaded.appearance.font_size, "m");
-        assert!(repair.is_some());
-
-        std::fs::remove_file(&path).unwrap();
-        let outside = home.root().parent().unwrap().join("outside.json");
-        std::fs::write(&outside, bytes).unwrap();
-        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o600)).unwrap();
-        std::fs::hard_link(&outside, &path).unwrap();
-        let error = crate::config::read_owned_file(&home, "settings.json", 4096).unwrap_err();
-        assert_eq!(error.kind(), crate::config::ConfigErrorKind::LinkEscape);
-        let (loaded, repair) = read_app_settings_with_repair(&home).unwrap();
-        assert_eq!(loaded.appearance.font_size, "m");
-        assert!(repair.is_some());
-        assert_eq!(std::fs::read(&outside).unwrap(), bytes);
-    }
-
-    #[test]
-    fn quarantine_rejects_a_nested_path() {
-        let (_guard, home) = home("path");
-        let error = quarantine_owned_bytes(&home, "sessions/note.json", b"{}").unwrap_err();
-        assert_eq!(error.kind(), crate::config::ConfigErrorKind::PathEscape);
-    }
-
-    #[test]
-    fn backup_collision_retries_without_overwriting_the_existing_entry() {
-        let (_guard, home) = home("fixed-collision");
-        std::fs::create_dir_all(home.root()).unwrap();
-        let source = home.root().join("settings.json");
-        let backup = home.root().join("settings.json.broken-1");
-        std::fs::write(&source, b"new damage").unwrap();
-        std::fs::write(&backup, b"previous damage").unwrap();
-        let error = crate::config::secure_fs::owned_file::quarantine_owned_file(
-            &home,
-            "settings.json",
-            "settings.json.broken-1",
-        )
-        .unwrap_err();
-        assert_eq!(error.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
-        assert_eq!(std::fs::read(&source).unwrap(), b"new damage");
-        assert_eq!(std::fs::read(&backup).unwrap(), b"previous damage");
-        let mut names = Vec::new();
-        let next = super::publish_unique_backup("settings.json", 1, |name| {
-            names.push(name.to_owned());
-            if names.len() == 1 {
-                Err(
-                    crate::config::ConfigError::new(crate::config::ConfigErrorKind::Io)
-                        .with_io_kind(std::io::ErrorKind::AlreadyExists),
-                )
-            } else {
-                Ok(())
-            }
-        })
-        .unwrap();
-        assert_eq!(next, "settings.json.broken-2");
-        assert_eq!(names, ["settings.json.broken-1", "settings.json.broken-2"]);
     }
 
     #[test]

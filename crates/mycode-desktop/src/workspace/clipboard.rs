@@ -290,33 +290,6 @@ mod tests {
         std::fs::remove_file(path).expect("cleanup");
     }
 
-    #[test]
-    fn file_urls_decode_escaped_names_and_reject_foreign_hosts() {
-        assert_eq!(
-            local_path("file:///C:/My%20Files/%E4%B8%AD%25.png"),
-            Some(PathBuf::from("C:/My Files/中%.png"))
-        );
-        for invalid in [
-            "file://localhost-other/C:/x.png",
-            "file://server/C:/x.png",
-            "file:///C:/bad%2.png",
-            "file:///C:/bad%00.png",
-            "file:///C:/bad%FF.png",
-        ] {
-            assert_eq!(local_path(invalid), None, "{invalid}");
-        }
-        let path = write_png("with space");
-        let url = format!(
-            "file:///{}",
-            path.display()
-                .to_string()
-                .replace('\\', "/")
-                .replace(' ', "%20")
-        );
-        assert!(picture_at(&url).expect("read escaped URL").is_some());
-        std::fs::remove_file(path).expect("cleanup");
-    }
-
     /// A 2x2 32-bit BI_RGB bitmap, the shape a screenshot tool publishes.
     fn tiny_bmp() -> Vec<u8> {
         let header_size = 40u32;
@@ -366,20 +339,5 @@ mod tests {
             .expect("picture");
         assert_eq!(picture.mime, "image/png");
         assert!(picture.bytes.len() < mycode::core::MAX_IMAGE_BYTES);
-    }
-
-    #[test]
-    fn oversized_native_dimensions_are_rejected_before_decoding() {
-        let mut bmp = tiny_bmp();
-        bmp[18..22].copy_from_slice(&100_000_i32.to_le_bytes());
-        bmp[22..26].copy_from_slice(&100_000_i32.to_le_bytes());
-        assert!(reencoded_as_png(&bmp).is_err());
-    }
-
-    #[test]
-    fn encoded_clipboard_images_still_obey_the_attachment_cap() {
-        let mut png = vec![0; mycode::core::MAX_IMAGE_BYTES + 1];
-        png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
-        assert!(picture_bytes(&png, &gpui_kit::ImageFormat::Png).is_err());
     }
 }

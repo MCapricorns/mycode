@@ -30,7 +30,7 @@ mimalloc.workspace = true
 notify = "8.2.1"
 parking_lot.workspace = true
 regex.workspace = true
-reqwest = { features = ["form", "json"], workspace = true }
+reqwest = { features = ["json"], workspace = true }
 rquickjs.workspace = true
 rusqlite.workspace = true
 schemars.workspace = true

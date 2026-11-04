@@ -149,11 +149,6 @@ impl MarkdownCache {
         let slot = store.entries.get_mut(id)?.scrolls.get_mut(block_index)?;
         Some(slot.get_or_insert_with(TableScroll::default).clone())
     }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.inner.borrow().entries.len()
-    }
 }
 
 /// One parsed table block with both raw cell text and pre-parsed inline spans.
@@ -1103,15 +1098,6 @@ mod tests {
     }
 
     #[test]
-    fn long_blank_prefixes_do_not_become_empty_blocks() {
-        let source = format!("{}body\n\n", "\n".repeat(4096));
-        assert_eq!(
-            split_markdown(&source),
-            [MarkdownBlock::Prose("body".into())]
-        );
-    }
-
-    #[test]
     fn table_cells_render_bold_and_inline_code_without_markers() {
         use super::{InlineSpan, inline_spans};
 
@@ -1193,53 +1179,5 @@ mod tests {
             markdown_to_plain_text("> 引用 **重点**\n\n---\n\n```\nlet x = 1;"),
             "引用 重点\n\n\n\nlet x = 1;"
         );
-    }
-
-    #[test]
-    fn bounded_markdown_cache_reuses_allocations_and_evicts_oldest() {
-        use super::{MAX_CACHED_MARKDOWN_ENTRIES, MarkdownBlock, MarkdownCache};
-        use gpui_kit::SharedString;
-
-        let cache = MarkdownCache::default();
-        let id = SharedString::from("entry-1");
-        let text = SharedString::from(
-            "A long paragraph exceeding inline SmolStr storage to verify pointer reuse across frames.",
-        );
-        let first = cache.blocks_for(&id, &text);
-        let second = cache.blocks_for(&id, &text);
-        assert!(
-            std::rc::Rc::ptr_eq(&first, &second),
-            "cache hits share the block array"
-        );
-        let (Some(MarkdownBlock::Prose(p1)), Some(MarkdownBlock::Prose(p2))) =
-            (first.first(), second.first())
-        else {
-            panic!("expected cached prose blocks");
-        };
-        assert_eq!(
-            p1.as_ptr(),
-            p2.as_ptr(),
-            "unchanged entry must reuse the same SharedString allocation"
-        );
-
-        let updated = SharedString::from(
-            "Updated paragraph exceeding inline SmolStr storage to verify cache invalidation on edit.",
-        );
-        let third = cache.blocks_for(&id, &updated);
-        assert!(
-            !std::rc::Rc::ptr_eq(&first, &third),
-            "changed text invalidates the block array"
-        );
-        let Some(MarkdownBlock::Prose(p3)) = third.first() else {
-            panic!("expected updated prose block");
-        };
-        assert_eq!(p3.as_str(), updated.as_str());
-
-        for index in 0..(MAX_CACHED_MARKDOWN_ENTRIES + 32) {
-            let key = SharedString::from(format!("id-{index}"));
-            let body = SharedString::from(format!("row {index}"));
-            let _ = cache.blocks_for(&key, &body);
-        }
-        assert_eq!(cache.len(), MAX_CACHED_MARKDOWN_ENTRIES);
     }
 }

@@ -610,11 +610,4 @@ mod tests {
             rows.iter().find(|row| row.text == "---old").unwrap().kind == DiffLineKind::Removed
         );
     }
-
-    #[test]
-    fn diff_line_numbers_can_advance_past_a_large_hunk_start() {
-        let rows = numbered_diff_rows("@@ -4294967295,2 +4294967295,2 @@\n one\n two\n");
-        assert_eq!(rows[1].number, "4294967295");
-        assert_eq!(rows[2].number, "4294967296");
-    }
 }

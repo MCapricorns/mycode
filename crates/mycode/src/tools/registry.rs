@@ -19,7 +19,7 @@ struct RegistryInner {
     /// publish a spec list that no longer matches the map.
     specs: Option<Arc<[ToolSpec]>>,
     /// Names the model may call directly. `None` exposes every registered
-    /// tool; `Some` restricts `specs`/`prompt_entries`/`names`/`is_exposed`
+    /// tool; `Some` restricts `specs`/`exposed_names`/`is_exposed`
     /// to the listed names — the rest stay callable only through
     /// `run_code`'s `call(name, args)`, which reads `tools` unfiltered.
     exposed: Option<BTreeSet<String>>,
@@ -117,35 +117,10 @@ impl ToolRegistry {
         built
     }
 
-    /// Names and optional prompt snippets of the exposed tools, sorted by name.
-    pub fn prompt_entries(&self) -> Vec<(String, Option<String>)> {
-        let inner = self.read();
-        inner
-            .tools
-            .iter()
-            .filter(|(name, _)| {
-                inner
-                    .exposed
-                    .as_ref()
-                    .is_none_or(|exposed| exposed.contains(*name))
-            })
-            .map(|(name, tool)| {
-                (
-                    name.clone(),
-                    tool.prompt_snippet_dyn().map(ToOwned::to_owned),
-                )
-            })
-            .collect()
-    }
-
     /// Names of all registered tools, sorted — including ones only `call()`
     /// reaches. Used for the unknown-tool hint and the MCP native snapshot.
     pub fn names(&self) -> Vec<String> {
         self.read().tools.keys().cloned().collect()
-    }
-
-    pub fn len(&self) -> usize {
-        self.read().tools.len()
     }
 
     pub fn is_empty(&self) -> bool {

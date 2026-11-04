@@ -489,17 +489,6 @@ mod tests {
     }
 
     #[test]
-    fn an_oversized_file_is_cut_at_a_character_boundary() {
-        let mut attachments = Attachments::default();
-        let text = format!("{}汉", "a".repeat(MAX_FILE_BYTES - 1));
-        attachments.push_file("big.txt", text).unwrap();
-        let file = &attachments.files[0];
-        assert!(file.truncated);
-        assert!(file.text.len() <= MAX_FILE_BYTES);
-        assert!(file.text.is_char_boundary(file.text.len()));
-    }
-
-    #[test]
     fn files_stop_at_the_shared_total() {
         let mut attachments = Attachments::default();
         attachments

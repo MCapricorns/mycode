@@ -27,12 +27,6 @@ pub struct AgentStopArgs {
 pub struct AgentMessageArgs {
     pub id: String,
     pub message: String,
-    /// Only summary mode is supported for completed runs. Full-session mode errors.
-    #[serde(default = "summary_mode")]
-    pub mode: String,
-}
-fn summary_mode() -> String {
-    "summary".into()
 }
 pub struct AgentStatusTool {
     runtime: Arc<AgentRuntime>,
@@ -78,7 +72,8 @@ impl Tool for AgentStatusTool {
         "agent_status"
     }
     fn description(&self) -> &str {
-        "Query retained agent runs in this session, including completed results, errors and full-output artifact paths. Takes stable id or actual host call_id; omit id to list bounded retained records."
+        "Report retained agent runs of this session: results, errors, and full-output artifact \
+         paths. Pass a run id or call_id, or omit `id` to list recent runs."
     }
     async fn execute(
         &self,
@@ -96,7 +91,9 @@ impl Tool for AgentStopTool {
         "agent_stop"
     }
     fn description(&self) -> &str {
-        "Request cancellation of a run by stable id (or run call_id). Stopping runs retain scope until the child and worktree handoff settle. Stopped runs cannot resume. Use agent_status to observe the terminal state."
+        "Cancel a run by id or call_id. A stopping run keeps its scope until the child and its \
+         worktree handoff settle; stopped runs cannot resume. Use agent_status to see the final \
+         state."
     }
     async fn execute(
         &self,
@@ -115,7 +112,10 @@ impl Tool for AgentMessageTool {
         "agent_message"
     }
     fn description(&self) -> &str {
-        "Steer a running agent at its next loop boundary. For a completed run, start and synchronously await a NEW run with explicit retained summary context and artifact references. Writer continuation safely reopens the exact retained worktree and preserves dirty/untracked/ignored files; missing or unsupported retained worktrees fail without a HEAD fallback. This does not resume the original session or automatically integrate worktrees. Only mode=summary is supported. Cancelled, failed, and settling runs cannot be continued."
+        "Steer a running agent with `message`; it reads the message before its next step. For a \
+         finished run, start and wait for a new run that continues from the retained summary and \
+         artifacts; a writer continues in its retained worktree. Cancelled, failed, and settling \
+         runs cannot be continued."
     }
     async fn execute(
         &self,
@@ -123,11 +123,6 @@ impl Tool for AgentMessageTool {
         ctx: &ToolCtx,
         out: &mut ToolStream,
     ) -> Result<ToolResult, ToolError> {
-        if args.mode != "summary" {
-            return Err(error(
-                "full-session continuation is unsupported; only explicit summary mode is available",
-            ));
-        }
         let message = args.message.trim();
         if message.is_empty() || message.chars().count() > 8000 {
             return Err(error("message must contain 1-8000 characters"));

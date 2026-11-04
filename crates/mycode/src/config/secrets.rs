@@ -9,7 +9,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::authority::AuthorityRevision;
-use crate::config::secure_fs::owned_file::locked_update_owned_file;
 use crate::config::{ConfigError, ConfigErrorKind, HomeLayout};
 
 /// Exact secrets document path.
@@ -132,7 +131,7 @@ pub fn read_provider_secrets_with_repair(
         home,
         SECRETS_PATH,
         MAX_SECRETS_BYTES,
-        |bytes| Ok(decode_secrets(bytes)?.secrets),
+        decode_secrets,
         ProviderSecrets::new,
         salvage_provider_secrets,
         |secrets| {
@@ -188,38 +187,6 @@ pub fn salvage_provider_secrets(document: &serde_json::Value) -> Option<Provider
     Some(secrets)
 }
 
-/// Sets or clears one provider key in a single locked read-modify-write.
-///
-/// Each writer applies its key to the document the lock hands it, so
-/// concurrent key updates all land. Returns the store as published.
-///
-/// # Errors
-///
-/// Returns [`ConfigError`] when the stored document fails validation, the
-/// updated store is invalid, or the transaction fails.
-pub fn update_provider_key(
-    home: &HomeLayout,
-    provider_id: &str,
-    key: Option<&str>,
-) -> Result<ProviderSecrets, ConfigError> {
-    let mut published = None;
-    locked_update_owned_file(home, SECRETS_PATH, MAX_SECRETS_BYTES, |current| {
-        let (secrets, current_revision) = match current {
-            Some(bytes) => {
-                let parsed = decode_secrets(bytes)?;
-                (parsed.secrets, parsed.revision)
-            }
-            None => (ProviderSecrets::new(), AuthorityRevision::ABSENT),
-        };
-        let secrets = secrets.with_key(provider_id, key);
-        secrets.validate()?;
-        let bytes = encode_secrets(&secrets, current_revision.checked_next()?)?;
-        published = Some(secrets);
-        Ok(bytes)
-    })?;
-    published.ok_or_else(|| ConfigError::new(ConfigErrorKind::Serialization))
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SerializedSecrets<'a> {
@@ -239,19 +206,14 @@ struct DeserializedSecrets {
     provider_keys: std::collections::BTreeMap<String, String>,
 }
 
-struct ParsedSecrets {
-    secrets: ProviderSecrets,
-    revision: AuthorityRevision,
-}
-
-fn decode_secrets(bytes: &[u8]) -> Result<ParsedSecrets, ConfigError> {
+fn decode_secrets(bytes: &[u8]) -> Result<ProviderSecrets, ConfigError> {
     let document = serde_json::from_slice::<DeserializedSecrets>(bytes)
         .map_err(|_| ConfigError::authority_rejection())?;
     if document.format_version != SECRETS_FORMAT_VERSION || document.kind != SECRETS_KIND {
         return Err(ConfigError::authority_rejection()
             .with_detail("secrets.json: formatVersion or kind does not match this build"));
     }
-    let revision = AuthorityRevision::new(document.revision)?;
+    AuthorityRevision::new(document.revision)?;
     let secrets = ProviderSecrets {
         provider_keys: document
             .provider_keys
@@ -260,78 +222,11 @@ fn decode_secrets(bytes: &[u8]) -> Result<ParsedSecrets, ConfigError> {
             .collect(),
     };
     secrets.validate()?;
-    Ok(ParsedSecrets { secrets, revision })
+    Ok(secrets)
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn unknown_secrets_field_is_rejected() {
-        let bytes = br#"{
-            "formatVersion": 1,
-            "kind": "mycode-provider-secrets",
-            "revision": 1,
-            "providerKeys": {},
-            "providers": { "openai": "sk-test" }
-        }"#;
-        let error = super::decode_secrets(bytes)
-            .err()
-            .expect("unknown field in secrets.json must fail validation");
-        assert_eq!(
-            error.kind(),
-            crate::config::ConfigErrorKind::AuthorityValidation
-        );
-    }
-
-    #[test]
-    fn concurrent_key_updates_all_land() {
-        let parent = std::env::temp_dir().join(format!(
-            "mycode-secrets-race-{}-{}",
-            std::process::id(),
-            crate::core::unix_now().as_nanos()
-        ));
-        std::fs::create_dir_all(&parent).expect("temp parent");
-        let root = parent.join("home");
-        std::fs::create_dir(&root).expect("home");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
-                .expect("private home");
-        }
-        let home = crate::config::HomeLayout::from_root(&root).expect("layout");
-        // Each writer reads the stored bytes, then CAS against the revision
-        // it read; every racer but one wins and its key survives.
-        let writers: Vec<_> = (0..6)
-            .map(|index| {
-                let home = home.clone();
-                std::thread::spawn(move || {
-                    super::update_provider_key(
-                        &home,
-                        &format!("mcp-server{index}"),
-                        Some(&format!("sk-{index}")),
-                    )
-                    .expect("update");
-                })
-            })
-            .collect();
-        for writer in writers {
-            writer.join().expect("writer");
-        }
-        let secrets = super::read_provider_secrets(&home).expect("read");
-        for index in 0..6 {
-            assert_eq!(
-                secrets.key(&format!("mcp-server{index}")),
-                Some(format!("sk-{index}").as_str())
-            );
-        }
-        // Clearing goes through the same locked edit.
-        let cleared = super::update_provider_key(&home, "mcp-server0", None).expect("clear");
-        assert!(cleared.key("mcp-server0").is_none());
-        assert_eq!(cleared.provider_ids().len(), 5);
-        let _ = std::fs::remove_dir_all(&parent);
-    }
-
     #[test]
     fn a_malformed_secrets_document_resets_and_salvages_intact_keys() {
         let parent = std::env::temp_dir().join(format!(

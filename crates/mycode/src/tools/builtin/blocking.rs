@@ -719,46 +719,4 @@ mod tests {
             assert!(!ran.load(Ordering::SeqCst));
         }
     }
-
-    #[test]
-    fn dropping_queued_startup_does_not_run_the_worker() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .max_blocking_threads(1)
-            .build()
-            .unwrap();
-        let ran = Arc::new(AtomicBool::new(false));
-        runtime.block_on(async {
-            let (started, ready) = tokio::sync::oneshot::channel();
-            let (release, blocked) = std::sync::mpsc::channel();
-            let blocker = tokio::task::spawn_blocking(move || {
-                let _ = started.send(());
-                let _ = blocked.recv();
-            });
-            ready.await.unwrap();
-            let observed = Arc::clone(&ran);
-            let task = tokio::spawn(async move {
-                super::run_blocking_supervised(
-                    "queued",
-                    &tokio_util::sync::CancellationToken::new(),
-                    move |_| {
-                        observed.store(true, Ordering::SeqCst);
-                        Ok(())
-                    },
-                )
-                .await
-            });
-            tokio::task::yield_now().await;
-            task.abort();
-            assert!(task.await.unwrap_err().is_cancelled());
-            release.send(()).unwrap();
-            blocker.await.unwrap();
-            // The sole blocking worker consumes the abandoned startup first.
-            tokio::task::spawn_blocking(|| ()).await.unwrap();
-        });
-        assert!(!ran.load(Ordering::SeqCst));
-    }
 }

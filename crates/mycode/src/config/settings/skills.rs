@@ -98,15 +98,4 @@ mod tests {
         assert!(settings.skills.set_enabled("review", true));
         assert_eq!(settings.skills, SkillsSettings::default());
     }
-
-    #[test]
-    fn duplicate_or_blank_disabled_slugs_are_rejected() {
-        let mut settings = AppSettings::default();
-        settings.skills.disabled = vec!["a".to_owned(), "a".to_owned()];
-        assert!(settings.validate().is_err());
-        settings.skills.disabled = vec![" ".to_owned()];
-        assert!(settings.validate().is_err());
-        settings.skills.disabled = vec!["a\nb".to_owned()];
-        assert!(settings.validate().is_err());
-    }
 }

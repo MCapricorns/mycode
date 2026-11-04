@@ -1,7 +1,7 @@
 //! `ToolCtx` — the per-invocation execution context handed to every tool.
 //! See `wiki/index.html`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
@@ -15,7 +15,7 @@ use crate::tools::builtin::fs_search::PreparedSearch;
 /// prepared filesystem capabilities as read-only ambient state.
 #[derive(Clone)]
 pub struct ToolCtx {
-    /// Working directory for relative tool paths (see [`ToolCtx::resolve`]).
+    /// Working directory for relative tool paths.
     pub cwd: PathBuf,
     /// Cooperative cancellation; long-running tools should poll it and
     /// abort early.
@@ -88,17 +88,5 @@ impl ToolCtx {
     pub fn with_read_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.read_roots = roots;
         self
-    }
-
-    /// Resolve a tool-supplied path against `cwd`.
-    ///
-    /// Absolute paths pass through; relative paths are joined onto `cwd`.
-    pub fn resolve(&self, path: &str) -> PathBuf {
-        let p = Path::new(path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.cwd.join(p)
-        }
     }
 }

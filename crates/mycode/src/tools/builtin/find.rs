@@ -121,13 +121,6 @@ impl Tool for FindTool {
          returns an execution error rather than a partial report."
     }
 
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(
-            "find: list or locate files and directories by glob (pattern, optional \
-             path/limit/max_depth); pattern `*` with max_depth 1 lists one directory.",
-        )
-    }
-
     fn search_access(&self) -> Option<SearchAccess> {
         Some(SearchAccess::Metadata)
     }

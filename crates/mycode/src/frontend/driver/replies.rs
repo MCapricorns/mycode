@@ -267,12 +267,6 @@ impl FrontendDriver {
                 // waiting to write the latest draft.
                 self.continue_settings_save(out);
             }
-            BridgeReply::ProviderKeySaved(Ok((_provider_keys, mcp_keys))) => {
-                // Refresh the key markers in place: reloading settings here
-                // would race the concurrently running settings save and wipe
-                // any other unsaved edits.
-                self.act(FrontendAction::ProviderKeySaved { mcp_keys }, out);
-            }
             BridgeReply::ChatStarted(Ok(())) => {}
             // The turn unwinds over the event channel; the reply itself
             // carries no state.
@@ -539,9 +533,6 @@ impl FrontendDriver {
             } => self.fail_send(&session, text, message, out),
             BridgeReply::ChatStarted(Err(message)) => {
                 self.act(failed_start(message), out);
-            }
-            BridgeReply::ProviderKeySaved(Err(message)) => {
-                self.act(FrontendAction::Failed(message), out);
             }
             BridgeReply::Sessions(Err(message))
             | BridgeReply::Recalled(Err(message))

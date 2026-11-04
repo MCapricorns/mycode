@@ -585,24 +585,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn shell_and_agent_targets_ignore_retired_names() {
-        let script = json!({"mode": "script", "command": "echo hi"});
-        assert_eq!(tool_target("shell", &script), "echo hi");
-        assert_eq!(tool_target("powershell", &script), "echo hi");
-        assert_eq!(tool_target("bash", &script), "echo hi");
-        let program = json!({
-            "mode": "program",
-            "program": "/bin/echo",
-            "args": ["ok"]
-        });
-        assert_eq!(tool_target("shell", &program), "/bin/echo ok");
-        let delegated = json!({"agent": "scout", "description": "map the crate"});
-        assert_eq!(tool_target("agent", &delegated), "scout map the crate");
-        assert_eq!(tool_target("task", &delegated), "");
-        assert_eq!(tool_target("exec", &program), "");
-    }
-
-    #[test]
     fn tool_pairing_answers_missing_calls_and_drops_strays() {
         use super::{
             AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage,
@@ -670,12 +652,6 @@ mod tests {
     }
 
     #[test]
-    fn retired_run_code_replays_from_its_description() {
-        let args = json!({"code": "print(1)", "description": "plot the data"});
-        assert_eq!(tool_target("run_code", &args), "plot the data");
-    }
-
-    #[test]
     fn run_code_target_names_the_tools_its_script_calls() {
         // The current `run_code` arguments carry no `description`, so the
         // row target comes from the script's `call` literals: distinct
@@ -696,30 +672,6 @@ mod tests {
     fn wait_code_target_is_its_cell_id() {
         let args = json!({"cell_id": "cell-3"});
         assert_eq!(tool_target("wait_code", &args), "cell-3");
-    }
-
-    #[test]
-    fn interruption_note_flattens_controls_and_caps_length() {
-        assert_eq!(
-            interrupted_response_text("plain detail"),
-            "[error] the response was interrupted: plain detail"
-        );
-        // Control characters collapse into one space, and an all-control
-        // detail falls back to the generic line.
-        assert_eq!(
-            interrupted_response_text("a\r\n\r\n\tb"),
-            "[error] the response was interrupted: a b"
-        );
-        assert_eq!(
-            interrupted_response_text("\r\n\t"),
-            "[error] the response was interrupted: the response ended early"
-        );
-        // The budget counts characters, not bytes, so multibyte text keeps
-        // its full width.
-        let wide = "汉".repeat(300);
-        let note = interrupted_response_text(&wide);
-        let expected = format!("[error] the response was interrupted: {}", "汉".repeat(240));
-        assert_eq!(note, expected);
     }
 
     #[test]

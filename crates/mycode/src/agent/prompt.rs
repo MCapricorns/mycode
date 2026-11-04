@@ -5,9 +5,8 @@ use std::fmt::Write;
 use crate::tools::ToolRegistry;
 
 const HEADER: &str = "\
-Complete the task with the tools listed below. Do not invent tools. \
-Support claims with inspected sources or tool results. Distinguish source inspection, \
-checks actually run, and unresolved gaps; do not claim a command ran without its result.";
+Use only the tools listed below. Support claims with inspected sources or tool results; \
+never claim a command ran without its result.";
 
 /// Names the one shell tool in `tools`, if the process registered one.
 pub fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
@@ -22,59 +21,40 @@ fn tool_calling(tools: &ToolRegistry, code_mode: bool) -> String {
     let mut rules = String::from("<tool_calling>\n");
     if code_mode {
         rules.push_str(
-            "- Only names under Available tools are directly callable. Tools under \
-Tools inside run_code are called from JavaScript as `call(\"name\", { argument: value })`; \
-use their argument schemas below. `script` accepts JavaScript only (embedded QuickJS with \
-top-level await and Promises; no Node.js, require, fs, fetch, or imports).\n\
-- Batch independent reads/searches with `await Promise.all([...callAsync(name, args)])`. \
-Parallel-safe calls run together; writes, shell commands, and other exclusive calls run in submission order. \
-Use `await callAsync(name, args)` or blocking `call(name, args)` for dependent steps. \
-Calls return `{ content, is_error }` (`result.content[0].Text`). Await required work before \
-`complete(value)`: it ends the script and cancels outstanding calls. Use `log(value)` for \
-progress and `budget()` for remaining limits. Discover remote tool schemas before calling them; \
-a `run_code` script cannot call `run_code` or `wait_code`.\n",
-        );
-        let _ = writeln!(
-            rules,
-            "- Each cell permits at most {} `call`/`callAsync` invocations combined.",
-            crate::tools::code_mode::MAX_HOST_CALLS
+            "- Call the direct tools by name. Call the tools under Tools inside run_code only from \
+a `run_code` script, with the schemas listed there; a script cannot call `run_code` or \
+`wait_code`.\n\
+- In a script, batch independent reads and searches with `await Promise.all([...])` over \
+`callAsync(name, args)` and await each dependent step. Writes, shell commands, and other \
+exclusive calls run alone in submission order. Await required work before `complete(value)`, \
+which ends the script and cancels outstanding calls.\n\
+- When `run_code` returns a `cell_id`, collect that cell with `wait_code` until it \
+finishes; never resubmit the script.\n",
         );
     }
-    if code_mode && tools.is_exposed("wait_code") && tools.get("wait_code").is_some() {
-        rules.push_str(
-            "- When `run_code` yields a `cell_id`, collect that same cell with `wait_code` until it terminates; do not resubmit the script.\n",
-        );
-    }
+    let shell = shell_tool_name(tools);
     if ["find", "grep", "read"]
         .iter()
         .all(|name| tools.get(name).is_some())
     {
         rules.push_str(
-            "- Use dedicated tools first: `find` locates files/directories (pattern `*` with `max_depth` 1 lists one directory), `grep` searches contents, `read` opens files.\n",
+            "- Use `find` to locate files and directories (pattern `*` with `max_depth` 1 lists \
+one directory), `grep` to search contents, and `read` to open files",
         );
+        match &shell {
+            Some(shell) => {
+                let _ = writeln!(
+                    rules,
+                    "; use `{shell}` only for builds, tests, git, package managers, and running programs."
+                );
+            }
+            None => rules.push_str(".\n"),
+        }
     }
     if tools.get("write").is_some() && tools.get("edit").is_some() {
-        let names = if code_mode {
-            "`call(\"write\", …)` and `call(\"edit\", …)`"
-        } else {
-            "the registered `write` and `edit` tools"
-        };
-        let _ = writeln!(
-            rules,
-            "- Read existing content before changing it. Change files by {names}. Use revision tokens from the latest read when required."
-        );
+        rules.push_str("- Read a file before changing it with `edit` or `write`.\n");
     }
-    if let Some(shell_tool) = shell_tool_name(tools) {
-        let _ = writeln!(
-            rules,
-            "- Use `{shell_tool}` only for builds, tests, git, package managers, and running programs; never for listing, reading, or searching when dedicated tools are available.\n\
-- Commands must exit on their own (pass non-interactive flags; no dev servers or watchers). On Windows, keep console work in the background with captured output.\n\
-- `mode` `script` runs a shell command; `mode` `program` runs an executable with explicit `args` and no shell parsing."
-        );
-    }
-    rules.push_str(
-        "- Editing or recalling a chat message does not restore or delete workspace files.\n</tool_calling>",
-    );
+    rules.push_str("</tool_calling>");
     rules
 }
 
@@ -88,7 +68,7 @@ fn push_code_tools(prompt: &mut String, tools: &ToolRegistry) {
     if hidden.is_empty() {
         return;
     }
-    prompt.push_str("\n\nTools inside run_code (use call(name, args)):");
+    prompt.push_str("\n\nTools inside run_code:");
     for name in hidden {
         let Some(tool) = tools.get(&name) else {
             continue;
@@ -99,7 +79,7 @@ fn push_code_tools(prompt: &mut String, tools: &ToolRegistry) {
         let spec = tool.spec();
         let _ = write!(
             prompt,
-            "\n- {name}: {description}\n  Arguments JSON Schema: {schema}",
+            "\n- {name}: {description}\n  Schema: {schema}",
             description = spec.description,
             schema = spec.params_schema,
         );
@@ -109,34 +89,21 @@ fn push_code_tools(prompt: &mut String, tools: &ToolRegistry) {
 /// Builds the compact default prompt from the currently registered tools.
 pub fn build_system_prompt(tools: &ToolRegistry) -> String {
     let mut prompt = String::from(HEADER);
-    prompt.push_str("\n\nAvailable tools:");
-
-    let entries = tools.prompt_entries();
-    if entries.is_empty() {
-        prompt.push_str("\n(none)");
-    } else {
-        for (name, snippet) in entries {
-            write!(prompt, "\n- {name}").expect("writing to a String cannot fail");
-            let snippet = snippet
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty());
-            if let Some(detail) = snippet {
-                let detail = detail
-                    .strip_prefix(&name)
-                    .and_then(|text| text.strip_prefix(':'))
-                    .map(str::trim)
-                    .unwrap_or(detail);
-                write!(prompt, ": {detail}").expect("writing to a String cannot fail");
-            }
-        }
+    let direct: Vec<String> = tools
+        .specs()
+        .iter()
+        .map(|spec| format!("`{}`", spec.name))
+        .collect();
+    prompt.push_str("\n\nDirect tools: ");
+    if direct.is_empty() {
+        prompt.push_str("none.");
+        return prompt;
     }
-
+    prompt.push_str(&direct.join(", "));
+    prompt.push('.');
     let code_mode = tools.get("run_code").is_some() && tools.is_exposed("run_code");
-    if !tools.is_empty() {
-        prompt.push_str("\n\n");
-        prompt.push_str(&tool_calling(tools, code_mode));
-    }
+    prompt.push_str("\n\n");
+    prompt.push_str(&tool_calling(tools, code_mode));
     if code_mode {
         push_code_tools(&mut prompt, tools);
     }
@@ -167,22 +134,12 @@ mod tests {
             kind: shell,
             program: PathBuf::from(program),
         })));
-        expose_code_mode(&registry, &[shell.tool_name(), "run_code", "wait_code"]);
+        crate::tools::enable_code_mode(
+            &registry,
+            &Arc::new(crate::tools::CodeCells::new()),
+            "prompt-test",
+        );
         registry
-    }
-
-    fn expose_code_mode(registry: &Arc<ToolRegistry>, exposed: &[&str]) {
-        let cells = Arc::new(crate::tools::CodeCells::new());
-        registry.register(Arc::new(crate::tools::RunCodeTool::new(
-            Arc::clone(registry),
-            Arc::clone(&cells),
-            "prompt-test".to_owned(),
-        )));
-        registry.register(Arc::new(crate::tools::WaitCodeTool::new(
-            cells,
-            "prompt-test".to_owned(),
-        )));
-        registry.expose_only(exposed);
     }
 
     #[test]
@@ -192,13 +149,13 @@ mod tests {
         let (direct, hidden) = prompt
             .split_once("\n\nTools inside run_code")
             .expect("hidden catalog");
-        assert!(direct.contains("\n- run_code:"));
+        assert!(direct.contains("Direct tools: `bash`, `run_code`, `wait_code`."));
         assert!(!direct.contains("\n- read:"));
         assert!(!registry.specs().iter().any(|spec| spec.name == "read"));
         for name in ["read", "write", "edit", "find", "grep"] {
             let spec = registry.get(name).unwrap().spec();
             assert!(hidden.contains(&format!("\n- {name}:")));
-            assert!(hidden.contains(&format!("Arguments JSON Schema: {}", spec.params_schema)));
+            assert!(hidden.contains(&format!("Schema: {}", spec.params_schema)));
         }
     }
 

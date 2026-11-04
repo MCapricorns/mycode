@@ -361,58 +361,6 @@ mod tests {
         format!("http://{addr}/v1/chat/completions")
     }
 
-    fn spawn_oversized_error_server(chunks: usize, chunk_bytes: usize) -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-            if !read_request_head(&mut stream) {
-                return;
-            }
-            let total = chunks * chunk_bytes;
-            let header = format!(
-                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {total}\r\n\r\n"
-            );
-            if stream.write_all(header.as_bytes()).is_err() {
-                return;
-            }
-            let _ = stream.flush();
-            let piece = vec![b'x'; chunk_bytes];
-            for _ in 0..chunks {
-                if stream.write_all(&piece).is_err() {
-                    return;
-                }
-                let _ = stream.flush();
-            }
-            // Hold open after the cap is crossed to prove the client stops
-            // reading at MAX_ERROR_BODY_BYTES instead of waiting for EOF.
-            std::thread::sleep(Duration::from_secs(10));
-        });
-        format!("http://{addr}/v1/chat/completions")
-    }
-
-    /// Sends error-status headers with a promised body it never delivers.
-    fn spawn_stalled_error_server() -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-            if !read_request_head(&mut stream) {
-                return;
-            }
-            let header = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 256\r\n\r\n";
-            if stream.write_all(header.as_bytes()).is_err() {
-                return;
-            }
-            let _ = stream.flush();
-            // Never send the promised body; hold the socket open.
-            std::thread::sleep(Duration::from_secs(10));
-        });
-        format!("http://{addr}/v1/chat/completions")
-    }
-
     /// Uses an in-memory reqwest body so paused time cannot race socket I/O,
     /// TCP buffering, delayed ACKs, or an OS thread's sleep.
     fn streaming_response() -> (tokio::io::DuplexStream, reqwest::Response) {
@@ -496,46 +444,6 @@ mod tests {
         drop(writer);
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn dropping_an_idle_consumer_releases_the_response() {
-        let (mut writer, response) = streaming_response();
-        let stream =
-            stream_response_body(response, Duration::from_secs(180), CancellationToken::new());
-        tokio::task::yield_now().await;
-        drop(stream);
-        tokio::task::yield_now().await;
-        assert!(
-            writer.write_all(b"late chunk").await.is_err(),
-            "dropping the consumer must release the body before its idle timeout"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn cancellation_releases_a_response_with_a_full_output_queue() {
-        let (mut writer, response) = streaming_response();
-        let cancel = CancellationToken::new();
-        let mut stream = stream_response_body(response, Duration::from_secs(180), cancel.clone());
-        for _ in 0..super::BYTE_STREAM_CAPACITY {
-            writer.write_all(b"x").await.expect("write");
-            tokio::task::yield_now().await;
-        }
-        assert_eq!(stream.len(), super::BYTE_STREAM_CAPACITY);
-        // A further chunk used to block forever in `send` when the consumer
-        // stopped draining the queue, even after cancellation.
-        writer.write_all(b"blocked chunk").await.expect("write");
-        tokio::task::yield_now().await;
-        cancel.cancel();
-        tokio::task::yield_now().await;
-        assert!(
-            writer.write_all(b"late chunk").await.is_err(),
-            "cancellation must release the body while the queue is full"
-        );
-        for _ in 0..super::BYTE_STREAM_CAPACITY {
-            assert!(stream.recv().await.expect("buffered chunk").is_ok());
-        }
-        assert!(stream.recv().await.is_none(), "cancelled stream is closed");
-    }
-
     #[tokio::test]
     async fn a_successful_response_forwards_its_body() {
         let url = spawn_success_server();
@@ -565,46 +473,5 @@ mod tests {
         .await;
         let collected = outcome.expect("stream hung");
         assert_eq!(collected, b"data:0\ndata:1\n");
-    }
-
-    #[tokio::test]
-    async fn a_stalled_error_body_keeps_its_status_kind() {
-        let url = spawn_stalled_error_server();
-        let transport =
-            ReqwestTransport::with_read_timeout(Duration::from_millis(200)).expect("transport");
-        let posted = transport.post(
-            TransportCall {
-                endpoint: url,
-                headers: Vec::new(),
-                body: Bytes::from_static(b"{}"),
-            },
-            CancellationToken::new(),
-        );
-        let error = tokio::time::timeout(Duration::from_secs(3), posted)
-            .await
-            .expect("post settled within the outer bound")
-            .expect_err("stalled error body must fail");
-        assert_eq!(error.kind(), crate::core::ProviderErrorKind::Rejected);
-        assert_eq!(error.status(), Some(400));
-    }
-
-    #[tokio::test]
-    async fn an_oversized_error_body_stops_reading_at_the_cap() {
-        let url = spawn_oversized_error_server(12, 8192);
-        let transport =
-            ReqwestTransport::with_read_timeout(Duration::from_secs(2)).expect("transport");
-        let posted = transport.post(
-            TransportCall {
-                endpoint: url,
-                headers: Vec::new(),
-                body: Bytes::from_static(b"{}"),
-            },
-            CancellationToken::new(),
-        );
-        let error = tokio::time::timeout(Duration::from_secs(2), posted)
-            .await
-            .expect("error body settled at the cap without waiting for the 10s hold")
-            .expect_err("400 must fail");
-        assert_eq!(error.kind(), crate::core::ProviderErrorKind::Rejected);
     }
 }

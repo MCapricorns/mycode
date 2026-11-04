@@ -660,11 +660,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             }
             state.error = Some(message);
         }
-        FrontendAction::ProviderKeySaved { mcp_keys } => {
-            if let Some(settings) = state.settings.as_mut() {
-                settings.mcp_with_keys = mcp_keys;
-            }
-        }
         FrontendAction::McpProbeStarted(server_id) => {
             if !state.mcp_probing.contains(&server_id) {
                 state.mcp_probing.push(server_id);

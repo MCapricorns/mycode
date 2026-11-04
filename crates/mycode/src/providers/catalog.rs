@@ -251,10 +251,7 @@ pub(crate) fn normalize_provider(mut provider: CatalogProvider) -> Option<Catalo
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CatalogDocument, CatalogModel, CatalogProvider, MAX_MODELS_PER_PROVIDER, MAX_STRING_BYTES,
-        normalize_provider,
-    };
+    use super::{CatalogDocument, CatalogModel, CatalogProvider};
 
     #[test]
     fn published_efforts_are_not_padded_with_a_guessed_ladder() {
@@ -329,51 +326,6 @@ mod tests {
             serde_json::from_value::<CatalogModel>(encoded).expect("round trip"),
             model
         );
-    }
-
-    #[test]
-    fn normalization_validates_aliases_like_ids_and_bounds_their_count() {
-        let provider = CatalogProvider {
-            id: "magpie".to_owned(),
-            base_url: "http://localhost:1/v1".to_owned(),
-            models: vec![
-                CatalogModel {
-                    id: "copilot/model".to_owned(),
-                    aliases: vec![
-                        "z".to_owned(),
-                        "alias".to_owned(),
-                        "alias".to_owned(),
-                        "copilot/model".to_owned(),
-                        String::new(),
-                        "has space".to_owned(),
-                        "has\ncontrol".to_owned(),
-                        "x".repeat(MAX_STRING_BYTES + 1),
-                        "模型".to_owned(),
-                    ],
-                    ..CatalogModel::default()
-                },
-                CatalogModel {
-                    id: "bounded".to_owned(),
-                    aliases: (0..MAX_MODELS_PER_PROVIDER + 1)
-                        .map(|index| format!("alias-{index:04}"))
-                        .collect(),
-                    ..CatalogModel::default()
-                },
-                CatalogModel {
-                    id: "invalid id".to_owned(),
-                    ..CatalogModel::default()
-                },
-            ],
-            ..CatalogProvider::default()
-        };
-        let provider = normalize_provider(provider).expect("normalized provider");
-        assert_eq!(provider.models.len(), 2);
-        let model = provider.model("copilot/model").expect("route");
-        assert_eq!(model.aliases, ["alias", "z", "模型"]);
-        assert_eq!(provider.model("alias"), Some(model));
-        let bounded = provider.model("bounded").expect("bounded aliases");
-        assert_eq!(bounded.aliases.len(), MAX_MODELS_PER_PROVIDER);
-        assert!(bounded.aliases.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]

@@ -64,6 +64,74 @@ pub(crate) fn display_exit(status: &std::process::ExitStatus) -> i32 {
     status.code().unwrap_or(-1)
 }
 
+/// Model-facing body shared by the shell and program results: stdout, then a
+/// `[stderr]` section, middle-truncated at [`MAX_OUTPUT_BYTES`], then the
+/// exit code or `notice`. Each stream is `(text, cut)` from
+/// [`captured_text`]. `status == None` marks a command that did not finish.
+///
+/// Returns the text, whether any output was dropped, and whether the result
+/// is an error.
+pub(crate) fn render_command_output(
+    status: Option<std::process::ExitStatus>,
+    (stdout_text, stdout_cut): (String, bool),
+    (stderr_text, stderr_cut): (String, bool),
+    total_bytes: u64,
+    forced_error: bool,
+    notice: Option<&str>,
+) -> (String, bool, bool) {
+    let mut text = String::new();
+    if !stdout_text.trim().is_empty() {
+        text.push_str(&stdout_text);
+    }
+    if !stderr_text.trim().is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str("[stderr]\n");
+        text.push_str(&stderr_text);
+    }
+
+    let (mut text, cut) = crate::tools::builtin::truncate_middle(&text, MAX_OUTPUT_BYTES);
+    let truncated = cut || stdout_cut || stderr_cut;
+    if truncated {
+        text.push_str(&format!(
+            "\n[output truncated: showed the start and end of {total_bytes} bytes]"
+        ));
+    }
+
+    let is_error = forced_error || status.is_some_and(|s| !s.success());
+    match (status, notice) {
+        (Some(s), _) if is_error => text.push_str(&format!("\n[exit code: {}]", display_exit(&s))),
+        (_, Some(notice)) => {
+            text.push('\n');
+            text.push_str(notice);
+        }
+        (None, None) if is_error => text.push_str("\n[no exit status: command did not finish]"),
+        _ => {}
+    }
+    (text, truncated, is_error)
+}
+
+/// Notice for a command stopped by its timeout. `subject` names what had
+/// not started yet when the deadline passed (the shell or the program).
+pub(crate) fn timeout_notice(
+    timeout: std::time::Duration,
+    started: bool,
+    teardown: Option<&std::io::Error>,
+    subject: &str,
+) -> String {
+    let seconds = timeout.as_secs();
+    match (started, teardown) {
+        (_, Some(err)) => {
+            format!("[command timed out after {seconds}s; termination failed: {err}]")
+        }
+        (true, None) => format!("[command timed out after {seconds}s and was killed]"),
+        (false, None) => {
+            format!("[command timed out after {seconds}s before the {subject} started]")
+        }
+    }
+}
+
 #[cfg(windows)]
 pub use windows::WindowsStdioProcess;
 #[cfg(windows)]

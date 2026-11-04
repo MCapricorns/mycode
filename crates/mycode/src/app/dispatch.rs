@@ -12,9 +12,7 @@ use crate::app::ledger::{
 use crate::app::mcp_tools::mcp_list_tools;
 use crate::app::protocol::SessionSummary;
 use crate::app::search::search_project_files;
-use crate::app::settings_io::{
-    load_settings, render_config_error, save_provider_key, save_settings,
-};
+use crate::app::settings_io::{load_settings, render_config_error, save_settings};
 use crate::app::state::{
     CoreState, UPDATE_USER_AGENT, catalog_info, refresh_catalog, set_project_dir,
     spawn_catalog_refresh, spawn_update_check,
@@ -345,7 +343,6 @@ pub(crate) fn error_reply(command: &BridgeCommand, message: &str) -> BridgeReply
         },
         BridgeCommand::LoadSettings => BridgeReply::Settings(Err(message)),
         BridgeCommand::SaveSettings { .. } => BridgeReply::SettingsSaved(Err(message)),
-        BridgeCommand::SaveProviderKey { .. } => BridgeReply::ProviderKeySaved(Err(message)),
         BridgeCommand::ChatTurn { .. } | BridgeCommand::CompactSession { .. } => {
             BridgeReply::ChatStarted(Err(message))
         }
@@ -503,7 +500,6 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
                         crate::app::SettingsSnapshot {
                             settings: loaded.settings,
                             revision: loaded.revision,
-                            provider_keys: loaded.provider_keys,
                             mcp_keys: loaded.mcp_keys,
                             repairs: loaded.repairs,
                         }
@@ -517,15 +513,6 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
             let home = state.home.clone();
             BridgeReply::SettingsSaved(
                 blocking(move || save_settings(&home, expected_revision, &settings)).await,
-            )
-        }
-        BridgeCommand::SaveProviderKey {
-            provider_id,
-            api_key,
-        } => {
-            let home = state.home.clone();
-            BridgeReply::ProviderKeySaved(
-                blocking(move || save_provider_key(&home, &provider_id, &api_key)).await,
             )
         }
         BridgeCommand::ChatTurn { .. } | BridgeCommand::CompactSession { .. } => {

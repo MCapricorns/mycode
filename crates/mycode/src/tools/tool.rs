@@ -116,11 +116,6 @@ pub trait Tool: Send + Sync + 'static {
     fn name(&self) -> &str;
     /// What the tool does, sent to the model in the tool spec.
     fn description(&self) -> &str;
-    /// Optional usage hint injected into the system prompt (pi's
-    /// `promptSnippet`). `None` by default.
-    fn prompt_snippet(&self) -> Option<&str> {
-        None
-    }
 
     /// JSON Schema sent to the model. The default is the schemars schema of
     /// [`Self::Args`]. The shell tool replaces parameter descriptions so they
@@ -147,11 +142,6 @@ pub trait Tool: Send + Sync + 'static {
         None
     }
 
-    /// Whether dispatch should bind a local search root first.
-    fn requires_search_preflight(&self) -> bool {
-        self.search_access().is_some()
-    }
-
     /// Access mode for a retained local file capability.
     ///
     /// Built-in `read` and `edit` return existing-content access and `write`
@@ -168,11 +158,6 @@ pub trait Tool: Send + Sync + 'static {
     /// catalog), which keeps their keys relative to that root.
     fn reads_only(&self) -> bool {
         false
-    }
-
-    /// Whether dispatch should bind a local file capability first.
-    fn requires_file_preflight(&self) -> bool {
-        self.file_access().is_some()
     }
 
     /// Whether calls to this tool may run at the same time as other calls
@@ -213,10 +198,6 @@ pub trait ToolDyn: Send + Sync {
     /// The tool spec (name, description, JSON Schema of arguments) as
     /// sent to LLM providers.
     fn spec(&self) -> ToolSpec;
-    /// Returns the optional compact usage hint through type erasure.
-    fn prompt_snippet_dyn(&self) -> Option<&str> {
-        None
-    }
     /// Whether discovery supplies this schema on demand. Remote catalogs
     /// stay out of the fixed code-mode prompt even after they connect.
     fn schema_on_demand(&self) -> bool {
@@ -226,10 +207,6 @@ pub trait ToolDyn: Send + Sync {
     fn search_access(&self) -> Option<SearchAccess> {
         None
     }
-    /// Whether dispatch should bind a local search root first.
-    fn requires_search_preflight(&self) -> bool {
-        self.search_access().is_some()
-    }
     /// Access mode for a retained local file capability.
     fn file_access(&self) -> Option<FileAccess> {
         None
@@ -237,10 +214,6 @@ pub trait ToolDyn: Send + Sync {
     /// Whether the tool only reads the prepared file.
     fn reads_only(&self) -> bool {
         false
-    }
-    /// Whether dispatch should bind a local file capability first.
-    fn requires_file_preflight(&self) -> bool {
-        self.file_access().is_some()
     }
     /// Whether calls may run alongside other parallel-safe calls.
     fn parallel_safe(&self) -> bool {
@@ -271,11 +244,42 @@ pub trait ToolDyn: Send + Sync {
 /// object with no `type`, `oneOf`, `anyOf`, or `allOf` is marked
 /// `type: object` (`$ref` cannot survive inlining). Any other root shape is
 /// left as schemars emitted it, after `$schema` and `$id` are removed.
+///
+/// The root `title` and `description` only restate the Rust type docs and
+/// the tool description, so they are dropped; field descriptions keep their
+/// text with the doc-comment line wraps joined.
 pub(crate) fn args_schema<A: JsonSchema>() -> Value {
     let mut value = serde_json::to_value(schemars::schema_for!(A))
         .expect("schemars schemas always serialize to JSON");
+    if let Some(object) = value.as_object_mut() {
+        object.shift_remove("title");
+        object.shift_remove("description");
+    }
+    join_description_lines(&mut value);
     normalize_tool_schema(&mut value);
     value
+}
+
+/// Joins the line wraps schemars keeps from doc comments, so each
+/// description reaches the model as running text.
+fn join_description_lines(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object.iter_mut() {
+                match child {
+                    Value::String(text) if key == "description" => {
+                        if text.contains('\n') {
+                            *text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                        }
+                    }
+                    _ if matches!(key.as_str(), "const" | "default" | "enum" | "examples") => {}
+                    _ => join_description_lines(child),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(join_description_lines),
+        _ => {}
+    }
 }
 
 fn normalize_tool_schema(value: &mut Value) {
@@ -472,16 +476,8 @@ impl<T: Tool> ToolDyn for T {
         }
     }
 
-    fn prompt_snippet_dyn(&self) -> Option<&str> {
-        Tool::prompt_snippet(self)
-    }
-
     fn search_access(&self) -> Option<SearchAccess> {
         Tool::search_access(self)
-    }
-
-    fn requires_search_preflight(&self) -> bool {
-        Tool::requires_search_preflight(self)
     }
 
     fn file_access(&self) -> Option<FileAccess> {
@@ -490,10 +486,6 @@ impl<T: Tool> ToolDyn for T {
 
     fn reads_only(&self) -> bool {
         Tool::reads_only(self)
-    }
-
-    fn requires_file_preflight(&self) -> bool {
-        Tool::requires_file_preflight(self)
     }
 
     fn parallel_safe(&self) -> bool {

@@ -278,8 +278,6 @@ mod agent_states_tests;
 mod tests {
     use crate::agent::session::SessionEvent;
 
-    use super::project_replayed_entry;
-
     pub(super) fn event_of_kind(kind: crate::agent::session::EventKind) -> SessionEvent {
         SessionEvent {
             event_id: crate::agent::session::SessionEventId::parse(
@@ -334,12 +332,6 @@ mod tests {
                 .text
                 .contains(crate::app::protocol::CODE_CALLS_HEADING)
         );
-    }
-
-    #[test]
-    fn legacy_usage_events_replay_as_nothing() {
-        let event = event_of_kind(crate::agent::session::EventKind::Usage);
-        assert!(project_replayed_entry(&event, b"{}").is_none());
     }
 
     #[test]

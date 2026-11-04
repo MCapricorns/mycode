@@ -6,18 +6,20 @@ fn parent_dispatch_never_names_a_role_switched_off_in_settings() {
     let mut settings = SubagentSettings::default();
     settings.role_mut("artisan").enabled = false;
     let text = super::delegation_directive(&builtin_roles(), &settings);
-    assert!(text.contains("`scout`"), "{text}");
+    assert!(text.contains("\n- scout: "), "{text}");
     assert!(!text.contains("artisan"), "{text}");
+    assert!(!text.contains("phase_id"), "no writer is enabled: {text}");
 
     let mut settings = SubagentSettings::default();
     settings.role_mut("scout").enabled = false;
     let text = super::delegation_directive(&builtin_roles(), &settings);
-    assert!(text.contains("`artisan`"), "{text}");
+    assert!(text.contains("\n- artisan: "), "{text}");
+    assert!(text.contains("phase_id"), "{text}");
     assert!(!text.contains("scout"), "{text}");
 
     settings.role_mut("artisan").enabled = false;
     let remaining = super::delegation_directive(&builtin_roles(), &settings);
-    assert!(remaining.contains("`sentinel`"));
+    assert!(remaining.contains("\n- sentinel: "), "{remaining}");
 
     for name in builtin_roles().names() {
         settings.role_mut(&name).enabled = false;
@@ -37,10 +39,7 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
         super::child_registry_with(&allowed, crate::tools::ShellTool::forcing(shell.clone()));
     let workspace = super::ChildWorkspace {
         resources: vec!["# AGENTS.md (workspace)\n\nRun `just check` before reporting.".to_owned()],
-        mcp_note: Some(super::child_mcp_note(
-            "Connected MCP servers:\n- anysearch (1 tool)\n",
-            scout.is_write_capable(),
-        )),
+        mcp_note: Some("Connected MCP servers:\n- anysearch (1 tool)\n".to_owned()),
         ..Default::default()
     };
     let prompt = super::subagent_system_prompt(
@@ -55,14 +54,12 @@ fn child_prompt_carries_workspace_instructions_and_the_parent_mcp_note() {
     );
     assert!(prompt.contains("Run `just check` before reporting."));
     assert!(prompt.contains("<mcp>\nConnected MCP servers"));
+    assert!(prompt.contains("Only read-only MCP tools are available to this role."));
+    assert!(
+        !prompt.contains("shell_tool:"),
+        "scout has no shell: {prompt}"
+    );
     assert!(prompt.find("AGENTS.md (workspace)") > prompt.find("<environment>"));
-}
-
-fn shell_tool(kind: crate::tools::ShellKind, program: &str) -> crate::tools::ShellTool {
-    crate::tools::ShellTool::forcing(crate::tools::DetectedShell {
-        kind,
-        program: std::path::PathBuf::from(program),
-    })
 }
 
 fn shell_names(registry: &crate::tools::ToolRegistry) -> Vec<String> {
@@ -76,31 +73,6 @@ fn shell_names(registry: &crate::tools::ToolRegistry) -> Vec<String> {
             )
         })
         .collect()
-}
-
-#[test]
-fn child_registry_keeps_one_shell_tool_for_every_allowlist_alias() {
-    let aliases = [
-        "read".to_owned(),
-        "shell".to_owned(),
-        "bash".to_owned(),
-        "zsh".to_owned(),
-        "sh".to_owned(),
-        "powershell".to_owned(),
-        "cmd".to_owned(),
-    ];
-    for (kind, program, expected) in [
-        (
-            crate::tools::ShellKind::WindowsPowerShell,
-            "powershell.exe",
-            "powershell",
-        ),
-        (crate::tools::ShellKind::Pwsh, "pwsh.exe", "powershell"),
-        (crate::tools::ShellKind::Bash, "/bin/bash", "bash"),
-    ] {
-        let registry = super::child_registry_with(&aliases, shell_tool(kind, program));
-        assert_eq!(shell_names(&registry), vec![expected.to_owned()]);
-    }
 }
 
 #[test]

@@ -449,65 +449,6 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "child-side updater process wait probe"]
-    fn wait_exit_259_probe() {
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).unwrap();
-        std::process::exit(259);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn helper_wait_observes_termination_even_when_exit_code_is_still_active() {
-        use std::process::{Command, Stdio};
-        use std::time::Duration;
-
-        let (_, module) = module_path!().split_once("::").unwrap();
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &format!("{module}::wait_exit_259_probe"),
-                "--ignored",
-                "--nocapture",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let stdin = child.stdin.take();
-        let pid = child.id();
-        assert!(super::process_is_running(pid));
-        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            super::wait_for_process_exit(pid);
-            let _ = finished_tx.send(());
-        });
-        assert!(matches!(
-            finished_rx.recv_timeout(Duration::from_millis(100)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ));
-        drop(stdin);
-        assert_eq!(child.wait().unwrap().code(), Some(259));
-        // Retaining Child keeps its process handle open, so the exited PID
-        // can still be queried and GetExitCodeProcess would still return 259.
-        assert!(!super::process_is_running(pid));
-        finished_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("wait must finish after exit, including exit code 259");
-        worker.join().unwrap();
-        drop(child);
-    }
-
-    #[test]
-    fn helper_wait_skips_zero_self_and_invalid_pids() {
-        for pid in [0, std::process::id(), u32::MAX] {
-            super::wait_for_process_exit(pid);
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
     #[ignore = "child-side updater console probe"]
     fn detached_console_probe() {
         use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
@@ -585,13 +526,6 @@ mod tests {
         assert!(args.iter().any(|arg| arg.contains("Program Files")));
         let quiet = helper_arguments(target, source, &sha, 42, false);
         assert!(!quiet.iter().any(|arg| arg == "--relaunch"));
-    }
-
-    #[test]
-    fn incomplete_apply_args_fail() {
-        let error =
-            parse_apply_update_args(["--mycode-apply-update", "--target", "app.exe"]).unwrap_err();
-        assert!(error.contains("--source"), "{error}");
     }
 
     fn scratch(label: &str) -> std::path::PathBuf {

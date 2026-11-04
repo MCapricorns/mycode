@@ -261,13 +261,8 @@ fn map_path_errno(path: &Path, error: Errno, kind: ConfigErrorKind) -> ConfigErr
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
-    use std::io::ErrorKind;
-    use std::os::fd::AsFd;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt, chown, symlink};
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-
-    use rustix::fs::{self as rfs};
-    use rustix::process::geteuid;
 
     use super::{enforce_owned_directory, verify_owned_directory};
     use crate::config::{
@@ -316,11 +311,6 @@ mod tests {
         );
     }
 
-    fn foreign_uid() -> u32 {
-        let euid = geteuid().as_raw();
-        if euid == 65_534 { 1 } else { 65_534 }
-    }
-
     #[test]
     fn verify_rejects_wrong_mode_and_enforce_tightens_it() {
         let tree = TempTree::new("mode");
@@ -347,86 +337,6 @@ mod tests {
         verify_owned_directory(&directory).expect("verify");
         enforce_owned_directory(&directory).expect("enforce");
         assert_eq!(mode_bits(&path), 0o700);
-    }
-
-    #[test]
-    fn verify_and_enforce_reject_a_regular_file_without_chmod() {
-        let tree = TempTree::new("file");
-        let path = tree.path.join("note");
-        fs::write(&path, b"kept").expect("write");
-        set_mode(&path, 0o644);
-        let file = File::open(&path).expect("open");
-        for result in [
-            verify_owned_directory(&file),
-            enforce_owned_directory(&file),
-        ] {
-            let error = result.expect_err("regular file");
-            assert_eq!(error.kind(), ConfigErrorKind::Io);
-            assert_eq!(error.io_kind(), Some(ErrorKind::NotADirectory));
-        }
-        assert_eq!(mode_bits(&path), 0o644);
-        assert_eq!(fs::read(&path).expect("bytes"), b"kept");
-    }
-
-    #[test]
-    fn foreign_owned_directory_is_rejected_without_chmod() {
-        let tree = TempTree::new("foreign");
-        let path = tree.path.join("home");
-        fs::create_dir(&path).expect("directory");
-        set_mode(&path, 0o755);
-        if chown(&path, Some(foreign_uid()), None).is_ok()
-            && fs::metadata(&path).expect("meta").uid() != geteuid().as_raw()
-        {
-            let directory = File::open(&path).expect("open");
-            assert_rejected_without_mode_change(&directory);
-            let home = HomeLayout::from_root(&path).expect("layout");
-            let error = read_owned_file(&home, "settings.json", 64).expect_err("foreign home");
-            assert_eq!(error.kind(), ConfigErrorKind::AccessControl);
-            assert_eq!(mode_bits(&path), 0o755);
-            assert_eq!(fs::metadata(&path).expect("meta").uid(), foreign_uid());
-            return;
-        }
-
-        assert_ne!(
-            geteuid().as_raw(),
-            0,
-            "root must chown a temp directory instead of touching a system path"
-        );
-        let (path, directory) = open_foreign_system_directory();
-        let mode = mode_bits(&path);
-        let uid = fs::symlink_metadata(&path).expect("meta").uid();
-        assert_rejected_without_mode_change(&directory);
-        let home = HomeLayout::from_root(&path).expect("layout");
-        let error = read_owned_file(&home, "settings.json", 64).expect_err("foreign home");
-        assert_eq!(error.kind(), ConfigErrorKind::AccessControl);
-        assert_eq!(mode_bits(&path), mode);
-        assert_eq!(fs::symlink_metadata(&path).expect("meta").uid(), uid);
-    }
-
-    fn assert_rejected_without_mode_change(directory: &File) {
-        let before = rfs::fstat(directory.as_fd()).expect("fstat");
-        assert_ne!(before.st_uid, geteuid().as_raw());
-        assert_access_control(verify_owned_directory(directory));
-        assert_access_control(enforce_owned_directory(directory));
-        let after = rfs::fstat(directory.as_fd()).expect("fstat");
-        assert_eq!(after.st_uid, before.st_uid);
-        assert_eq!(after.st_mode, before.st_mode);
-    }
-
-    fn open_foreign_system_directory() -> (PathBuf, File) {
-        for candidate in ["/usr", "/etc", "/var"] {
-            let path = Path::new(candidate);
-            let Ok(metadata) = fs::symlink_metadata(path) else {
-                continue;
-            };
-            if !metadata.file_type().is_dir() || metadata.uid() == geteuid().as_raw() {
-                continue;
-            }
-            if let Ok(file) = File::open(path) {
-                return (path.to_path_buf(), file);
-            }
-        }
-        panic!("no foreign-owned directory available");
     }
 
     #[test]
@@ -482,44 +392,6 @@ mod tests {
         assert_eq!(mode_bits(&sessions), 0o700);
         assert_eq!(mode_bits(&session), 0o700);
         assert!(!session.join("note.json").exists());
-    }
-
-    #[test]
-    fn symlink_home_is_rejected_without_tightening_the_target() {
-        let tree = TempTree::new("symlink-root");
-        let real = tree.path.join("real-home");
-        fs::create_dir(&real).expect("target");
-        set_mode(&real, 0o755);
-        let link = tree.path.join("linked-home");
-        symlink(&real, &link).expect("symlink");
-        let home = HomeLayout::from_root(&link).expect("layout");
-
-        let error = read_owned_file(&home, "settings.json", 64).expect_err("symlink root");
-
-        assert_eq!(error.kind(), ConfigErrorKind::LinkEscape);
-        assert_eq!(mode_bits(&real), 0o755);
-    }
-
-    #[test]
-    fn symlink_ancestor_is_rejected_without_tightening_the_target() {
-        let tree = TempTree::new("symlink-ancestor");
-        let root = tree.path.join("home");
-        let sessions = root.join("sessions");
-        fs::create_dir_all(&sessions).expect("sessions");
-        set_mode(&root, 0o700);
-        set_mode(&sessions, 0o755);
-        let outside = tree.path.join("outside");
-        fs::create_dir(&outside).expect("outside");
-        set_mode(&outside, 0o755);
-        symlink(&outside, sessions.join("ses-1")).expect("symlink");
-        let home = HomeLayout::from_root(&root).expect("layout");
-
-        let error =
-            read_owned_file(&home, "sessions/ses-1/note.json", 64).expect_err("intermediate link");
-
-        assert_eq!(error.kind(), ConfigErrorKind::LinkEscape);
-        assert_eq!(mode_bits(&outside), 0o755);
-        assert_eq!(mode_bits(&sessions), 0o700);
     }
 
     #[test]

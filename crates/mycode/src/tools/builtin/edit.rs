@@ -204,13 +204,6 @@ impl Tool for EditTool {
          bounded diff summary, not the file body."
     }
 
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(
-            "edit: change an existing file: one unique {old_string, new_string} \
-             replace, or a batch of operations (literal, fuzzy, regex, line_range).",
-        )
-    }
-
     /// Fills the `type` tag of an operation from its fields and removes keys
     /// that belong to no variant, so a batch that names its operations by
     /// shape alone still validates.

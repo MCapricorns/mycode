@@ -46,7 +46,6 @@ pub use resources::{
 pub use secrets::{
     MAX_SECRETS_BYTES, ProviderSecrets, SECRETS_FORMAT_VERSION, SECRETS_PATH,
     read_provider_secrets, read_provider_secrets_with_repair, salvage_provider_secrets,
-    update_provider_key,
 };
 #[doc(inline)]
 pub use secure_fs::owned_file::{locked_update_owned_file, read_owned_file};
@@ -68,11 +67,11 @@ pub(crate) fn write_owned_test_bytes(
 pub use settings::{
     AppSettings, AppearanceSettings, MAGPIE_PROVIDER_ID, MAX_AUTHORITY_DOCUMENT_BYTES,
     MAX_DISABLED_SKILLS, MAX_HIDDEN_MODELS_PER_PROVIDER, MAX_MCP_ENV_VARS, MAX_MCP_SERVERS,
-    MAX_MODELS_PER_PROVIDER, MagpieSettings, McpServerSettings, PROXY_SCHEMES, ProviderSettings,
-    ProxyPreference, SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SkillsSettings, SubagentRoleSettings,
-    SubagentSettings, VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES, is_mcp_executable,
-    read_app_settings, read_app_settings_with_repair, replace_app_settings, salvage_app_settings,
-    split_command_line,
+    MagpieSettings, McpServerSettings, PROXY_SCHEMES, ProviderSettings, ProxyPreference,
+    SETTINGS_FORMAT_VERSION, SETTINGS_PATH, SkillsSettings, SubagentRoleSettings, SubagentSettings,
+    VALID_FONT_SIZES, VALID_LANGUAGES, VALID_THEMES, is_mcp_executable, read_app_settings,
+    read_app_settings_or, read_app_settings_with_repair, replace_app_settings,
+    salvage_app_settings,
 };
 #[doc(inline)]
 pub use subagents::{

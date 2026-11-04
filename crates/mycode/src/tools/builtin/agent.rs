@@ -174,13 +174,9 @@ impl Tool for AgentTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate one self-contained unit of work to a role listed in the          system prompt's <dispatch> section and get back its answer. Only          those roles are enabled. Calls are serialized and wait for their own result;          call() inside run_code is also synchronous. The brief must stand alone: include          the goal, paths, constraints, supplied evidence and done condition. The child          cannot see this conversation or ask the user."
-    }
-
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(
-            "agent: hand one self-contained brief to a role from <dispatch>              (research, implementation, or review) and wait for its answer. Calls are serialized;              a CodeMode yield is progress, not completion.",
-        )
+        "Delegate one self-contained task to an enabled role from <dispatch> and wait for its \
+         answer. The child cannot see this conversation or ask the user, so the brief must state \
+         the goal, paths, constraints, supplied evidence, and done condition."
     }
 
     async fn execute(

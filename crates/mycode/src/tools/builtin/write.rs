@@ -66,15 +66,6 @@ impl Tool for WriteTool {
          writable."
     }
 
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(
-            "write: create a new file, or replace an existing one in full — \
-             replacing requires expected_revision (from the file's latest \
-             `[revision …]` line) or overwrite=true. Prefer edit for partial \
-             changes.",
-        )
-    }
-
     fn file_access(&self) -> Option<FileAccess> {
         Some(FileAccess::ExistingOrMissing)
     }

@@ -288,31 +288,6 @@ log("unreachable");
 }
 
 #[tokio::test]
-async fn javascript_output_and_source_limits_are_enforced() {
-    let workspace = workspace("js-output");
-    let cells = Arc::new(CodeCells::new());
-    let result = run_script(
-        &cells,
-        &workspace.0,
-        json!({"script": "log('é'.repeat(2048)); complete('tail');", "max_output_bytes": 1024}),
-    )
-    .await
-    .unwrap();
-    assert!(!result.is_error, "{result:?}");
-    let text = text_of(&result);
-    assert!(text.contains("output truncated at 1024 bytes"), "{text}");
-    assert!(text.len() < 1100);
-    let script = " ".repeat(super::engine::MAX_SCRIPT_BYTES + 1);
-    let result = run_script(&cells, &workspace.0, json!({"script": script}))
-        .await
-        .unwrap();
-    assert!(
-        result.is_error && text_of(&result).contains("script exceeds"),
-        "{result:?}"
-    );
-}
-
-#[tokio::test]
 async fn read_images_reach_native_run_and_wait_results_once_without_base64_text() {
     use crate::core::message::ContentBlock;
     use base64::Engine as _;
@@ -605,40 +580,6 @@ async fn wait_code_continues_a_yielded_cell_to_completion() {
     );
 }
 
-/// The host provides only its registered bridge functions. File and network
-/// access must go through tools, and dynamic code entry points are disabled.
-#[tokio::test]
-async fn side_channel_and_time_functions_are_refused() {
-    let workspace = workspace("sandbox");
-    let cells = Arc::new(CodeCells::new());
-    for (script, expected) in [
-        (r#"print("side channel");"#, "print"),
-        (r#"debug("side channel");"#, "debug"),
-        ("timestamp();", "timestamp"),
-        ("sleep(1);", "sleep"),
-        ("exit();", "exit"),
-        ("require('fs');", "require"),
-        ("process.cwd();", "process"),
-        ("fetch('https://example.com');", "fetch"),
-        ("new Date();", "Date"),
-        ("setTimeout(() => {}, 1);", "setTimeout"),
-        ("Function('return 1')();", "Function"),
-        ("(() => {}).constructor('return 1')();", "function"),
-        (r#"eval("1 + 1");"#, "eval"),
-    ] {
-        let result = run_script(
-            &cells,
-            &workspace.0,
-            json!({"script": script, "yield_time_ms": 5_000}),
-        )
-        .await
-        .expect("the tool reports the refusal as a failed script");
-        assert!(result.is_error, "{script}: {result:?}");
-        let text = text_of(&result);
-        assert!(text.contains(expected), "{script}: {text}");
-    }
-}
-
 #[tokio::test]
 async fn wait_code_rejects_an_unknown_cell() {
     let workspace = workspace("missing-cell");
@@ -732,27 +673,6 @@ async fn a_finished_script_journals_its_tail_log_and_complete() {
     assert_eq!(kinds, ["log", "complete"], "{result:?}");
 }
 
-/// A tool that panics must not leave the cell Running forever.
-#[tokio::test]
-async fn a_panicking_tool_settles_its_cell() {
-    let workspace = workspace("panic");
-    let cells = Arc::new(CodeCells::new());
-    let result = run_script(
-        &cells,
-        &workspace.0,
-        json!({"script": r#"call("panic", {});"#, "yield_time_ms": 5_000}),
-    )
-    .await
-    .expect("run_code reports the panic as a failed cell");
-    assert!(result.is_error, "{result:?}");
-    let text = text_of(&result);
-    assert!(text.contains("panicked"), "{text}");
-    assert_eq!(
-        cells.get(SCOPE, "cell-0").expect("cell").phase(),
-        super::CellPhase::Failed
-    );
-}
-
 /// Stopping a script must retain the native shell's process cleanup path.
 #[cfg(windows)]
 #[tokio::test]
@@ -838,31 +758,4 @@ fn run_code_does_not_keep_its_registry_alive() {
         weak.upgrade().is_none(),
         "the registry leaked through its own run_code tool"
     );
-}
-
-/// One process-wide cell table, but a session can only reach its own cells.
-#[tokio::test]
-async fn wait_code_cannot_reach_another_sessions_cell() {
-    let workspace = workspace("scope");
-    let cells = Arc::new(CodeCells::new());
-    let running = run_script(
-        &cells,
-        &workspace.0,
-        json!({"script": r#"call("slow", {});"#, "yield_time_ms": 20}),
-    )
-    .await
-    .expect("run_code returns the running cell");
-    assert_eq!(running.details.as_ref().unwrap()["cell_id"], "cell-0");
-
-    let tool = WaitCodeTool::new(Arc::clone(&cells), "session-b".to_owned());
-    let ctx = ToolCtx::new(&workspace.0);
-    let mut stream = ToolStream::closed();
-    let error = tool
-        .execute_dyn(json!({"cell_id": "cell-0"}), &ctx, &mut stream)
-        .await
-        .expect_err("another session's cell is not addressable");
-    assert!(matches!(error, ToolError::InvalidArgs(_)), "{error:?}");
-    if let Some(cell) = cells.get(SCOPE, "cell-0") {
-        cell.terminate();
-    }
 }

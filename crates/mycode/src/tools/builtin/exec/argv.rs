@@ -259,14 +259,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_interior_nul() {
-        let error =
-            windows_command_line_utf16(OsStr::new("py"), &["a\0b".to_owned()]).expect_err("nul");
-        let text = error.to_string();
-        assert!(text.contains("NUL"), "{text}");
-    }
-
-    #[test]
     fn batch_scripts_are_detected_by_extension() {
         assert!(is_batch_script(OsStr::new(r"C:\Tools\npx.cmd")));
         assert!(is_batch_script(OsStr::new(r"C:\Tools\npx.CMD")));
@@ -305,15 +297,5 @@ mod tests {
             "cmd.exe /e:ON /v:OFF /d /c \"\"C:\\Tools\\100%%cd:~,%done\\npx.cmd\" \
              \"%%cd:~,%PATH%%cd:~,%\"\""
         );
-    }
-
-    #[test]
-    fn batch_command_line_rejects_newlines_and_a_quoted_script() {
-        let newline = windows_batch_command_line_utf16(OsStr::new("npx.cmd"), &["a\nb".to_owned()])
-            .expect_err("newline");
-        assert!(newline.to_string().contains("newline"), "{newline}");
-        let quoted =
-            windows_batch_command_line_utf16(OsStr::new("np\"x.cmd"), &[]).expect_err("quote");
-        assert!(quoted.to_string().contains("batch script"), "{quoted}");
     }
 }

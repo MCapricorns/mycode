@@ -117,51 +117,6 @@ pub fn is_mcp_executable(command: &str) -> bool {
     command.contains('/') || command.contains('\\')
 }
 
-/// Splits one command line into the program and its arguments.
-///
-/// Whitespace separates words; single or double quotes group a word. Inside
-/// double quotes a backslash escapes only `"` and `\`, so Windows paths such
-/// as `"C:\My Docs"` survive. This is the shape MCP server docs publish
-/// (`npx -y @scope/server --flag "a b"`), so the settings form can take the
-/// whole line in one field.
-#[must_use]
-pub fn split_command_line(line: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut in_word = false;
-    let mut quote: Option<char> = None;
-    let mut chars = line.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match quote {
-            Some(open) if ch == open => quote = None,
-            Some('"') if ch == '\\' && matches!(chars.peek(), Some('"' | '\\')) => {
-                if let Some(next) = chars.next() {
-                    current.push(next);
-                }
-            }
-            Some(_) => current.push(ch),
-            None if ch == '"' || ch == '\'' => {
-                quote = Some(ch);
-                in_word = true;
-            }
-            None if ch.is_whitespace() => {
-                if in_word {
-                    words.push(std::mem::take(&mut current));
-                    in_word = false;
-                }
-            }
-            None => {
-                current.push(ch);
-                in_word = true;
-            }
-        }
-    }
-    if in_word {
-        words.push(current);
-    }
-    words
-}
-
 #[cfg(test)]
 mod tests {
     use super::is_mcp_executable;

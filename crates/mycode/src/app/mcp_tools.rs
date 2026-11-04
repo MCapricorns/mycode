@@ -158,10 +158,6 @@ impl ToolDyn for DynamicMcpTool {
         self.spec.clone()
     }
 
-    fn prompt_snippet_dyn(&self) -> Option<&str> {
-        Some(self.snippet.as_str())
-    }
-
     /// A server that declares `readOnlyHint` may serve this call beside
     /// other reads; each connection still takes one request at a time.
     fn parallel_safe(&self) -> bool {
@@ -916,10 +912,8 @@ impl McpCatalog {
     }
 
     /// Prompt note: ready servers with their tool counts, then the ids that
-    /// are still connecting.
-    ///
-    /// The note deliberately does not claim the connecting servers' tools
-    /// are callable; cycle 1 has no schemas for them.
+    /// are still connecting. How to load and call the tools is the shared
+    /// guidance the prompt appends after this note.
     pub(crate) fn prompt_note(&self) -> String {
         let inner = self.inner.read();
         let mut note = String::new();
@@ -949,28 +943,13 @@ impl McpCatalog {
                 }
                 note.push('\n');
             }
-            note.push_str(if self.code_mode.load(Ordering::Relaxed) {
-                "Find schemas with `call(\"search_tool\", args)` or `call(\"tool_search\", args)` \
-                 inside `run_code`, then invoke `call(\"use_tool\", args)`. Never guess parameters.\n"
-            } else {
-                "Their tools are on the tool list; `search_tool` loads a schema by name and \
-                 `use_tool` calls one. `tool_search` finds them by keyword. Never guess \
-                 parameters.\n"
-            });
         }
         if !inner.pending.is_empty() {
             let ids: Vec<&str> = inner.pending.iter().map(String::as_str).collect();
             note.push_str(&format!(
-                "\nMCP servers connecting in the background: {}.\n",
+                "MCP servers still connecting: {}.\n",
                 ids.join(", ")
             ));
-            note.push_str(if self.code_mode.load(Ordering::Relaxed) {
-                "Their tools are not ready yet; after connection, discover and call them \
-                 through `call` inside `run_code`.\n"
-            } else {
-                "Their tools are not on the tool list yet; once connected they appear there, \
-                 or use search_tool + use_tool to call them the moment they register.\n"
-            });
         }
         note
     }
@@ -1277,10 +1256,6 @@ impl ToolDyn for RegisteredMcpTool {
         spec
     }
 
-    fn prompt_snippet_dyn(&self) -> Option<&str> {
-        self.inner.prompt_snippet_dyn()
-    }
-
     fn schema_on_demand(&self) -> bool {
         true
     }
@@ -1314,7 +1289,7 @@ impl ToolDyn for SearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "search_tool".to_owned(),
-            description: "Find a connected MCP tool and load its schema. Pass `name`: an exact tool name for its inputSchema, keywords (for example \"github issue\") for the matching tools with one line each, or \"list\" for every tool. Pass `names` instead to load several exact names' inputSchemas in one call. Never guess parameters.".to_owned(),
+            description: "Find a connected MCP tool and load its schema. Pass `name`: an exact tool name for its inputSchema, keywords (for example \"github issue\") for the matching tools with one line each, or \"list\" for every tool. Pass `names` instead to load several exact names' inputSchemas in one call.".to_owned(),
             params_schema: object_schema(
                 serde_json::json!({
                     "name": {"type": "string", "description": "An exact tool name, keywords, or \"list\"."},
@@ -1328,12 +1303,6 @@ impl ToolDyn for SearchTool {
                 &[],
             ),
         }
-    }
-
-    fn prompt_snippet_dyn(&self) -> Option<&str> {
-        Some(
-            "search_tool: find MCP tools by keyword, or load inputSchemas by exact name (`names` for several), before use_tool. Never guess parameters.",
-        )
     }
 
     fn parallel_safe(&self) -> bool {
@@ -1412,7 +1381,7 @@ impl ToolDyn for UseTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "use_tool".to_owned(),
-            description: "Call a connected MCP tool. Arguments must match the schema returned by search_tool or tool_search for that name. Load the schema before calling this tool.".to_owned(),
+            description: "Call a connected MCP tool by the exact `name` search_tool or tool_search returned, with `arguments` matching its schema.".to_owned(),
             params_schema: object_schema(
                 serde_json::json!({
                     "name": {"type": "string", "description": "The exact name search_tool or tool_search returned."},
@@ -1421,10 +1390,6 @@ impl ToolDyn for UseTool {
                 &["name", "arguments"],
             ),
         }
-    }
-
-    fn prompt_snippet_dyn(&self) -> Option<&str> {
-        Some("use_tool: call an MCP tool after search_tool or tool_search returned its schema.")
     }
 
     /// A call to a tool that declares `readOnlyHint` runs beside other

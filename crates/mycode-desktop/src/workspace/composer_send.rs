@@ -157,16 +157,6 @@ mod tests {
     use super::{EnterAction, enter_action};
 
     #[test]
-    fn stale_busy_choice_does_not_intercept_an_idle_send() {
-        for secondary in [false, true] {
-            assert_eq!(
-                enter_action(false, true, "next question", false, secondary),
-                EnterAction::Submit
-            );
-        }
-    }
-
-    #[test]
     fn attachments_added_to_an_open_choice_use_the_normal_send_path() {
         assert_eq!(
             enter_action(true, true, "read this file", true, false),

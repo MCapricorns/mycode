@@ -11,7 +11,7 @@ pub mod engine;
 pub mod journal;
 pub mod progress;
 
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, LazyLock, Weak};
 use std::time::Duration;
 
 use futures_util::FutureExt;
@@ -26,13 +26,52 @@ use crate::tools::stream::ToolStream;
 use crate::tools::tool::{INTERRUPTED_NOTE, Tool, ToolError, ToolResult};
 
 pub use cell::{
-    CellPhase, CellSnapshot, CodeCellState, CodeCells, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_YIELD_MS,
+    CellPhase, CellSnapshot, CodeCells, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_YIELD_MS,
     InnerCallSummary, MAX_HOST_CALLS, MAX_YIELD_MS, ScriptCell, ScriptEvent, ScriptOutcome,
 };
 pub use journal::{JournalEntry, ScriptEventKind, ScriptJournal};
 pub use progress::{CODE_MODE_PROGRESS_PREFIX, CodeModeProgress, InnerCallPhase};
 
 use self::dispatch::DispatchContext;
+
+/// Registers `run_code` and `wait_code` on `registry` for the cells of
+/// `scope`, then exposes only them and the platform shell to the model.
+/// Every other registered tool stays reachable through a script's
+/// `call(name, args)`.
+pub fn enable_code_mode(registry: &Arc<ToolRegistry>, cells: &Arc<CodeCells>, scope: &str) {
+    registry.register(Arc::new(RunCodeTool::new(
+        Arc::clone(registry),
+        Arc::clone(cells),
+        scope.to_owned(),
+    )));
+    registry.register(Arc::new(WaitCodeTool::new(
+        Arc::clone(cells),
+        scope.to_owned(),
+    )));
+    let names = registry.names();
+    let mut exposed = vec!["run_code", "wait_code"];
+    exposed.extend(
+        names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| crate::tools::ShellKind::is_tool_name(name)),
+    );
+    registry.expose_only(&exposed);
+}
+
+static RUN_CODE_DESCRIPTION: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "Run JavaScript in embedded QuickJS with top-level await and Promises (no Node.js, fs, \
+         require, fetch, network globals, or imports). Call registered tools with \
+         `await callAsync(name, args)`, or with blocking `call(name, args)`; both return \
+         `{{ content, is_error }}` with text at `result.content[0].Text`. Read-only calls can \
+         run together; exclusive tools run alone in submission order. A script makes at most \
+         {MAX_HOST_CALLS} tool calls; `budget()` reports what remains. `log(value)` reports \
+         progress; `complete(value)` ends the script with that value and cancels outstanding \
+         calls. Images from tools arrive natively in the result; the script sees their metadata \
+         only. A script still running after `yield_time_ms` returns a `cell_id` for wait_code."
+    )
+});
 
 /// `run_code` arguments.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -83,29 +122,7 @@ impl Tool for RunCodeTool {
     }
 
     fn description(&self) -> &str {
-        "Run JavaScript in embedded QuickJS with top-level await and Promises (no Node.js, fs, \
-         require, fetch, network globals or imports). Use `await callAsync(name, args)` for a tool result \
-         or `await Promise.all([...])` for independent calls. Read-only calls can run together; exclusive \
-         tools run alone in submission order. Blocking `call(name, args)` remains supported. \
-         Both return `{ content, is_error }`; text is `result.content[0].Text`. \
-         Images are emitted natively in run_code/wait_code results; the script receives image \
-         metadata without base64. Dispatch refusals also include the legacy `__error__` message. `log(text)` reports \
-         progress; `complete(value)` ends the script and returns \
-         value, cancelling outstanding calls; await required work first. Only registered tools are reachable; \
-         the script cannot add capabilities. Logs have a cumulative 4 MiB / 1024-entry budget; \
-         exhausting either limit stops the script. yield_control is limited to 1024 requests per script. \
-         A long script returns a cell id to continue \
-         with wait_code."
-    }
-
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(
-            "run_code: JavaScript with await and Promises, no Node.js, filesystem or network globals. \
-             Use callAsync(name, args) and Promise.all for independent reads/searches; call(name, args) blocks. \
-             Only this run's registered tools are available. Await work before complete(value), which ends the script; \
-             `log(text)` reports progress. It is a long call that occupies its own cycle — use \
-             yield_time_ms and wait_code for work that may outlast it.",
-        )
+        &RUN_CODE_DESCRIPTION
     }
 
     /// Code mode never runs beside another call: a script can perform any
@@ -318,17 +335,8 @@ impl Tool for WaitCodeTool {
     }
 
     fn description(&self) -> &str {
-        "Wait for a run_code cell, or stop it. Pass the cell_id run_code returned; pass \
-         terminate: true to stop a script that is still running. Returns the script's output \
-         when it finished. Pending inner-tool images are emitted natively once in the next \
-         run_code/wait_code result, including a running result."
-    }
-
-    fn prompt_snippet(&self) -> Option<&str> {
-        Some(
-            "wait_code: continue waiting for a run_code cell (cell_id), or stop it with \
-             terminate: true.",
-        )
+        "Wait for the run_code cell `cell_id`, or stop it with `terminate: true`. Returns new \
+         output while the script runs and its result once it finishes."
     }
 
     /// Collecting a cell can let its script finish its remaining writes, so
@@ -428,8 +436,6 @@ fn result_for(cell: &ScriptCell) -> ToolResult {
     result
 }
 
-#[cfg(test)]
-mod image_tests;
 #[cfg(test)]
 mod progress_tests;
 #[cfg(test)]

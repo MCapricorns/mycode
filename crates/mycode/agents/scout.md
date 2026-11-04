@@ -1,6 +1,6 @@
 ---
 name: scout
-description: Retrieve code, documentation, or external facts with citations; no commands or edits.
+description: Find code, documentation, or external facts and cite path:line or URLs; read-only, no shell.
 isolation: shared
 thinking: low
 tools: read, grep, find

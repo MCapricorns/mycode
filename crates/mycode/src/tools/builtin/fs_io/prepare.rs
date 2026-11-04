@@ -290,37 +290,20 @@ pub(super) fn bind_prepared(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
-    use std::path::Path;
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::PathBuf;
 
     use tokio_util::sync::CancellationToken;
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
 
-    use super::{prepare_file, walk_prepare};
+    use super::prepare_file;
     use crate::tools::builtin::fs_io::FileAccess;
-    use crate::tools::tool::ToolError;
 
-    #[test]
-    fn empty_walk_components_are_rejected_without_reading_disk() {
-        let _ = walk_prepare;
-        let error = prepare_file(
-            Path::new("."),
-            ".",
-            &CancellationToken::new(),
-            FileAccess::ExistingContent,
-        )
-        .expect_err("cwd itself is not a file");
-        assert!(matches!(error, ToolError::InvalidArgs(msg) if msg.contains("not a regular file")));
-    }
-
-    #[cfg(windows)]
     #[test]
     fn windows_8dot3_session_cwd_accepts_long_name_absolute_path() {
-        use std::ffi::OsString;
-        use std::os::windows::ffi::{OsStrExt, OsStringExt};
-        use std::path::PathBuf;
-        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
-
         let base = std::env::temp_dir().join(format!(
             "mycode-prepare-8dot3-longname-{}-{}",
             std::process::id(),

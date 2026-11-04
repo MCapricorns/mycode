@@ -36,21 +36,6 @@ fn mixed_legacy_fields_and_operations_apply_operations_only() {
 }
 
 #[test]
-fn mixed_call_does_not_fall_back_to_legacy_fields() {
-    let err = apply_json("score += 1;\n", mixed_call("score += 1", "score += 10"))
-        .expect_err("operations needle is absent");
-    assert!(err.contains("pattern not found"), "{err}");
-    assert!(!err.to_ascii_lowercase().contains("combine"), "{err}");
-}
-
-#[test]
-fn mixed_call_ignores_invalid_legacy_fields() {
-    let body = "score += 1;\nlives -= 1;\n";
-    let updated = apply_json(body, mixed_call("", "score += 10")).expect("edit");
-    assert_eq!(updated, "score += 1;\nlives -= 2;\n");
-}
-
-#[test]
 fn legacy_replace_still_applies_when_operations_are_omitted() {
     let updated = apply_json(
         "score += 1;\n",

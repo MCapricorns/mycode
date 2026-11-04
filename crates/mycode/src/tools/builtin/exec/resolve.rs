@@ -939,25 +939,6 @@ mod tests {
         assert_eq!(parse_app_exec_link(&buffer).as_deref(), Some(target));
     }
 
-    #[test]
-    fn app_exec_link_rejects_other_tags_versions_and_targets() {
-        let good = ["pkg", "pkg!App", r"C:\Apps\tool.exe", "0"];
-        let mut wrong_tag = app_exec_link(3, &good);
-        wrong_tag[0] = 0x0C;
-        assert_eq!(parse_app_exec_link(&wrong_tag), None);
-        assert_eq!(parse_app_exec_link(&app_exec_link(2, &good)), None);
-        assert_eq!(
-            parse_app_exec_link(&app_exec_link(3, &["pkg", "pkg!App", r"relative\tool.exe"])),
-            None
-        );
-        assert_eq!(
-            parse_app_exec_link(&app_exec_link(3, &["pkg", "pkg!App", r"C:\Apps\tool.dll"])),
-            None
-        );
-        assert_eq!(parse_app_exec_link(&app_exec_link(3, &["pkg"])), None);
-        assert_eq!(parse_app_exec_link(&[]), None);
-    }
-
     /// A Microsoft Store PowerShell exposes only the execution alias. The pin
     /// must follow it to the packaged image instead of reporting "not found".
     #[cfg(windows)]

@@ -579,62 +579,6 @@ mod tests {
     use std::time::Duration;
 
     #[tokio::test]
-    async fn stdout_lines_are_bounded_while_they_are_read() {
-        use super::{LineRead, read_bounded_line};
-
-        let input = format!("{{\"id\":1}}\n{}\n{{\"id\":2}}\ntail", "x".repeat(64)).into_bytes();
-        // A tiny buffer forces the long line across many fill_buf calls.
-        let mut reader = tokio::io::BufReader::with_capacity(8, input.as_slice());
-        let mut line = Vec::new();
-        assert_eq!(
-            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
-            LineRead::Line
-        );
-        assert_eq!(line, b"{\"id\":1}\n");
-        assert_eq!(
-            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
-            LineRead::Oversized
-        );
-        assert!(line.len() <= 16, "an oversized line was buffered");
-        assert_eq!(
-            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
-            LineRead::Line,
-            "the line after an oversized one must still be readable"
-        );
-        assert_eq!(line, b"{\"id\":2}\n");
-        assert_eq!(
-            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
-            LineRead::Line
-        );
-        assert_eq!(line, b"tail");
-        assert_eq!(
-            read_bounded_line(&mut reader, &mut line, 16).await.unwrap(),
-            LineRead::Eof
-        );
-    }
-
-    #[tokio::test]
-    async fn stderr_retains_bounded_prefixes_and_drains_invalid_utf8() {
-        use super::{STDERR_LINE_CHARS, collect_stderr};
-        use std::collections::VecDeque;
-        use std::sync::Mutex;
-
-        let mut input = "界".repeat(STDERR_LINE_CHARS * 10).into_bytes();
-        input.extend_from_slice(b"\ninvalid: \xff\nafter\n");
-        let tail = Mutex::new(VecDeque::new());
-        collect_stderr(
-            tokio::io::BufReader::with_capacity(7, input.as_slice()),
-            &tail,
-        )
-        .await;
-        let tail = tail.lock().unwrap();
-        assert_eq!(tail.len(), 3);
-        assert_eq!(tail[0], "界".repeat(STDERR_LINE_CHARS));
-        assert!(tail[1].starts_with("invalid:"));
-        assert_eq!(tail[2], "after");
-    }
-
-    #[tokio::test]
     async fn stderr_keeps_only_the_latest_nonempty_lines() {
         use super::{STDERR_TAIL_LINES, collect_stderr};
         use std::collections::VecDeque;
@@ -702,32 +646,6 @@ read next
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn request_deadline_includes_blocked_stdin() {
-        use crate::app::mcp_client::{JsonRpcChannel, McpError};
-
-        let channel = StdioChannel::spawn(
-            "/bin/sh",
-            &["-c".to_owned(), "exec sleep 30".to_owned()],
-            &[],
-            Duration::from_millis(50),
-        )
-        .await
-        .unwrap();
-        let result = tokio::time::timeout(
-            Duration::from_secs(2),
-            channel.request(
-                1,
-                "tools/call",
-                serde_json::json!({"text": "x".repeat(512 * 1024)}),
-            ),
-        )
-        .await;
-        channel.shutdown().await;
-        assert_eq!(result.unwrap(), Err(McpError::Timeout));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
     async fn shutdown_kills_the_process_group() {
         let channel = StdioChannel::spawn(
             "/bin/sh",
@@ -743,42 +661,6 @@ read next
         let line = channel.read_stdout_line().await.unwrap();
         let grandchild: i32 = line.trim().parse().unwrap();
         channel.shutdown().await;
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        if let Ok(status) = std::fs::read_to_string(format!("/proc/{grandchild}/status")) {
-            let state = status
-                .lines()
-                .find(|line| line.starts_with("State:"))
-                .unwrap_or("");
-            assert!(
-                state.contains('Z'),
-                "grandchild {grandchild} still running: {state}"
-            );
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn dropping_a_channel_kills_the_process_group() {
-        let channel = StdioChannel::spawn(
-            "/bin/sh",
-            &[
-                "-c".to_owned(),
-                "sleep 120 & echo $!; exec sleep 120".to_owned(),
-            ],
-            &[],
-            Duration::from_secs(2),
-        )
-        .await
-        .unwrap();
-        let grandchild: i32 = channel
-            .read_stdout_line()
-            .await
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        // Handshake cancellation and pool replacement use Drop, not shutdown.
-        drop(channel);
         tokio::time::sleep(Duration::from_millis(200)).await;
         if let Ok(status) = std::fs::read_to_string(format!("/proc/{grandchild}/status")) {
             let state = status

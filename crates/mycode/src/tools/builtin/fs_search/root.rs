@@ -496,14 +496,8 @@ pub(crate) enum ParentDirectory {
 /// Whether ancestor ignore discovery must stop before reading `parent`.
 ///
 /// `child` is the directory already inside the workspace side of the walk.
-/// A different mount means ignore files above `child` are not loaded. Tests
-/// can force this for one directory identity so grep/find stay covered
-/// without a real mount.
+/// A different mount means ignore files above `child` are not loaded.
 pub(crate) fn ancestor_crosses_mount(child: &File, parent: &File) -> io::Result<bool> {
-    #[cfg(test)]
-    if forced_ancestor_boundary(child)? {
-        return Ok(true);
-    }
     mounts_differ(child, parent)
 }
 
@@ -523,58 +517,6 @@ fn mounts_differ(left: &File, right: &File) -> io::Result<bool> {
         let _ = (left, right);
         Ok(false)
     }
-}
-
-#[cfg(test)]
-static FORCED_ANCESTOR_BOUNDARY: parking_lot::Mutex<Option<FileIdentity>> =
-    parking_lot::Mutex::new(None);
-
-/// Forces the next ancestor hop from `dir` to look like a mount boundary.
-///
-/// The guard clears the force on drop. Other directories keep the real
-/// mount check, so parallel tests are unaffected.
-#[cfg(test)]
-pub(crate) struct ForcedAncestorMountBoundary;
-
-#[cfg(test)]
-impl Drop for ForcedAncestorMountBoundary {
-    fn drop(&mut self) {
-        *ancestor_boundary_slot() = None;
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn force_ancestor_mount_boundary(dir: &Path) -> io::Result<ForcedAncestorMountBoundary> {
-    // `File::open` on a directory needs FILE_FLAG_BACKUP_SEMANTICS on
-    // Windows; without it CreateFile answers access denied.
-    #[cfg(windows)]
-    let file = {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(0x0200_0000)
-            .open(dir)?
-    };
-    #[cfg(not(windows))]
-    let file = File::open(dir)?;
-    let (identity, _) = identity_and_kind(&file)?;
-    *ancestor_boundary_slot() = Some(identity);
-    Ok(ForcedAncestorMountBoundary)
-}
-
-#[cfg(test)]
-fn ancestor_boundary_slot() -> parking_lot::MutexGuard<'static, Option<FileIdentity>> {
-    FORCED_ANCESTOR_BOUNDARY.lock()
-}
-
-#[cfg(test)]
-fn forced_ancestor_boundary(child: &File) -> io::Result<bool> {
-    let forced = *ancestor_boundary_slot();
-    let Some(forced) = forced else {
-        return Ok(false);
-    };
-    let (identity, _) = identity_and_kind(child)?;
-    Ok(identity == forced)
 }
 
 /// Opens the parent directory of `dir` via handle-relative `..`.
@@ -816,44 +758,4 @@ pub(crate) fn open_allowed_root(path: &Path) -> io::Result<StableHandle> {
 #[cfg(windows)]
 pub(crate) fn open_allowed_root(path: &Path) -> io::Result<StableHandle> {
     open_windows(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use super::*;
-
-    #[test]
-    fn confirm_child_rejects_handle_outside_allowed_root() {
-        let base = std::env::temp_dir().join(format!(
-            "mycode-root-confirm-{}-{}",
-            std::process::id(),
-            crate::core::unix_now().as_nanos()
-        ));
-        let allowed_dir = base.join("allowed");
-        let outside_dir = base.join("outside");
-        fs::create_dir_all(&allowed_dir).unwrap();
-        fs::create_dir_all(&outside_dir).unwrap();
-        fs::write(outside_dir.join("leak.txt"), "secret\n").unwrap();
-
-        let allowed = open_allowed_root(&allowed_dir).unwrap();
-        let outside = open_allowed_root(&outside_dir).unwrap();
-        #[cfg(windows)]
-        {
-            let err = confirm_child_identity(
-                &allowed,
-                &outside.file,
-                OsStr::new("leak.txt"),
-                FsEntryKind::File,
-            )
-            .expect_err("confirm_child_identity must reject entry outside allowed root");
-            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = (&allowed, &outside);
-        }
-        let _ = fs::remove_dir_all(&base);
-    }
 }

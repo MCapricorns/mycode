@@ -35,7 +35,6 @@ mod unix;
 mod windows;
 
 use std::ffi::OsString;
-use std::fmt::Write as _;
 use std::path::Path;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -50,8 +49,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::tools::builtin::blocking::run_blocking_supervised;
 use crate::tools::builtin::process::{
-    CapturedStream, ExecutionLease, MAX_OUTPUT_BYTES, acquire_execution_lease, captured_text,
-    collection_error, command_cancelled_error, display_exit, mark_timed_out,
+    CapturedStream, ExecutionLease, acquire_execution_lease, captured_text, collection_error,
+    command_cancelled_error, display_exit, mark_timed_out, render_command_output, timeout_notice,
 };
 use crate::tools::ctx::ToolCtx;
 use crate::tools::tool::{ToolError, ToolResult};
@@ -427,20 +426,7 @@ fn timed_out_result(
     teardown: Result<(), std::io::Error>,
     started: bool,
 ) -> ToolResult {
-    let notice = match (started, teardown.as_ref().err()) {
-        (_, Some(err)) => format!(
-            "[command timed out after {}s; termination failed: {err}]",
-            timeout.as_secs()
-        ),
-        (true, None) => format!(
-            "[command timed out after {}s and was killed]",
-            timeout.as_secs()
-        ),
-        (false, None) => format!(
-            "[command timed out after {}s before the program started]",
-            timeout.as_secs()
-        ),
-    };
+    let notice = timeout_notice(timeout, started, teardown.as_ref().err(), "program");
     mark_timed_out(format_result(
         None,
         program,
@@ -480,50 +466,14 @@ fn format_result(
     forced_error: bool,
     notice: Option<&str>,
 ) -> ToolResult {
-    let (stdout_text, stdout_cut) = captured_text(&stdout);
-    let (stderr_text, stderr_cut) = captured_text(&stderr);
-
-    let mut text = String::new();
-    if !stdout_text.trim().is_empty() {
-        text.push_str(&stdout_text);
-    }
-    if !stderr_text.trim().is_empty() {
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str("[stderr]\n");
-        text.push_str(&stderr_text);
-    }
-
-    let (mut text, cut) = crate::tools::builtin::truncate_middle(&text, MAX_OUTPUT_BYTES);
-    let truncated = cut || stdout_cut || stderr_cut;
-    if truncated {
-        let total = stdout.total_bytes.saturating_add(stderr.total_bytes);
-        let _ = write!(
-            text,
-            "\n[output truncated: showed the start and end of {total} bytes]"
-        );
-    }
-
-    let is_error = forced_error || status.is_some_and(|s| !s.success());
-    if is_error {
-        match &status {
-            Some(s) => {
-                let _ = write!(text, "\n[exit code: {}]", display_exit(s));
-            }
-            None => match notice {
-                Some(notice) => {
-                    text.push('\n');
-                    text.push_str(notice);
-                }
-                None => text.push_str("\n[no exit status: command did not finish]"),
-            },
-        }
-    } else if let Some(notice) = notice {
-        text.push('\n');
-        text.push_str(notice);
-    }
-
+    let (text, truncated, is_error) = render_command_output(
+        status,
+        captured_text(&stdout),
+        captured_text(&stderr),
+        stdout.total_bytes.saturating_add(stderr.total_bytes),
+        forced_error,
+        notice,
+    );
     let mut details = json!({
         "program": program,
         "args_count": argv.len(),

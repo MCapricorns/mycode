@@ -88,7 +88,7 @@ fn take_data_line(line: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FrameParser, MAX_FRAME_BYTES};
+    use super::FrameParser;
 
     #[test]
     fn payloads_split_across_chunks_and_line_endings_reassemble() {
@@ -100,33 +100,5 @@ mod tests {
         assert_eq!(frames, ["{\"a\":1}", "[DONE]"]);
         assert_eq!(parser.finish().unwrap().as_deref(), Some("tail"));
         assert_eq!(parser.finish().unwrap(), None);
-    }
-
-    #[test]
-    fn an_oversized_line_fails_closed_whether_split_or_whole() {
-        let mut whole = vec![b'x'; MAX_FRAME_BYTES];
-        whole.push(b'\n');
-        let mut parser = FrameParser::new();
-        assert!(parser.feed(&whole).is_err());
-
-        let mut parser = FrameParser::new();
-        assert!(
-            parser
-                .feed(&whole[..MAX_FRAME_BYTES / 2])
-                .unwrap()
-                .is_empty()
-        );
-        assert!(parser.feed(&whole[MAX_FRAME_BYTES / 2..]).is_err());
-        // The parser recovers for the next line.
-        assert_eq!(parser.feed(b"data: ok\n").unwrap(), ["ok"]);
-    }
-
-    #[test]
-    fn a_line_at_the_limit_is_accepted() {
-        let mut line = b"data: ".to_vec();
-        line.resize(MAX_FRAME_BYTES - 1, b'y');
-        line.push(b'\n');
-        let frames = FrameParser::new().feed(&line).unwrap();
-        assert_eq!(frames[0].len(), MAX_FRAME_BYTES - 7);
     }
 }

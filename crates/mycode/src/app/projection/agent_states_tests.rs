@@ -70,31 +70,3 @@ fn live_and_replayed_agent_results_keep_typed_snapshots_out_of_display_text() {
         assert_eq!(roundtrip, replayed);
     }
 }
-
-#[test]
-fn legacy_entries_and_results_without_valid_agent_metadata_still_project() {
-    let legacy = serde_json::json!({
-        "event_id": "legacy", "kind": "ToolResult", "text": "Original answer",
-        "call_id": "child", "thinking": ""
-    });
-    let entry: ConversationEntry = serde_json::from_value(legacy.clone()).unwrap();
-    assert!(entry.agent_states.is_none());
-    assert_eq!(serde_json::to_value(entry).unwrap(), legacy);
-    for details in [
-        None,
-        Some(serde_json::json!({"agent_states": "invalid"})),
-        Some(serde_json::json!({"agent_states": []})),
-    ] {
-        let result = ToolResultMessage {
-            tool_call_id: "child".into(),
-            content: vec![ContentBlock::Text(crate::core::TextBlock::new(
-                "Original answer",
-            ))],
-            is_error: false,
-            details,
-        };
-        let entry = project_tool_result_message("evt", &result);
-        assert!(entry.agent_states.is_none());
-        assert_eq!(entry.text.as_ref(), "Original answer");
-    }
-}

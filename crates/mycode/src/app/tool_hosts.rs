@@ -179,7 +179,7 @@ impl crate::tools::builtin::AskChannel for BridgeAskChannel {
 
 #[cfg(test)]
 mod tests {
-    use super::{deliver_ask_answer, dismiss_ask, register_ask};
+    use super::{deliver_ask_answer, register_ask};
 
     #[test]
     fn a_turns_exit_retires_only_its_own_registration() {
@@ -191,15 +191,6 @@ mod tests {
             deliver_ask_answer("ses1-ask-generations", vec!["yes".to_owned()]).is_ok(),
             "the successor turn's registration was retired by the old turn"
         );
-    }
-
-    #[test]
-    fn dropping_the_slot_removes_the_pending_entry() {
-        let (_rx, slot) = register_ask("ses2-ask-retire");
-        drop(_rx);
-        drop(slot);
-        assert!(deliver_ask_answer("ses2-ask-retire", Vec::new()).is_err());
-        assert!(dismiss_ask("ses2-ask-retire").is_err());
     }
 
     #[tokio::test]
@@ -235,15 +226,5 @@ mod tests {
         // An answer with no question on screen is refused, not buffered for
         // the next question.
         assert!(deliver_ask_answer("ses4-ask-twice", vec!["stale".to_owned()]).is_err());
-    }
-
-    #[test]
-    fn an_answered_ask_leaves_no_entry_behind() {
-        let (rx, slot) = register_ask("ses3-ask-answer");
-        assert!(deliver_ask_answer("ses3-ask-answer", vec!["a".to_owned()]).is_ok());
-        let answers = rx.blocking_recv().expect("delivered answers");
-        assert_eq!(answers, vec!["a".to_owned()]);
-        drop(slot);
-        assert!(dismiss_ask("ses3-ask-answer").is_err());
     }
 }

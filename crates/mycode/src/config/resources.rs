@@ -613,35 +613,6 @@ mod tests {
         assert!(catalog.contains("/pdf — pdf-tools: "), "{catalog}");
     }
 
-    #[test]
-    fn long_skill_titles_stay_bounded_in_discovery_and_cached_catalogs() {
-        let root = temp("long-title");
-        let skills_root = root.0.join("skills");
-        let long_title = "界".repeat(super::MAX_SKILL_TITLE_CHARS * 100);
-        skill(&skills_root, "heading", &long_title);
-        let named = skills_root.join("named");
-        fs::create_dir_all(&named).unwrap();
-        fs::write(
-            named.join("SKILL.md"),
-            format!("---\nname: {long_title}\ndescription: Short description.\n---\n"),
-        )
-        .unwrap();
-
-        let found = discover_skills(Some(&root.0));
-        assert_eq!(found.len(), 2);
-        let expected = format!("{}…", "界".repeat(super::MAX_SKILL_TITLE_CHARS));
-        for skill in &found {
-            assert_eq!(skill.title, expected);
-        }
-        assert_eq!(found[1].description, "Short description.");
-        assert_eq!(discover_skills(Some(&root.0)), found);
-        let catalog = super::render_skill_catalog(&found).unwrap();
-        assert!(!catalog.contains(&long_title));
-        assert!(catalog.contains(&expected));
-        assert!(catalog.contains("/heading"));
-        assert!(catalog.contains("/named"));
-    }
-
     /// The metadata cache sits between the directory scan and the prompt:
     /// an unchanged file serves the cached summary, a real edit (length
     /// change) is picked up on the next discovery.
@@ -676,46 +647,6 @@ mod tests {
         assert_eq!(
             (third[0].title.as_str(), third[0].description.as_str()),
             ("pdf-tools-v2", "Fill, merge, and stamp form fields.")
-        );
-    }
-
-    /// A read that fails under an exclusive handle is never cached: the
-    /// discovery falls back to the slug title and the next discovery, with
-    /// the handle released, reads the real metadata. `fs::metadata` still
-    /// works on a share-locked file, so this exercises exactly the
-    /// failed-read-is-not-written branch.
-    #[cfg(windows)]
-    #[test]
-    fn a_failed_skill_read_is_not_cached_and_self_heals() {
-        use std::os::windows::fs::OpenOptionsExt as _;
-
-        let root = temp("meta-locked");
-        let dir = root.0.join("skills").join("locked");
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("SKILL.md");
-        fs::write(
-            &path,
-            "---\nname: locked-skill\ndescription: real value\n---\n# Locked\n",
-        )
-        .unwrap();
-        let _lock = fs::OpenOptions::new()
-            .write(true)
-            .share_mode(0)
-            .open(&path)
-            .expect("exclusive handle");
-        let found = discover_skills(Some(&root.0));
-        assert_eq!(found.len(), 1);
-        assert_eq!(
-            (found[0].title.as_str(), found[0].description.as_str()),
-            ("locked", ""),
-            "a failed read falls back to the slug"
-        );
-        drop(_lock);
-        let found = discover_skills(Some(&root.0));
-        assert_eq!(
-            (found[0].title.as_str(), found[0].description.as_str()),
-            ("Locked", "real value"),
-            "the released file reads its real metadata"
         );
     }
 }

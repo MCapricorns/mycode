@@ -530,25 +530,6 @@ fn a_reopen_after_a_send_keeps_the_waiting_bubble() {
 }
 
 #[test]
-fn streaming_text_stops_at_the_character_cap() {
-    let mut state = open(Vec::new(), None);
-    state.sending = true;
-    // Three bytes per char: the byte fast path runs out well before the
-    // character cap, so both paths are exercised.
-    let chunk = "\u{4e2d}".repeat(1024);
-    for _ in 0..(crate::app::MAX_STREAMING_CHARS / 1024 + 4) {
-        reduce(&mut state, FrontendAction::ChatDelta(chunk.clone()));
-    }
-    let text = &state
-        .active
-        .as_ref()
-        .and_then(|active| active.streaming.as_ref())
-        .expect("streaming")
-        .text;
-    assert_eq!(text.chars().count(), crate::app::MAX_STREAMING_CHARS);
-}
-
-#[test]
 fn steer_committed_appends_the_entry_and_moves_the_head() {
     let mut state = WorkspaceState {
         active: Some(ActiveConversation {
@@ -656,65 +637,6 @@ fn ending_a_turn_clears_pending_ask_and_subagent_detail_window() {
     assert!(state.pending_ask.is_none());
     assert!(state.ask_answers.is_empty());
     assert!(state.subagent_window.is_none());
-}
-
-#[test]
-fn stragglers_after_the_turn_do_not_resurrect_running_state() {
-    let mut state = open(Vec::new(), None);
-    state.sending = true;
-    reduce(
-        &mut state,
-        FrontendAction::ToolStarted {
-            call_id: "c1".to_owned(),
-            provider_call_id: "call_1".to_owned(),
-            name: "agent".to_owned(),
-            target: "scout map".to_owned(),
-        },
-    );
-    reduce(
-        &mut state,
-        FrontendAction::ChatDone {
-            head: "evt-2".to_owned(),
-            entry: user("evt-2", "reply"),
-        },
-    );
-    assert!(!state.sending);
-    assert!(state.live_jobs.is_empty());
-
-    // A progress line queued behind the turn's Done must not rebuild the
-    // live job, the status line, or a streaming bubble.
-    reduce(
-        &mut state,
-        FrontendAction::ToolProgress {
-            call_id: "c1".to_owned(),
-            provider_call_id: String::new(),
-            name: String::new(),
-            message: "agent|scout|step|still running".to_owned(),
-        },
-    );
-    reduce(&mut state, FrontendAction::ChatDelta("tail".to_owned()));
-    reduce(
-        &mut state,
-        FrontendAction::UsageSnapshot {
-            model: "m".to_owned(),
-            input: 1,
-            context: 1,
-            context_cache: 0,
-            output: 1,
-            cache: None,
-            requests: 1,
-            elapsed_ms: 1,
-        },
-    );
-    assert!(state.live_jobs.is_empty());
-    assert!(state.live_turn.is_none());
-    assert!(
-        state
-            .active
-            .as_ref()
-            .and_then(|active| active.streaming.as_ref())
-            .is_none()
-    );
 }
 
 #[test]

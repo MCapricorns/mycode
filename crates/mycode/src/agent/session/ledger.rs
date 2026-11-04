@@ -7,7 +7,7 @@
 //! matching durable effect succeeded.
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use super::dto::{BranchHead, EventKind, EventsResult, HeadStamp, SessionError, SessionEvent};
+use super::dto::{BranchHead, EventKind, HeadStamp, SessionError, SessionEvent};
 use super::ids::{BranchId, SessionCallId, SessionEventId};
 
 /// Half-open index range of one backward history window.
@@ -225,33 +225,14 @@ impl SessionLedger {
         }
     }
 
-    /// Computes one read page against an immutable snapshot boundary.
+    /// Index window for one read page against an immutable snapshot boundary.
     ///
     /// The snapshot must name the current-empty head or one committed event
     /// of the branch; `after` must be `None` or a committed event at or
     /// before the snapshot boundary. The empty snapshot is valid only while
     /// the branch is still empty, matching the stale-cursor rejection.
-    pub(crate) fn page(
-        &self,
-        branch: &BranchId,
-        snapshot_head: &HeadStamp,
-        after: Option<&SessionEventId>,
-        limit: u16,
-    ) -> Result<EventsResult, SessionError> {
-        let window = self.page_window(branch, snapshot_head, after, limit)?;
-        let branch_state = self.branches.get(branch).ok_or(SessionError::NotFound)?;
-        let items = branch_state.events[window.start..window.end]
-            .iter()
-            .map(EventMeta::to_session_event)
-            .collect();
-        Ok(EventsResult {
-            items,
-            next: window.next,
-        })
-    }
-
-    /// Index window for one read page. Payload reads use the same bounds so
-    /// a page of events is loaded without a second cursor scan.
+    /// Payload reads use the same bounds so a page of events is loaded
+    /// without a second cursor scan.
     pub(crate) fn page_window(
         &self,
         branch: &BranchId,
