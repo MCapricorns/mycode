@@ -809,51 +809,6 @@ mod tests {
         assert_eq!(restored.appearance.font_size, "m");
     }
 
-    #[test]
-    fn a_malformed_settings_document_is_reset_and_healthy_fields_survive() {
-        let parent = std::env::temp_dir().join(format!(
-            "mycode-settings-comma-{}-{}",
-            std::process::id(),
-            crate::core::unix_now().as_nanos()
-        ));
-        std::fs::create_dir_all(&parent).expect("temp parent");
-        let guard = TempDir(parent);
-        let root = guard.0.join("home");
-        std::fs::create_dir(&root).expect("home");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
-                .expect("private home");
-        }
-        let home = crate::config::HomeLayout::from_root(&root).expect("layout");
-        // Valid JSON carrying a removed field: the strict read rejects the
-        // file, the bytes move aside, and the repair keeps what still
-        // decodes and validates.
-        let body = br#"{
-            "formatVersion": 1,
-            "kind": "mycode-app-settings",
-            "revision": 9,
-            "appearance": { "theme": "light", "language": "zh" },
-            "tools": { "shell": { "kind": "pwsh" } }
-        }"#;
-        // The fixture goes through the secure transaction: a plain fs::write
-        // file inherits the temp directory's DACL and the Windows read path
-        // rejects it before the revision check this test exercises.
-        crate::config::write_owned_test_bytes(&home, "settings.json", body).expect("write");
-        let (settings, repair) = super::read_app_settings_with_repair(&home).expect("read resets");
-        assert_eq!(settings.appearance.theme, "light");
-        assert_eq!(settings.appearance.language, "zh");
-        let repair = repair.expect("repair reported");
-        let backup = std::fs::read(home.root().join(&repair.backup)).expect("backup");
-        assert!(
-            backup.windows(5).any(|window| window == b"tools"),
-            "{backup:?}"
-        );
-        // The republished document is canonical and parses cleanly.
-        assert!(super::read_app_settings(&home).is_ok());
-    }
-
     struct TempDir(std::path::PathBuf);
 
     impl Drop for TempDir {

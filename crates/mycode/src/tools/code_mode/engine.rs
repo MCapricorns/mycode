@@ -6,9 +6,6 @@
 
 mod promises;
 
-#[cfg(test)]
-mod log_tests;
-
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;

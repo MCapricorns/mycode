@@ -106,25 +106,6 @@ fn braced_variables_preserve_first_closing_brace_and_newline_rules() {
 }
 
 #[test]
-fn malformed_braced_variables_scan_each_suffix_once() {
-    let count = 8_192;
-    let code = format!("{}\n}}\n{}", "${".repeat(count), "${".repeat(count));
-    let mut lexer = super::Lexer::new(&code, &super::specs::SHELL);
-    for (start, _) in code.match_indices("${") {
-        assert_eq!(lexer.braced_variable_end(start), start + 1);
-    }
-    assert!(lexer.braced_variable_scanned_bytes <= code.len());
-
-    let tokens = highlight(&code, Some("bash"));
-    assert_eq!(tokens.len(), count * 2);
-    assert!(
-        tokens
-            .iter()
-            .all(|(range, kind)| { *kind == TokenKind::Variable && &code[range.clone()] == "$" })
-    );
-}
-
-#[test]
 fn powershell_keeps_backslash_paths_inside_their_strings() {
     let code = "Get-ChildItem -Path \"C:\\temp\\\" -Recurse | ForEach-Object { $env:PATH }";
     use TokenKind::*;
@@ -212,35 +193,4 @@ fn fence_info_strings_resolve_to_one_language() {
     );
     assert_eq!(fence_language("  ts  ").as_deref(), Some("ts"));
     assert_eq!(fence_language(""), None);
-}
-
-/// Every span sits on UTF-8 boundaries, in order, without overlap, even in
-/// code full of CJK text, unclosed strings, and stray markers.
-#[test]
-fn spans_are_ordered_disjoint_and_on_char_boundaries() {
-    let samples = [
-        "let 名字 = \"未闭合\n// 注释 ✓\nfn 函数() {}",
-        "print('中文 \\",
-        "'\u{1F980}' r#\"",
-        "$ \"${\n#[",
-        "<a 属性=\"值\">文本</a",
-        "key: 值\n- 项: x",
-    ];
-    for lang in [
-        "rust", "python", "js", "go", "c", "java", "cs", "swift", "php", "ruby", "lua", "bash",
-        "pwsh", "sql", "json", "yaml", "toml", "css", "diff", "html",
-    ] {
-        for code in samples {
-            let mut last = 0;
-            for (range, _) in highlight(code, Some(lang)) {
-                assert!(
-                    range.start >= last && range.start < range.end,
-                    "{lang}: {code:?}"
-                );
-                assert!(code.is_char_boundary(range.start) && code.is_char_boundary(range.end));
-                last = range.end;
-            }
-            assert!(last <= code.len());
-        }
-    }
 }

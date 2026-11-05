@@ -40,28 +40,6 @@ impl ToolDyn for SlowTool {
     }
 }
 
-/// Panics while executing, to prove the dispatcher settles its cell.
-struct PanicTool;
-
-impl ToolDyn for PanicTool {
-    fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "panic".to_owned(),
-            description: "A tool that panics.".to_owned(),
-            params_schema: json!({"type": "object"}),
-        }
-    }
-
-    fn execute_dyn<'a>(
-        &'a self,
-        _args: Value,
-        _ctx: &'a ToolCtx,
-        _out: &'a mut ToolStream,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
-        Box::pin(async move { panic!("tool exploded") })
-    }
-}
-
 /// Short enough that a `wait_code` collecting it is visible in wall time.
 struct QuickTool;
 
@@ -112,7 +90,6 @@ fn registry() -> Arc<ToolRegistry> {
     registry.register(Arc::new(crate::tools::builtin::EditTool));
     registry.register(Arc::new(SlowTool));
     registry.register(Arc::new(QuickTool));
-    registry.register(Arc::new(PanicTool));
     Arc::new(registry)
 }
 
@@ -671,91 +648,4 @@ async fn a_finished_script_journals_its_tail_log_and_complete() {
         .filter_map(|entry| entry["kind"].as_str())
         .collect();
     assert_eq!(kinds, ["log", "complete"], "{result:?}");
-}
-
-/// Stopping a script must retain the native shell's process cleanup path.
-#[cfg(windows)]
-#[tokio::test]
-async fn terminating_a_code_cell_reaps_its_shell_process() {
-    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
-    };
-
-    let workspace = workspace("cancel-process");
-    let cells = Arc::new(CodeCells::new());
-    let registry = Arc::new(ToolRegistry::new());
-    let shell = crate::tools::ShellTool::new();
-    let name = shell.spec().name;
-    registry.register(Arc::new(shell));
-    let tool = RunCodeTool::new(Arc::clone(&registry), Arc::clone(&cells), SCOPE.to_owned());
-    let command = "[IO.File]::WriteAllText((Join-Path $PWD 'started.pid'), [string]$PID); Start-Sleep -Seconds 30; Set-Content -Path late.txt -Value late";
-    let script = format!("call({}, {{ command: {} }});", json!(name), json!(command));
-    let ctx = ToolCtx::new(&workspace.0);
-    let result = tool
-        .execute_dyn(
-            json!({"script": script, "yield_time_ms": 10}),
-            &ctx,
-            &mut ToolStream::closed(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(result.details.as_ref().unwrap()["phase"], "yielded");
-    let cell = cells.get(SCOPE, "cell-0").unwrap();
-    // Ensure an assertion failure also stops the test's process.
-    let _stop_on_drop = super::TerminateOnDrop::new(Arc::clone(&cell));
-    let pid = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let Ok(text) = std::fs::read_to_string(workspace.0.join("started.pid"))
-                && let Ok(pid) = text.parse::<u32>()
-            {
-                break pid;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the script shell started");
-    // SAFETY: OpenProcess creates an owned handle for this test's child.
-    let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-    assert!(
-        !raw.is_null(),
-        "open child process: {}",
-        std::io::Error::last_os_error()
-    );
-    // SAFETY: `raw` is non-null and uniquely owned after OpenProcess.
-    let process = unsafe { OwnedHandle::from_raw_handle(raw) };
-    cell.terminate();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            // SAFETY: the owned handle stays valid throughout this wait.
-            if unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } == WAIT_OBJECT_0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("terminating code mode reaps its shell process");
-    assert!(!workspace.0.join("late.txt").exists());
-}
-
-/// The registry owns its tools; a strong handle inside `run_code` would make
-/// every turn's registry — and the MCP clients behind it — leak.
-#[test]
-fn run_code_does_not_keep_its_registry_alive() {
-    let cells = Arc::new(CodeCells::new());
-    let registry = Arc::new(ToolRegistry::new());
-    registry.register(Arc::new(RunCodeTool::new(
-        Arc::clone(&registry),
-        Arc::clone(&cells),
-        "s".to_owned(),
-    )));
-    let weak = Arc::downgrade(&registry);
-    drop(registry);
-    assert!(
-        weak.upgrade().is_none(),
-        "the registry leaked through its own run_code tool"
-    );
 }

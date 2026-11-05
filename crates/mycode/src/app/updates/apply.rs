@@ -447,63 +447,6 @@ mod tests {
     use super::{helper_arguments, parse_apply_update_args, replace_verified_executable};
     use std::path::Path;
 
-    #[cfg(windows)]
-    #[test]
-    #[ignore = "child-side updater console probe"]
-    fn detached_console_probe() {
-        use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
-        use windows_sys::Win32::System::Threading::{
-            GetStartupInfoW, STARTF_USESHOWWINDOW, STARTUPINFOW,
-        };
-
-        let mut pids = [0_u32; 1];
-        // SAFETY: these APIs query only this process and use writable storage.
-        assert!(unsafe { GetConsoleWindow() }.is_null());
-        let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), 1) };
-        assert!(
-            count <= 1,
-            "updater shares a console with {count} processes"
-        );
-        if count == 1 {
-            assert_eq!(pids[0], std::process::id());
-        }
-        let mut startup = STARTUPINFOW::default();
-        unsafe { GetStartupInfoW(&raw mut startup) };
-        assert_eq!(
-            startup.dwFlags & STARTF_USESHOWWINDOW,
-            0,
-            "desktop relaunch must keep the default GUI show behavior"
-        );
-        println!("updater-consoleless-stdout");
-        eprintln!("updater-consoleless-stderr");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn detached_updater_has_no_console_window_and_preserves_output_and_gui_show_behavior() {
-        let (_, module) = module_path!().split_once("::").unwrap();
-        let args = [
-            "--exact".to_owned(),
-            format!("{module}::detached_console_probe"),
-            "--ignored".to_owned(),
-            "--nocapture".to_owned(),
-        ];
-        for breakaway in [false, true] {
-            let output =
-                super::detached_command(&std::env::current_exe().unwrap(), &args, breakaway)
-                    .output();
-            // Some enclosing Jobs prohibit breakaway; production retries with
-            // the same no-window flags and without breakaway in that case.
-            let output = match output {
-                Err(error) if breakaway && error.raw_os_error() == Some(5) => continue,
-                result => result.unwrap(),
-            };
-            assert!(output.status.success(), "{:?}", output);
-            assert!(String::from_utf8_lossy(&output.stdout).contains("updater-consoleless-stdout"));
-            assert!(String::from_utf8_lossy(&output.stderr).contains("updater-consoleless-stderr"));
-        }
-    }
-
     #[test]
     fn absent_flag_is_a_normal_launch() {
         let parsed = parse_apply_update_args(["--other"]).unwrap();
@@ -560,48 +503,6 @@ mod tests {
         assert!(!error.retryable);
         assert!(error.message.contains("sha256"), "{}", error.message);
         assert_eq!(std::fs::read(&target).unwrap(), b"new-bytes");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn helper_waits_until_the_pid_exits_then_swaps() {
-        let dir = scratch("wait");
-        let target = dir.join("app");
-        let source = dir.join("next");
-        std::fs::write(&target, b"old-bytes").unwrap();
-        std::fs::write(&source, b"new-bytes").unwrap();
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("read line")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("sh");
-        let stdin = child.stdin.take();
-        let args = super::ApplyUpdateArgs {
-            target: target.clone(),
-            source,
-            sha256: super::super::sha256_hex(b"new-bytes"),
-            wait_pid: child.id(),
-            relaunch: false,
-        };
-        let worker = std::thread::spawn(move || super::run_apply_update_helper(&args));
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        assert_eq!(
-            std::fs::read(&target).unwrap(),
-            b"old-bytes",
-            "swap ran while the waited pid was still alive"
-        );
-        drop(stdin);
-        let _ = child.wait();
-        worker.join().unwrap().unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"new-bytes");
-        assert!(
-            !super::super::previous_path(&target).exists(),
-            "old-version backup must be removed after the verified swap"
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

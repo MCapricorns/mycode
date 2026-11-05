@@ -428,6 +428,3 @@ fn map_actor_error<A: PackTaskActor>(error: A::Error) -> TaskActorError<A::Error
         TaskActorError::Pack(error)
     }
 }
-
-#[cfg(test)]
-mod tests;

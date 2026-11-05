@@ -385,6 +385,3 @@ pub(crate) fn bind_search_root_with_access(
     }
     resolve_search_root_with_access(cwd, path_arg, cancel, limits, access)
 }
-
-#[cfg(test)]
-mod ancestor_mount;

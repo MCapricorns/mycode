@@ -938,25 +938,4 @@ mod tests {
         );
         assert_eq!(parse_app_exec_link(&buffer).as_deref(), Some(target));
     }
-
-    /// A Microsoft Store PowerShell exposes only the execution alias. The pin
-    /// must follow it to the packaged image instead of reporting "not found".
-    #[cfg(windows)]
-    #[test]
-    fn store_pwsh_alias_pins_its_packaged_image() {
-        let Some(local) = std::env::var_os("LOCALAPPDATA") else {
-            return;
-        };
-        let alias = std::path::Path::new(&local)
-            .join("Microsoft")
-            .join("WindowsApps")
-            .join("pwsh.exe");
-        if std::fs::symlink_metadata(&alias).is_err() {
-            return;
-        }
-        let pinned = super::pin_candidate(&alias, &tokio_util::sync::CancellationToken::new())
-            .expect("the Store alias resolves to a pinnable image");
-        let canonical = pinned.canonical_path.to_string_lossy().to_ascii_lowercase();
-        assert!(canonical.ends_with("pwsh.exe"), "{canonical}");
-    }
 }

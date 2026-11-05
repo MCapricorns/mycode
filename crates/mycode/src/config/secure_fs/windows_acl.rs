@@ -117,11 +117,6 @@ pub(super) fn protected_descriptor() -> Result<SecurityDescriptor, ConfigError> 
     descriptor_from_sddl(&protected_sddl(&current_sid))
 }
 
-#[cfg(test)]
-pub(super) fn descriptor_for_tests(sddl: &str) -> Result<SecurityDescriptor, ConfigError> {
-    descriptor_from_sddl(sddl)
-}
-
 fn protected_sddl(current_sid: &str) -> String {
     if current_sid == SYSTEM_SID {
         format!("O:{current_sid}D:P(A;;FA;;;{current_sid})")

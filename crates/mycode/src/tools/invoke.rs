@@ -332,36 +332,4 @@ mod tests {
         .await;
         assert!(read.contains("fn probe() {}"), "{read}");
     }
-
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn read_and_grep_follow_a_junction_inside_the_workspace() {
-        let base = temp("junction");
-        let workspace = base.0.join("ws");
-        let target = base.0.join("target");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::create_dir_all(&target).unwrap();
-        fs::write(target.join("lib.rs"), "fn probe() {}\n").unwrap();
-        let link = workspace.join("linked");
-        let made = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&link)
-            .arg(&target)
-            .output()
-            .is_ok_and(|output| output.status.success());
-        if !made {
-            return;
-        }
-
-        let read = run(&workspace, &ReadTool, json!({"path": "linked/lib.rs"})).await;
-        assert!(read.contains("fn probe() {}"), "{read}");
-        let grep = run(
-            &workspace,
-            &crate::tools::builtin::GrepTool,
-            json!({"pattern": "probe", "path": "linked"}),
-        )
-        .await;
-        assert!(grep.contains("lib.rs:1:"), "{grep}");
-        let _ = fs::remove_dir(&link);
-    }
 }

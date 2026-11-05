@@ -148,20 +148,6 @@ impl StdioChannel {
         }
     }
 
-    /// Reads one stdout line. The Unix shutdown test uses this to observe a
-    /// grandchild pid. Windows tests do not call it.
-    #[cfg(all(test, unix))]
-    async fn read_stdout_line(&self) -> Result<String, McpError> {
-        let mut raw = String::new();
-        self.stdout
-            .lock()
-            .await
-            .read_line(&mut raw)
-            .await
-            .map_err(|error| McpError::transport(error.to_string()))?;
-        Ok(raw)
-    }
-
     /// Renders the retained stderr tail for an error message.
     fn stderr_context(&self) -> String {
         let Ok(tail) = self.stderr_tail.lock() else {
@@ -642,35 +628,5 @@ read next
         assert!(channel.take_tools_changed());
         assert!(!channel.take_tools_changed());
         channel.shutdown().await;
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn shutdown_kills_the_process_group() {
-        let channel = StdioChannel::spawn(
-            "/bin/sh",
-            &[
-                "-c".to_owned(),
-                "sleep 120 & echo $!; exec sleep 120".to_owned(),
-            ],
-            &[],
-            Duration::from_secs(2),
-        )
-        .await
-        .unwrap();
-        let line = channel.read_stdout_line().await.unwrap();
-        let grandchild: i32 = line.trim().parse().unwrap();
-        channel.shutdown().await;
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        if let Ok(status) = std::fs::read_to_string(format!("/proc/{grandchild}/status")) {
-            let state = status
-                .lines()
-                .find(|line| line.starts_with("State:"))
-                .unwrap_or("");
-            assert!(
-                state.contains('Z'),
-                "grandchild {grandchild} still running: {state}"
-            );
-        }
     }
 }

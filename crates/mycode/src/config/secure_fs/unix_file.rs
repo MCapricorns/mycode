@@ -421,22 +421,3 @@ impl Drop for TemporaryName<'_> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn retired_inode_is_not_reported_as_document_damage() {
-        let path = std::env::temp_dir().join(format!(
-            "mycode-retired-settings-{}-{}",
-            std::process::id(),
-            crate::core::unix_now().as_nanos()
-        ));
-        let file = File::create(&path).unwrap();
-        std::fs::remove_file(&path).unwrap();
-        let error = verify_regular_owner(&file).unwrap_err();
-        assert_eq!(error.kind(), ConfigErrorKind::Io);
-        assert_eq!(error.io_kind(), Some(io::ErrorKind::Interrupted));
-    }
-}

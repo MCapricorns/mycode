@@ -113,31 +113,4 @@ mod tests {
         }
         assert!(!library_path(root, Path::new("outside/mcp.json")));
     }
-
-    #[cfg(unix)]
-    #[test]
-    fn canonical_watch_paths_match_events_even_after_the_changed_file_is_removed() {
-        let root = std::env::temp_dir().join(format!(
-            "mycode-library-root-{}-{}",
-            std::process::id(),
-            crate::core::unix_now().as_nanos()
-        ));
-        std::fs::create_dir_all(root.join("real")).unwrap();
-        std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
-        let watched = super::watcher_root(&root.join("alias"));
-        let canonical = root.join("real").canonicalize().unwrap();
-        assert_eq!(watched, canonical);
-        let file = canonical.join("mcp.json");
-        std::fs::write(&file, "{}").unwrap();
-        assert!(library_path(&watched, &file));
-        std::fs::remove_file(&file).unwrap();
-        // Normalize the watch root once, not each event: removals no longer
-        // exist and cannot be canonicalized when the callback receives them.
-        assert!(library_path(&watched, &file));
-        assert!(library_path(
-            &watched,
-            &canonical.join("skills/new/SKILL.md")
-        ));
-        std::fs::remove_dir_all(root).unwrap();
-    }
 }

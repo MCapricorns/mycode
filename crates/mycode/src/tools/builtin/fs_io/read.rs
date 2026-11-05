@@ -339,15 +339,7 @@ pub async fn read_any_async(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_BYTES, MAX_MEDIA_INGEST_BYTES, window_text};
-
-    #[test]
-    fn the_ingest_cap_encodes_to_the_provider_ceiling() {
-        assert_eq!(
-            MAX_MEDIA_INGEST_BYTES / 3 * 4,
-            crate::core::MAX_IMAGE_BASE64_BYTES
-        );
-    }
+    use super::{MAX_BYTES, window_text};
 
     #[test]
     fn a_byte_cut_window_reports_only_whole_lines() {

@@ -125,8 +125,6 @@ struct Lexer<'a> {
     /// Next `}` or newline (or EOF) found while scanning `${...}`. Reuse
     /// failures so many unclosed variables do not rescan the same suffix.
     braced_variable_terminator: Option<usize>,
-    #[cfg(test)]
-    braced_variable_scanned_bytes: usize,
 }
 
 impl<'a> Lexer<'a> {
@@ -140,8 +138,6 @@ impl<'a> Lexer<'a> {
             pending: None,
             line_start: true,
             braced_variable_terminator: None,
-            #[cfg(test)]
-            braced_variable_scanned_bytes: 0,
         }
     }
 
@@ -397,11 +393,6 @@ impl<'a> Lexer<'a> {
                     .find(['}', '\n'])
                     .map_or(self.bytes.len(), |offset| from + offset);
                 self.braced_variable_terminator = Some(at);
-                #[cfg(test)]
-                {
-                    self.braced_variable_scanned_bytes +=
-                        at - from + usize::from(at < self.bytes.len());
-                }
                 at
             }
         };

@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 移除 `.mailmap` 与 `.nojekyll`，更新 README 贡献者说明。
+- 继续清理无用过度防御测试与仅服务于测试的辅助计数器及平台桩代码。
+
 ## [0.12.45] - 2026-11-04
 
 ### Changed

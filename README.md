@@ -174,7 +174,7 @@ CI 在 Windows x64、Windows ARM64、macOS Apple Silicon 和 Ubuntu 24.04 x64 �
 - [MCapricorns](https://github.com/MCapricorns)
 - [YangChengxxyy](https://github.com/YangChengxxyy)
 
-作者别名由 [.mailmap](.mailmap) 归一化。此名单仅列人类贡献者，自动化账号不列入。
+此名单仅列人类贡献者，自动化账号不列入。
 
 ## 社区与许可
 

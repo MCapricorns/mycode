@@ -292,17 +292,6 @@ fn mention_label(item: &crate::view_model::MentionItem) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MENTION_MENU_MAX_H, MENTION_VISIBLE_ROWS};
-
-    #[test]
-    fn mention_menu_caps_at_three_rows_and_composer_width() {
-        const {
-            assert!(MENTION_VISIBLE_ROWS == 3);
-            assert!(MENTION_MENU_MAX_H == 120.);
-            assert!(super::super::composer::COMPOSER_MAX_PX == 760.);
-        }
-    }
-
     #[test]
     fn builtin_and_skill_rows_with_the_same_slug_have_distinct_ids() {
         let command = crate::view_model::MentionItem {

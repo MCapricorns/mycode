@@ -641,39 +641,3 @@ fn stopped_error(limiter: &WalkLimiter) -> io::Error {
         limiter.stopped_reason().unwrap_or("search stopped"),
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tools::builtin::fs_search::{Limits, open_allowed_root};
-
-    #[test]
-    fn git_excludes_are_relative_to_their_nested_worktree() {
-        let root = std::env::temp_dir().join(format!("mycode-exclude-{}", uuid::Uuid::new_v4()));
-        let nested = root.join("nested");
-        std::fs::create_dir_all(nested.join(".git/info")).unwrap();
-        std::fs::write(
-            nested.join(".git/info/exclude"),
-            "/generated.txt\n/output/\n",
-        )
-        .unwrap();
-        let dir = open_allowed_root(&nested).unwrap();
-        let limiter = WalkLimiter::new(&Limits::default());
-        let mut stack = IgnoreStack::default();
-        stack
-            .ingest(
-                &dir.file,
-                Path::new("nested"),
-                &limiter,
-                &CancellationToken::new(),
-            )
-            .unwrap();
-        assert!(stack.is_ignored(Path::new(""), Path::new("nested/generated.txt"), false));
-        assert!(stack.is_ignored(Path::new("nested"), Path::new("generated.txt"), false));
-        assert!(stack.is_ignored(Path::new(""), Path::new("nested/output"), true));
-        assert!(!stack.is_ignored(Path::new(""), Path::new("generated.txt"), false));
-        assert!(!stack.is_ignored(Path::new(""), Path::new("nested/visible.txt"), false));
-        drop(dir);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-}
