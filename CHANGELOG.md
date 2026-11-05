@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.46] - 2026-11-05
+
 ### Changed
 
 - 移除 `.mailmap` 与 `.nojekyll`，更新 README 贡献者说明。
@@ -723,7 +725,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.45...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.46...HEAD
+[0.12.46]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.46
 [0.12.45]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.45
 [0.12.44]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.44
 [0.12.43]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.43
