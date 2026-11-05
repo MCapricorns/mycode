@@ -558,11 +558,7 @@ fn launch_stdio_process(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use super::StdioChannel;
     use super::filter_stdio_env;
-    #[cfg(unix)]
-    use std::time::Duration;
 
     #[tokio::test]
     async fn stderr_keeps_only_the_latest_nonempty_lines() {

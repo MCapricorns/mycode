@@ -13,6 +13,10 @@
 - 移除 `.mailmap` 与 `.nojekyll`，更新 README 贡献者说明。
 - 继续清理无用过度防御测试与仅服务于测试的辅助计数器及平台桩代码。
 
+### Fixed
+
+- 移除 MCP stdio 测试中已无引用的 Unix 导入，修复 Linux 与 macOS 在 `-Dwarnings` 下的 CI 编译失败。
+
 ## [0.12.45] - 2026-11-04
 
 ### Changed
