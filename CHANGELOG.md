@@ -8,6 +8,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 重构桌面端 Paper-Pixel 视觉细节与状态一致性：移除 `skin.rs` 中冗余透传别名，新增 `apply_active_toggle` 与 `active_turn_summary` 复用辅助，统一标题栏、侧栏项目行、欢迎页主按钮、工作台分支徽章、Details 面板及工具卡片的 1px 纸感边界与圆角尺度。
+- 精简无用与重复状态代码：共享 Windows 进程管道、属性列表与终止辅助，移除 `mcp_keys`、`SettingsState::mcp_servers` 与废弃 `ModelsSubview` 导航状态，并将 MCP 服务目录查询统一收敛至 `WorkspaceState::mcp_library`。
+- 重写根目录 `index.html` 为支持浅/深色切换、中英切换与交互式工作台预览的原生落地页；重构 `README.md` 并为离线 Wiki 侧边栏补充主页入口。
+
+### Fixed
+
+- 修复工具差异预览（`diff_preview`）控件 ID 碰撞问题、项目选择器按钮对比度与禁用态指针/悬停反馈，以及模型设置页在已连接状态下的多余分割线。
+- 修复 `shell` 工具 `clippy::unnecessary_lazy_evaluations` 警告及 `MCP` 目录在不同状态源之间的查找遗漏。
+
 ## [0.12.46] - 2026-11-05
 
 ### Changed
