@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.12.47] - 2026-11-13
+
 ### Changed
 
 - 重构桌面端 Paper-Pixel 视觉细节与状态一致性：移除 `skin.rs` 中冗余透传别名，新增 `apply_active_toggle` 与 `active_turn_summary` 复用辅助，统一标题栏、侧栏项目行、欢迎页主按钮、工作台分支徽章、Details 面板及工具卡片的 1px 纸感边界与圆角尺度。
@@ -736,7 +738,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.46...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.47...HEAD
+[0.12.47]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.47
 [0.12.46]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.46
 [0.12.45]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.45
 [0.12.44]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.44
