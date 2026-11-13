@@ -60,7 +60,7 @@ pub(super) fn render_skills_section(workspace: &Workspace, cx: &Context<Workspac
                     .px_2()
                     .rounded(skin::radius_control())
                     .when(!enabled, |this| this.opacity(0.55))
-                    .hover(|this| this.bg(skin::frost_hover(theme)))
+                    .hover(|this| this.bg(theme.secondary_hover))
                     .child(
                         div()
                             .flex_1()

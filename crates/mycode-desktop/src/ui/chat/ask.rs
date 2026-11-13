@@ -47,9 +47,9 @@ pub(crate) fn render_ask_card(
         .pt_3()
         .pb(skin::space(3))
         // Matches the composer card under it, so the pair reads as one stack.
-        .rounded(px(18.))
-        .bg(skin::ask_glass(theme))
-        .border_color(skin::border_subtle(theme))
+        .rounded(skin::radius_card())
+        .bg(skin::panel_fill(theme))
+        .border_color(theme.border)
         .child(
             div()
                 .flex()
@@ -185,7 +185,7 @@ pub(crate) fn render_ask_card(
             .w_full()
             .pt(skin::space(3))
             .border_t_1()
-            .border_color(skin::border_subtle(theme))
+            .border_color(theme.border)
             .child(
                 ask_text_button("ask-decline", t("Decline", "拒绝"), theme).on_click(cx.listener(
                     |workspace, _, _, cx| {
@@ -247,7 +247,7 @@ fn ask_progress(index: usize, total: usize, theme: &Theme) -> impl IntoElement {
             } else if step < index {
                 theme.primary.opacity(0.45)
             } else {
-                skin::border_strong(theme)
+                theme.input
             };
             div().flex_1().h(px(3.)).rounded_full().bg(fill)
         }))
@@ -266,12 +266,12 @@ fn ask_choice_row(
     let border = if selected {
         theme.primary
     } else {
-        skin::border_subtle(theme)
+        theme.border
     };
     let (fill, hover) = if selected {
         (theme.accent, theme.accent)
     } else {
-        (skin::frost(theme), skin::frost_hover(theme))
+        (theme.secondary, theme.secondary_hover)
     };
     div()
         .id(id)
@@ -298,11 +298,7 @@ fn ask_choice_row(
 
 /// A radio dot or a checkbox tick in front of a choice label.
 fn choice_mark(selected: bool, multiple: bool, theme: &Theme) -> gpui_kit::AnyElement {
-    let edge = if selected {
-        theme.primary
-    } else {
-        skin::border_strong(theme)
-    };
+    let edge = if selected { theme.primary } else { theme.input };
     let mark = div()
         .size(px(16.))
         .flex_shrink_0()
@@ -348,10 +344,6 @@ fn ask_text_button(
         .text_xs()
         .text_color(theme.muted_foreground)
         .cursor_pointer()
-        .hover(move |style| {
-            style
-                .bg(skin::frost_hover(theme))
-                .text_color(theme.foreground)
-        })
+        .hover(move |style| style.bg(theme.secondary_hover).text_color(theme.foreground))
         .child(label)
 }

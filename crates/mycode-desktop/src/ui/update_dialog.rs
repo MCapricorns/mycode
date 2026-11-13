@@ -107,7 +107,7 @@ pub(super) fn render_update_dialog(
                 })),
         )
         .child(
-            super::skin::dialog_panel("update-dialog", theme)
+            super::skin::popover_panel("update-dialog", theme)
                 .occlude()
                 .relative()
                 .w(px(420.))

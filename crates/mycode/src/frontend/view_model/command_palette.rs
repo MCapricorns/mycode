@@ -236,38 +236,36 @@ fn command_items(state: &WorkspaceState) -> Vec<PaletteItem> {
             checked: false,
         });
     }
-    if let Some(settings) = state.settings.as_ref() {
-        for server in settings.mcp_servers.iter().filter(|server| server.enabled) {
-            let mut keywords = words(&["mcp", "command", "命令"]);
+    for server in state.mcp_library.iter().filter(|server| server.enabled) {
+        let mut keywords = words(&["mcp", "command", "命令"]);
+        keywords.push(server.id.clone());
+        items.push(PaletteItem {
+            command: PaletteCommand::Slash(format!("mcp:{}", server.id)),
+            label: format!("/{} · {}", server.id, t("MCP server", "MCP 服务")),
+            keywords,
+            checked: false,
+        });
+        let Some(tools) = state
+            .mcp_tools
+            .iter()
+            .find(|(id, _)| id == &server.id)
+            .map(|(_, tools)| tools.as_slice())
+        else {
+            continue;
+        };
+        for tool in tools {
+            if tool.is_empty() {
+                continue;
+            }
+            let mut keywords = words(&["mcp", "tool", "工具", "command", "命令"]);
             keywords.push(server.id.clone());
+            keywords.push(tool.clone());
             items.push(PaletteItem {
-                command: PaletteCommand::Slash(format!("mcp:{}", server.id)),
-                label: format!("/{} · {}", server.id, t("MCP server", "MCP 服务")),
+                command: PaletteCommand::Slash(format!("mcp:{}/{}", server.id, tool)),
+                label: format!("/{}/{} · {}", server.id, tool, t("MCP tool", "MCP 工具")),
                 keywords,
                 checked: false,
             });
-            let Some(tools) = state
-                .mcp_tools
-                .iter()
-                .find(|(id, _)| id == &server.id)
-                .map(|(_, tools)| tools.as_slice())
-            else {
-                continue;
-            };
-            for tool in tools {
-                if tool.is_empty() {
-                    continue;
-                }
-                let mut keywords = words(&["mcp", "tool", "工具", "command", "命令"]);
-                keywords.push(server.id.clone());
-                keywords.push(tool.clone());
-                items.push(PaletteItem {
-                    command: PaletteCommand::Slash(format!("mcp:{}/{}", server.id, tool)),
-                    label: format!("/{}/{} · {}", server.id, tool, t("MCP tool", "MCP 工具")),
-                    keywords,
-                    checked: false,
-                });
-            }
         }
     }
     items
@@ -377,10 +375,8 @@ mod tests {
             },
             ..crate::config::AppSettings::default()
         };
-        let mut settings = SettingsState::from_settings(&document, 1);
-        // `settings.mcp_servers` mirrors magpie's Library catalog; a test
-        // fills the mirror the way `McpLibraryLoaded` does at runtime.
-        settings.mcp_servers.push(crate::config::McpServerSettings {
+        let settings = SettingsState::from_settings(&document, 1);
+        let mcp_library = vec![crate::config::McpServerSettings {
             id: "docs".to_owned(),
             enabled: true,
             transport: "stdio".to_owned(),
@@ -390,9 +386,10 @@ mod tests {
             headers: Default::default(),
             endpoint: None,
             key_header: None,
-        });
+        }];
         WorkspaceState {
             settings: Some(settings),
+            mcp_library,
             sessions: vec![
                 session("ses-live", "Fix the parser", false),
                 session("ses-bad", "Broken", true),

@@ -86,7 +86,7 @@ pub(crate) fn render_project_menu_layer(
                         .when(!already, |row| {
                             row.cursor_pointer()
                                 .text_color(theme.foreground)
-                                .hover(|row| row.bg(skin::frost_hover(theme)))
+                                .hover(|row| row.bg(theme.secondary_hover))
                                 .on_click(cx.listener(move |workspace, _, _, cx| {
                                     workspace.on_toggle_project_menu(false, cx);
                                     workspace.on_add_workspace_root(&path, cx);
@@ -118,7 +118,7 @@ fn menu_row(
         .text_sm()
         .cursor_pointer()
         .text_color(theme.foreground)
-        .hover(|this| this.bg(skin::frost_hover(theme)))
+        .hover(|this| this.bg(theme.secondary_hover))
         .on_click(on_click)
         .child(
             Icon::new(icon)

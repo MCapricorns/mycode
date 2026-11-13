@@ -25,7 +25,8 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 
-use crate::view_model::{MainView, SettingsSection};
+use crate::i18n::t;
+use crate::view_model::{MainView, SettingsSection, TurnStats, WorkspaceState};
 use crate::workspace::{ToastKind, Workspace};
 
 pub(crate) use chat::busy_enter_opens_choice;
@@ -293,8 +294,8 @@ fn render_toasts(
                 .rounded(skin::radius_card())
                 .border_1()
                 .border_b_2()
-                .border_color(skin::border_strong(theme))
-                .bg(skin::toast_fill(theme))
+                .border_color(theme.input)
+                .bg(theme.popover)
                 .shadow(skin::elevation_shadow(theme))
                 .text_color(theme.foreground)
                 .overflow_hidden()
@@ -354,6 +355,36 @@ pub(super) fn compact_count(count: u64) -> String {
     crate::view_model::compact_count(count)
 }
 
+/// Active turn totals matching the selected model, preferring the live turn.
+pub(super) fn active_turn_summary(
+    vm: &WorkspaceState,
+) -> Option<(&'static str, &'static str, &TurnStats)> {
+    let selected = vm.selected_model.as_deref();
+    let matches_model = |turn: &TurnStats| selected.is_none_or(|model| turn.model == model);
+    vm.live_turn
+        .as_ref()
+        .filter(|turn| matches_model(turn))
+        .map(|turn| {
+            (
+                t("This turn, total", "本轮合计"),
+                t("Turn cache hit", "本轮缓存命中"),
+                turn,
+            )
+        })
+        .or_else(|| {
+            vm.last_turn
+                .as_ref()
+                .filter(|turn| matches_model(turn))
+                .map(|turn| {
+                    (
+                        t("Last turn, total", "上一轮合计"),
+                        t("Last turn cache hit", "上一轮缓存命中"),
+                        turn,
+                    )
+                })
+        })
+}
+
 /// Soft pixel-stamp status lamp.
 pub(super) fn lamp(color: gpui_kit::Hsla) -> impl IntoElement {
     div()
@@ -383,22 +414,7 @@ pub(super) fn icon_button_marked(
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let hover = theme.secondary_hover;
-    div()
-        .id(id)
-        .size(px(30.))
-        .rounded(px(10.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .text_color(if marked {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        })
-        .when(marked, |this| this.bg(theme.accent.opacity(0.55)))
-        .hover(move |this| this.bg(hover))
+    skin::apply_active_toggle(div().id(id), marked, theme)
         .child(Icon::new(icon).with_size(px(15.)))
         .on_click(on_click)
 }

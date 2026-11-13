@@ -218,12 +218,8 @@ fn settings_header(
 /// Identity of the settings page that should fade in. Menus are left out so
 /// opening a dropdown does not replay the fade.
 fn settings_page_key(workspace: &Workspace) -> String {
-    let vm = workspace.vm();
-    match vm.settings_section {
-        SettingsSection::Models => match vm.models_subview {
-            crate::view_model::ModelsSubview::List => "magpie-list".to_owned(),
-            crate::view_model::ModelsSubview::Catalog => "magpie-models".to_owned(),
-        },
+    match workspace.vm().settings_section {
+        SettingsSection::Models => "magpie-list".to_owned(),
         SettingsSection::Mcp => "mcp-list".to_owned(),
         other => other.id().to_owned(),
     }
@@ -244,17 +240,12 @@ fn nav_badges(workspace: &Workspace, cx: &Context<Workspace>) -> Vec<(SettingsSe
     let desk = crate::ui::desk::Desk::of(theme);
     let vm = workspace.vm();
     let settings = vm.settings.as_ref();
-    // Configured servers plus magpie's, minus the ones a configured row
-    // already shadows: the count is the catalog the agent actually loads.
-    let servers = settings.map(|configured| {
-        configured.mcp_servers.iter().filter(|m| m.enabled).count()
-            + vm.mcp_library
-                .iter()
-                .filter(|server| {
-                    server.enabled && !configured.mcp_servers.iter().any(|row| row.id == server.id)
-                })
-                .count()
-    });
+    let servers = Some(
+        vm.mcp_library
+            .iter()
+            .filter(|server| server.enabled)
+            .count(),
+    );
     let magpie = settings.map(|s| s.magpie.clone()).unwrap_or_default();
     let models = vm
         .catalog
@@ -382,7 +373,7 @@ fn render_settings_nav(
         .flex_col()
         .flex_shrink_0()
         .border_r_1()
-        .border_color(crate::ui::skin::glass_border(theme))
+        .border_color(theme.border)
         .bg(crate::ui::skin::glass_sidebar(theme))
         .child(
             div()
@@ -474,9 +465,15 @@ fn nav_row(
         .gap_2()
         .px_2()
         .rounded(crate::ui::skin::radius_control())
+        .border_1()
+        .border_color(if selected {
+            theme.border
+        } else {
+            theme.transparent
+        })
         .cursor_pointer()
         .when(selected, |this| this.bg(theme.sidebar_accent))
-        .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
+        .hover(|this| this.bg(theme.secondary_hover))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_show_settings_section(candidate, cx);
         }))
@@ -495,6 +492,9 @@ fn nav_row(
                 .min_w_0()
                 .truncate()
                 .text_sm()
+                .when(selected, |this| {
+                    this.font_weight(crate::ui::skin::WEIGHT_STRONG)
+                })
                 .text_color(ink)
                 .child(candidate.label()),
         )

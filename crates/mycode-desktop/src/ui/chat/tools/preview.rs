@@ -582,7 +582,11 @@ pub(crate) fn parse_diff_hunk_header(line: &str) -> Option<(u32, u32)> {
 }
 
 pub(super) fn diff_preview(lines: &[&str], theme: &Theme) -> impl IntoElement {
+    use std::hash::{Hash as _, Hasher as _};
     let (added, removed) = count_diff_changes(lines.iter().copied());
+    let mut hasher = std::hash::DefaultHasher::new();
+    lines.hash(&mut hasher);
+    let content_hash = hasher.finish();
     // Only the first `shown` lines are ever painted, and numbering a line
     // clones its text into a String — so number just the painted prefix
     // instead of the whole diff on every render. Numbering is positional,
@@ -592,10 +596,7 @@ pub(super) fn diff_preview(lines: &[&str], theme: &Theme) -> impl IntoElement {
     let add_ink = crate::ui::desk::diff_ink(theme, true);
     let remove_ink = crate::ui::desk::diff_ink(theme, false);
     div()
-        .id(format!(
-            "tool-diff-{added}-{removed}-{}",
-            lines.first().map(|line| line.len()).unwrap_or(0)
-        ))
+        .id(format!("tool-diff-{content_hash:x}"))
         .w_full()
         .min_w_0()
         .overflow_x_scroll()

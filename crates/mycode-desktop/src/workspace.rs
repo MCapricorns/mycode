@@ -659,15 +659,6 @@ impl Workspace {
         self.driver.agent_roles()
     }
 
-    /// Switches the Models settings sub-page.
-    pub(crate) fn on_show_models_subview(
-        &mut self,
-        view: crate::view_model::ModelsSubview,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_action(FrontendAction::ShowModelsSubview(view), cx);
-    }
-
     pub(crate) fn on_open_session(&mut self, session_id: &str, cx: &mut Context<Self>) {
         self.driver_do(|d, fx| d.open_session(session_id, fx), cx);
     }

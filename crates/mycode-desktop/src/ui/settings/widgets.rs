@@ -60,7 +60,7 @@ pub(super) fn settings_card(
         .p(crate::ui::skin::space(5))
         .rounded(crate::ui::skin::radius_card())
         .border_1()
-        .border_color(crate::ui::skin::glass_border(theme))
+        .border_color(theme.border)
         .bg(crate::ui::skin::panel_fill(theme))
         .test_support()
         .child(
@@ -193,7 +193,7 @@ pub(super) fn choice_track(id_prefix: &str, theme: &Theme) -> Stateful<Div> {
         .p(px(2.))
         .rounded(crate::ui::skin::radius_control())
         .border_1()
-        .border_color(crate::ui::skin::glass_border(theme))
+        .border_color(theme.border)
         .bg(crate::ui::skin::segment_track(theme))
 }
 
@@ -337,8 +337,8 @@ pub(super) fn dropdown_field(
                     .p_1()
                     .rounded(crate::ui::skin::radius_control())
                     .border_1()
-                    .border_color(crate::ui::skin::glass_border(theme))
-                    .bg(crate::ui::skin::frost_card(theme))
+                    .border_color(theme.border)
+                    .bg(theme.popover)
                     .children(options.iter().map(|option| {
                         let option = option.clone();
                         let row_option = option.clone();
@@ -358,9 +358,9 @@ pub(super) fn dropdown_field(
                             .text_sm()
                             .cursor_pointer()
                             .when(selected, |this| {
-                                this.bg(crate::ui::skin::frost_accent(theme))
+                                this.bg(theme.accent).text_color(theme.accent_foreground)
                             })
-                            .hover(|this| this.bg(crate::ui::skin::frost_hover(theme)))
+                            .hover(|this| this.bg(theme.secondary_hover))
                             .on_click(cx.listener(move |workspace, _, _, cx| {
                                 pick(workspace, &row_option, cx);
                             }))
@@ -369,7 +369,7 @@ pub(super) fn dropdown_field(
                                 this.child(
                                     Icon::new(IconName::Check)
                                         .xsmall()
-                                        .text_color(theme.primary),
+                                        .text_color(theme.accent_foreground),
                                 )
                             })
                     })),

@@ -81,7 +81,7 @@ fn keycap(label: &str, theme: &Theme) -> impl IntoElement {
         .rounded(crate::ui::skin::radius_xs())
         .border_1()
         .border_b_2()
-        .border_color(crate::ui::skin::border_strong(theme))
+        .border_color(theme.input)
         .bg(theme.secondary)
         .text_xs()
         .text_color(theme.foreground)

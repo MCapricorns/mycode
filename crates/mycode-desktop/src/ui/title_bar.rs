@@ -302,23 +302,8 @@ fn inspector_toggle_button(
     theme: &gpui_kit::component::theme::Theme,
     on_click: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
 ) -> impl IntoElement {
-    let hover = theme.secondary_hover;
-    div()
-        .id("toggle-inspector")
+    skin::apply_active_toggle(div().id("toggle-inspector"), open, theme)
         .occlude()
-        .size(px(30.))
-        .rounded(px(10.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .text_color(if open {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        })
-        .when(open, |this| this.bg(theme.accent.opacity(0.55)))
-        .hover(move |this| this.bg(hover))
         .when(cfg!(not(target_os = "windows")), |this| {
             this.on_mouse_down(MouseButton::Left, |_, window, cx| {
                 window.prevent_default();

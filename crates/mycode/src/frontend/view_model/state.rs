@@ -7,7 +7,7 @@ use crate::app::{
 };
 
 use super::chat::{ComposerMention, LiveJob};
-use super::settings::{ModelsSubview, SettingsSection, SettingsState, SkillEntry};
+use super::settings::{SettingsSection, SettingsState, SkillEntry};
 use super::usage::{CacheAlert, CacheBreak, CacheWatch, TurnStats};
 
 /// The main area view: chat or full-page settings.
@@ -242,8 +242,6 @@ pub struct WorkspaceState {
     pub subagent_menu: Option<(String, String)>,
     /// Whether the General page's language dropdown is open.
     pub language_menu_open: bool,
-    /// The Models settings sub-page.
-    pub models_subview: ModelsSubview,
     /// Whether the global command palette is open.
     pub command_palette_open: bool,
 }
@@ -611,8 +609,6 @@ pub enum FrontendAction {
     /// chip matches. This action does not mark the document dirty and does
     /// not change the reasoning effort that a later settings save writes.
     SettingsReasoningChanged(String),
-    /// The Models settings sub-page changed.
-    ShowModelsSubview(ModelsSubview),
     /// Self-update progress changed.
     UpdateStateChanged(UpdateState),
     /// The proxy connectivity check started, finished, or was invalidated.

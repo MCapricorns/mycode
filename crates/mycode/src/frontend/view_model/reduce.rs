@@ -686,9 +686,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             };
             state.mcp_tools.retain(|(id, _)| unchanged(id));
             state.mcp_probing.retain(unchanged);
-            if let Some(settings) = state.settings.as_mut() {
-                settings.mcp_servers = servers.clone();
-            }
             state.mcp_library = servers;
             state.mcp_library_error = error;
         }
@@ -853,9 +850,6 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             state.default_reasoning = picked;
             remember_active_session_model(state);
         }
-        FrontendAction::ShowModelsSubview(view) => {
-            state.models_subview = view;
-        }
         FrontendAction::LanguageMenuToggled(open) => state.language_menu_open = open,
         FrontendAction::UpdateStateChanged(update) => state.update = update,
         FrontendAction::ProxyTestChanged(test) => state.proxy_test = test,
@@ -925,16 +919,9 @@ fn fill_open_slash(state: &mut WorkspaceState) {
     else {
         return;
     };
-    // Built from borrows, then stored: this runs on every keystroke while
-    // the menu is open, so the server and tool lists are not copied.
-    let servers = state
-        .settings
-        .as_ref()
-        .map_or(&[][..], |settings| settings.mcp_servers.as_slice());
     let items = slash_items(
         &mention.fragment,
         &state.enabled_skills(),
-        servers,
         &state.mcp_library,
         &state.mcp_tools,
     );

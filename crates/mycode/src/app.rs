@@ -531,8 +531,6 @@ pub struct SettingsSnapshot {
     pub settings: crate::config::AppSettings,
     /// Revision to send back with the next save.
     pub revision: crate::config::AuthorityRevision,
-    /// MCP server ids that already have a stored key.
-    pub mcp_keys: Vec<String>,
     /// Product documents backed up and replaced with defaults on this load.
     pub repairs: Vec<crate::config::DocumentRepair>,
 }

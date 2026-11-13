@@ -131,8 +131,8 @@ fn render_provider_step(
                     .gap_2()
                     .rounded(skin::radius_control())
                     .cursor_pointer()
-                    .hover(|this| this.bg(skin::frost_hover(theme)))
-                    .when(index == preferred, |this| this.bg(skin::frost(theme)))
+                    .hover(|this| this.bg(theme.secondary_hover))
+                    .when(index == preferred, |this| this.bg(theme.secondary))
                     .on_click(cx.listener(move |workspace, _, _, cx| {
                         workspace.on_browse_model_provider(Some(&provider_id), cx);
                     }))
@@ -263,7 +263,7 @@ fn render_model_step(
                 .gap_1()
                 .rounded(skin::radius_control())
                 .cursor_pointer()
-                .hover(|this| this.bg(skin::frost_hover(theme)))
+                .hover(|this| this.bg(theme.secondary_hover))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_browse_model_provider(None, cx);
                 }))
@@ -325,7 +325,7 @@ fn model_row(
         .items_center()
         .gap_1()
         .rounded(skin::radius_control())
-        .when(preferred, |this| this.bg(skin::frost(theme)))
+        .when(preferred, |this| this.bg(theme.secondary))
         .child(
             div()
                 .id(format!("{id_prefix}-{model_id}"))
@@ -399,7 +399,7 @@ fn pin_row(
     let target = target.clone();
     div()
         .id(format!("model-pin-{provider}-{model}"))
-        .when(highlighted, |this| this.bg(skin::frost(theme)))
+        .when(highlighted, |this| this.bg(theme.secondary))
         // Two lines (model name and provider). A 32px catalog row clips the
         // second line into the next "Recent" row.
         .min_h(px(44.))
@@ -444,7 +444,7 @@ fn session_model_row(role: &str, highlighted: bool, cx: &Context<Workspace>) -> 
     let role = role.to_owned();
     div()
         .id(format!("agent-model-{role}-inherit-inherit"))
-        .when(highlighted, |this| this.bg(skin::frost(theme)))
+        .when(highlighted, |this| this.bg(theme.secondary))
         .h(px(36.))
         .px_2()
         .flex()
@@ -452,7 +452,7 @@ fn session_model_row(role: &str, highlighted: bool, cx: &Context<Workspace>) -> 
         .items_center()
         .rounded(skin::radius_control())
         .cursor_pointer()
-        .hover(|this| this.bg(skin::frost_hover(theme)))
+        .hover(|this| this.bg(theme.secondary_hover))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_set_subagent_route(&role, Some("inherit".to_owned()), None, cx);
             workspace.apply_action(FrontendAction::SubagentMenuToggled(None), cx);

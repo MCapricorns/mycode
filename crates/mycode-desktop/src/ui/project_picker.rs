@@ -92,7 +92,7 @@ pub(crate) fn render(
                 .items_center()
                 .justify_center()
                 .child(
-                    skin::dialog_panel("project-picker", &theme)
+                    skin::popover_panel("project-picker", &theme)
                         .occlude()
                         .w(px(520.))
                         .h(px(480.))
@@ -121,7 +121,7 @@ fn picker_header(theme: &gpui_kit::component::theme::Theme, path_label: &str) ->
         .flex_col()
         .gap_1()
         .border_b_1()
-        .border_color(skin::glass_border(theme))
+        .border_color(theme.border)
         .child(
             div()
                 .text_sm()
@@ -263,7 +263,7 @@ fn picker_list(
                 .rounded(px(6.))
                 .when(is_dir, |row| {
                     row.cursor_pointer()
-                        .hover(|style| style.bg(skin::frost_hover(theme)))
+                        .hover(|style| style.bg(theme.secondary_hover))
                         .on_click(cx.listener(move |workspace, _, _, cx| {
                             workspace.on_picker_enter(path.clone(), cx);
                         }))
@@ -329,7 +329,7 @@ fn picker_footer(
         .justify_between()
         .gap_2()
         .border_t_1()
-        .border_color(skin::glass_border(theme))
+        .border_color(theme.border)
         .child(
             div()
                 .text_xs()
@@ -373,8 +373,8 @@ fn picker_footer(
         )
 }
 
-/// Same glass, ink, and border as the welcome actions. `emphasized` is the
-/// dialog's confirm action.
+/// Picker action button: preserves primary contrast when emphasized, and
+/// drops pointer/hover feedback while disabled.
 fn desk_button(
     id: &'static str,
     label: &'static str,
@@ -382,14 +382,27 @@ fn desk_button(
     emphasized: bool,
     theme: &gpui_kit::component::theme::Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
-    skin::glass_button(id, emphasized, theme)
-        .when(!enabled, |this| this.opacity(0.45))
-        .text_color(if enabled {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        })
-        .child(label)
+    if !enabled {
+        return div()
+            .id(id)
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(skin::space(2))
+            .h(px(32.))
+            .px(skin::space(3))
+            .rounded(skin::radius_control())
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.secondary.opacity(0.5))
+            .text_color(theme.muted_foreground)
+            .opacity(0.6)
+            .text_sm()
+            .cursor_default()
+            .child(label);
+    }
+    skin::glass_button(id, emphasized, theme).child(label)
 }
 
 /// Parent directory, or `None` at a filesystem root.

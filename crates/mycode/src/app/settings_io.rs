@@ -11,7 +11,6 @@ use crate::config::{
 pub(crate) struct LoadedSettings {
     pub settings: AppSettings,
     pub revision: AuthorityRevision,
-    pub mcp_keys: Vec<String>,
     pub repairs: Vec<DocumentRepair>,
 }
 
@@ -22,17 +21,15 @@ pub(crate) fn load_settings(home: &HomeLayout) -> Result<LoadedSettings, String>
     if let Some(repair) = settings_repair {
         repairs.push(repair);
     }
-    let (secrets, secrets_repair) =
+    let (_, secrets_repair) =
         read_provider_secrets_with_repair(home).map_err(|error| render_config_error(&error))?;
     if let Some(repair) = secrets_repair {
         repairs.push(repair);
     }
-    let mcp_keys = mcp_key_ids(&secrets);
     apply_network(&settings);
     Ok(LoadedSettings {
         settings,
         revision,
-        mcp_keys,
         repairs,
     })
 }
@@ -55,15 +52,4 @@ pub(crate) fn apply_network(settings: &AppSettings) {
 
 pub(crate) fn render_config_error(error: &crate::config::ConfigError) -> String {
     format!("settings error: {}", error.summary())
-}
-
-/// MCP server ids that have a stored key marker.
-fn mcp_key_ids(secrets: &crate::config::ProviderSecrets) -> Vec<String> {
-    secrets
-        .provider_ids()
-        .into_iter()
-        .filter_map(|id| id.strip_prefix("mcp-"))
-        .filter(|server_id| !server_id.is_empty())
-        .map(str::to_owned)
-        .collect()
 }

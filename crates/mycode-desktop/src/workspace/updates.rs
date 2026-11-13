@@ -5,7 +5,7 @@
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{AppContext as _, Context, Entity, Window};
 
-use crate::view_model::nav::{DismissLayer, SettingsBack, settings_back_target, top_dismiss_layer};
+use crate::view_model::nav::{DismissLayer, top_dismiss_layer};
 use crate::view_model::{FrontendAction, MainView};
 use crate::workspace::Workspace;
 
@@ -169,16 +169,7 @@ impl Workspace {
             cx.notify();
         }
         if !dismissed && self.vm().view == MainView::Settings {
-            // One level, matching the control on screen: a sub-page's own
-            // back button, or Back to desk when that is the only back control.
-            match settings_back_target(self.vm().settings_section, self.vm().models_subview) {
-                SettingsBack::ModelsList => {
-                    self.on_show_models_subview(crate::view_model::ModelsSubview::List, cx);
-                }
-                SettingsBack::Desk => {
-                    self.apply_action(FrontendAction::ShowMainView(MainView::Chat), cx);
-                }
-            }
+            self.apply_action(FrontendAction::ShowMainView(MainView::Chat), cx);
             dismissed = true;
         }
         if !dismissed && self.vm().pending_ask.is_some() {

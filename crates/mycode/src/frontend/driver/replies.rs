@@ -183,8 +183,7 @@ impl FrontendDriver {
                     .as_ref()
                     .is_some_and(|current| current.magpie != loaded.settings.magpie);
                 let revision = loaded.revision.get();
-                let mut state = SettingsState::from_settings(&loaded.settings, revision);
-                state.mcp_with_keys = loaded.mcp_keys;
+                let state = SettingsState::from_settings(&loaded.settings, revision);
                 // A dirty or in-flight editor keeps its appearance. Applying
                 // the disk copy here would undo unsaved appearance edits
                 // before the reducer can refuse the document swap.

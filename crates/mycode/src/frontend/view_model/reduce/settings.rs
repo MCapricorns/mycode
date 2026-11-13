@@ -31,7 +31,6 @@ pub(super) fn settings_loaded(state: &mut WorkspaceState, mut settings: Settings
             // draft, edit epoch, live effort, and save handshake.
             current.magpie = settings.magpie;
             current.providers = settings.providers;
-            current.mcp_with_keys = settings.mcp_with_keys;
             if !current.saving {
                 current.revision = settings.revision;
             }

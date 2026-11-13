@@ -674,7 +674,7 @@ pub(crate) fn render_subagent_window(
         .flex_col()
         .rounded(crate::ui::skin::radius_card())
         .border_1()
-        .border_color(crate::ui::skin::border_subtle(theme))
+        .border_color(theme.border)
         .bg(crate::ui::skin::panel_fill(theme))
         .shadow(crate::ui::skin::elevation_shadow(theme))
         .overflow_hidden()
@@ -697,16 +697,14 @@ pub(crate) fn render_subagent_window(
                         .whitespace_normal()
                         .child(title),
                 )
-                .child(
-                    Button::new("subagent-window-close")
-                        .label(t("Close", "关闭"))
-                        .small()
-                        .ghost()
-                        .tooltip(t("Close subagent details", "关闭子代理详情"))
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_open_subagent("", cx);
-                        })),
-                ),
+                .child(crate::ui::icon_button(
+                    "subagent-window-close",
+                    IconName::X,
+                    cx.listener(|workspace, _, _, cx| {
+                        workspace.on_open_subagent("", cx);
+                    }),
+                    cx,
+                )),
         )
         .child(
             div()

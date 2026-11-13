@@ -500,7 +500,6 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
                         crate::app::SettingsSnapshot {
                             settings: loaded.settings,
                             revision: loaded.revision,
-                            mcp_keys: loaded.mcp_keys,
                             repairs: loaded.repairs,
                         }
                     }),

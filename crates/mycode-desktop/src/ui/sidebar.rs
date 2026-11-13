@@ -325,9 +325,15 @@ fn session_row(
         .px_2()
         .py(px(10.))
         .rounded(skin::radius_control())
+        .border_1()
+        .border_color(if is_open {
+            theme.border
+        } else {
+            theme.transparent
+        })
         .when(is_open, |this| this.bg(theme.secondary_hover))
         .cursor_pointer()
-        .hover(|this| this.bg(skin::frost_hover(theme)))
+        .hover(|this| this.bg(theme.secondary_hover))
         .text_color(if is_open {
             theme.foreground
         } else {
@@ -341,7 +347,11 @@ fn session_row(
             Icon::new(IconName::MessageSquare)
                 .xsmall()
                 .flex_shrink_0()
-                .text_color(theme.muted_foreground),
+                .text_color(if is_open {
+                    theme.primary
+                } else {
+                    theme.muted_foreground
+                }),
         )
         .child(
             div()
@@ -423,7 +433,7 @@ fn render_sidebar_footer(view: MainView, cx: &mut Context<Workspace>) -> impl In
         .px_3()
         .py_2()
         .border_t_1()
-        .border_color(skin::glass_border(theme))
+        .border_color(theme.border)
         .child(super::icon_button_marked(
             "footer-settings",
             IconName::Settings,

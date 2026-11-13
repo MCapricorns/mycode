@@ -101,10 +101,16 @@ fn unassigned_row(selected: bool, cx: &Context<Workspace>) -> impl IntoElement {
         .px_2()
         .h(px(36.))
         .rounded(skin::radius_control())
+        .border_1()
+        .border_color(if selected {
+            theme.border
+        } else {
+            theme.transparent
+        })
         .when(selected, |this| this.bg(theme.secondary_hover))
         .cursor_pointer()
         .hover(|this| this.bg(theme.secondary_hover))
-        .on_click(cx.listener(|workspace, _, _, cx| {
+        .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_open_unassigned_conversations(cx);
         }))
         .flex()
@@ -114,7 +120,11 @@ fn unassigned_row(selected: bool, cx: &Context<Workspace>) -> impl IntoElement {
             Icon::new(IconName::MessageSquare)
                 .xsmall()
                 .flex_shrink_0()
-                .text_color(theme.muted_foreground),
+                .text_color(if selected {
+                    theme.primary
+                } else {
+                    theme.muted_foreground
+                }),
         )
         .child(
             div()
@@ -139,6 +149,12 @@ fn project_row(root: &str, cwd: Option<&str>, cx: &Context<Workspace>) -> impl I
         .px_2()
         .h(px(36.))
         .rounded(skin::radius_control())
+        .border_1()
+        .border_color(if selected {
+            theme.border
+        } else {
+            theme.transparent
+        })
         .when(selected, |this| this.bg(theme.secondary_hover))
         .cursor_pointer()
         .hover(|this| this.bg(theme.secondary_hover))

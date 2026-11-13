@@ -89,8 +89,16 @@ pub(super) fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> 
                 .px_2()
                 .h(px(28.))
                 .rounded(crate::ui::skin::radius_xs())
+                .border_1()
+                .border_color(if open {
+                    theme.accent_foreground.opacity(0.28)
+                } else {
+                    theme.transparent
+                })
                 .cursor_pointer()
-                .when(open, |row| row.bg(theme.accent))
+                .when(open, |row| {
+                    row.bg(theme.accent).text_color(theme.accent_foreground)
+                })
                 .hover(|row| row.bg(theme.secondary_hover))
                 .on_click(cx.listener(move |workspace, _, _, cx| {
                     cx.stop_propagation();
@@ -123,7 +131,7 @@ pub(super) fn render_changes(workspace: &Workspace, cx: &Context<Workspace>) -> 
                     .gap_2()
                     .px_2()
                     .h(px(28.))
-                    .rounded(px(6.))
+                    .rounded(crate::ui::skin::radius_xs())
                     .text_xs()
                     .cursor_pointer()
                     .text_color(theme.muted_foreground)
@@ -217,22 +225,15 @@ pub(crate) fn render_changes_drawer(
                                 .text_color(theme.muted_foreground)
                                 .child(file_count),
                         )
-                        .child(
-                            div()
-                                .id("changes-drawer-close")
-                                .px_2()
-                                .py(px(2.))
-                                .rounded(px(6.))
-                                .text_xs()
-                                .cursor_pointer()
-                                .text_color(theme.muted_foreground)
-                                .hover(|this| this.bg(theme.secondary_hover))
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    cx.stop_propagation();
-                                    workspace.on_toggle_changes_panel(false, cx);
-                                }))
-                                .child(t("Close", "关闭")),
-                        ),
+                        .child(crate::ui::icon_button(
+                            "changes-drawer-close",
+                            IconName::X,
+                            cx.listener(|workspace, _, _, cx| {
+                                cx.stop_propagation();
+                                workspace.on_toggle_changes_panel(false, cx);
+                            }),
+                            cx,
+                        )),
                 )
                 .child(
                     div()
@@ -258,9 +259,17 @@ pub(crate) fn render_changes_drawer(
                                 .flex_shrink_0()
                                 .h(px(28.))
                                 .rounded(crate::ui::skin::radius_xs())
+                                .border_1()
+                                .border_color(if open {
+                                    theme.accent_foreground.opacity(0.28)
+                                } else {
+                                    theme.transparent
+                                })
                                 .text_xs()
                                 .cursor_pointer()
-                                .when(open, |row| row.bg(theme.accent))
+                                .when(open, |row| {
+                                    row.bg(theme.accent).text_color(theme.accent_foreground)
+                                })
                                 .hover(|row| row.bg(theme.secondary_hover))
                                 .on_click(cx.listener(move |workspace, _, _, cx| {
                                     cx.stop_propagation();
@@ -399,22 +408,15 @@ pub(crate) fn render_diff_panel(
                                     ),
                             )
                         })
-                        .child(
-                            div()
-                                .id("diff-panel-close")
-                                .px_2()
-                                .py(px(2.))
-                                .rounded(px(6.))
-                                .text_xs()
-                                .cursor_pointer()
-                                .text_color(theme.muted_foreground)
-                                .hover(|this| this.bg(theme.secondary_hover))
-                                .on_click(cx.listener(|workspace, _, _, cx| {
-                                    cx.stop_propagation();
-                                    workspace.on_close_git_diff_panel(cx);
-                                }))
-                                .child(t("Close", "关闭")),
-                        ),
+                        .child(crate::ui::icon_button(
+                            "diff-panel-close",
+                            IconName::X,
+                            cx.listener(|workspace, _, _, cx| {
+                                cx.stop_propagation();
+                                workspace.on_close_git_diff_panel(cx);
+                            }),
+                            cx,
+                        )),
                 )
                 .child(
                     div()

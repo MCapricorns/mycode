@@ -178,10 +178,10 @@ pub(crate) fn render_models_section(
         .gap_2()
         .rounded(crate::ui::skin::radius_control())
         .border_1()
-        .border_color(crate::ui::skin::glass_border(&theme))
-        .bg(crate::ui::skin::frost(&theme))
+        .border_color(theme.border)
+        .bg(theme.secondary)
         .cursor_pointer()
-        .hover(|this| this.bg(crate::ui::skin::frost_hover(&theme)))
+        .hover(|this| this.bg(theme.secondary_hover))
         .on_click(cx.listener(|workspace, _, _, cx| {
             workspace.magpie_models_open = !workspace.magpie_models_open;
             cx.notify();
@@ -206,7 +206,112 @@ pub(crate) fn render_models_section(
         .into_any_element();
 
     let has_rows = !models.is_empty();
-    let list = models_open.then(|| div().flex().flex_col().children(rows).into_any_element());
+    let list = models_open.then(|| {
+        div()
+            .flex()
+            .flex_col()
+            .rounded(crate::ui::skin::radius_control())
+            .border_1()
+            .border_color(theme.border)
+            .px_2p5()
+            .children(rows)
+            .into_any_element()
+    });
+
+    let mut card_rows = vec![
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::Check).small().text_color(status_color))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                            .text_color(status_color)
+                            .child(status),
+                    ),
+            )
+            .child(
+                Button::new("magpie-refresh")
+                    .icon(IconName::RefreshCw)
+                    .label(t("Refresh models", "刷新模型"))
+                    .small()
+                    .on_click(cx.listener(|workspace, _event, _window, cx| {
+                        workspace.on_refresh_catalog(cx);
+                    })),
+            )
+            .into_any_element(),
+    ];
+    if !connected {
+        card_rows.push(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_3()
+                .rounded(crate::ui::skin::radius_sm())
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.secondary)
+                .child(div().text_xs().child(t(
+                    "Install magpie from https://usemagpie.ai, start it, then run:",
+                    "从 https://usemagpie.ai 安装 magpie 并启动，然后运行：",
+                )))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_family(theme.mono_font_family.clone())
+                        .child("magpie plugin add github:MCapricorns/magpie-mycode"),
+                )
+                .child(div().text_xs().text_color(theme.muted_foreground).child(t(
+                    "Then pick MCode and a model on magpie's Agents page.",
+                    "然后在 magpie 的 Agents 页给 MCode 选一个模型。",
+                )))
+                .into_any_element(),
+        );
+    }
+    card_rows.push(status_row(t("Model", "模型"), current, false, &theme).into_any_element());
+    card_rows.push(status_row(t("Gateway", "网关"), base_url, true, &theme).into_any_element());
+    card_rows.push(
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(crate::ui::skin::WEIGHT_STRONG)
+                            .child(t("Models", "模型")),
+                    )
+                    .when(has_rows, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(models.len().to_string()),
+                        )
+                    }),
+            )
+            .child(toggle)
+            .when_some(list, |this, list| this.child(list))
+            .when(!has_rows, |this| this.child(empty.into_any_element()))
+            .into_any_element(),
+    );
 
     div()
         .id("magpie-section")
@@ -223,76 +328,12 @@ pub(crate) fn render_models_section(
                  模型列表、MCP 服务、技能和规则都来自 magpie。",
             )),
             &theme,
-            vec![
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(Icon::new(IconName::Check).small().text_color(status_color))
-                    .child(div().text_sm().text_color(status_color).child(status))
-                    .into_any_element(),
-                div()
-                    .when(!connected, |this| {
-                        this.flex()
-                            .flex_col()
-                            .gap_1()
-                            .p_2()
-                            .rounded(px(8.))
-                            .bg(theme.secondary)
-                            .child(div().text_xs().child(t(
-                                "Install magpie from https://usemagpie.ai, start it, then run:",
-                                "从 https://usemagpie.ai 安装 magpie 并启动，然后运行：",
-                            )))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_family(theme.mono_font_family.clone())
-                                    .child("magpie plugin add github:MCapricorns/magpie-mycode"),
-                            )
-                            .child(div().text_xs().text_color(theme.muted_foreground).child(t(
-                                "Then pick MCode and a model on magpie's Agents page.",
-                                "然后在 magpie 的 Agents 页给 MCode 选一个模型。",
-                            )))
-                    })
-                    .into_any_element(),
-                status_row(t("Model", "模型"), current, &theme).into_any_element(),
-                status_row(t("Gateway", "网关"), base_url, &theme).into_any_element(),
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .pt_1()
-                    .child(
-                        Button::new("magpie-refresh")
-                            .icon(IconName::RefreshCw)
-                            .label(t("Refresh models", "刷新模型"))
-                            .small()
-                            .on_click(cx.listener(|workspace, _event, _window, cx| {
-                                workspace.on_refresh_catalog(cx);
-                            })),
-                    )
-                    .into_any_element(),
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                            .child(t("Models", "模型")),
-                    )
-                    .child(toggle)
-                    .when_some(list, |this, list| this.child(list))
-                    .when(!has_rows, |this| this.child(empty.into_any_element()))
-                    .into_any_element(),
-            ],
+            card_rows,
         ))
         .into_any_element()
 }
 
-fn status_row(label: &str, value: String, theme: &Theme) -> impl IntoElement {
+fn status_row(label: &str, value: String, mono: bool, theme: &Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_row()
@@ -305,5 +346,14 @@ fn status_row(label: &str, value: String, theme: &Theme) -> impl IntoElement {
                 .text_color(theme.muted_foreground)
                 .child(label.to_owned()),
         )
-        .child(div().flex_1().min_w_0().text_sm().child(value))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .when(mono, |this| {
+                    this.font_family(theme.mono_font_family.clone())
+                })
+                .child(value),
+        )
 }

@@ -27,8 +27,6 @@ pub struct SettingsState {
     pub magpie: crate::config::MagpieSettings,
     /// The one provider row the picker reads: magpie's gateway.
     pub providers: Vec<crate::config::ProviderSettings>,
-    /// MCP servers — the magpie Library catalog, read-only in the editor.
-    pub mcp_servers: Vec<crate::config::McpServerSettings>,
     /// Appearance theme: `dark` or `light`.
     pub theme: String,
     /// UI language: `auto`, `en`, or `zh`.
@@ -42,8 +40,6 @@ pub struct SettingsState {
     pub reasoning: Option<String>,
     /// Reasoning effort stored in the settings document.
     pub saved_reasoning: Option<String>,
-    /// MCP key ids (form `mcp-<server>`) that have a stored key.
-    pub mcp_with_keys: Vec<String>,
     /// Subagent role enablement, model routes, and thinking overrides.
     pub subagents: crate::config::SubagentSettings,
     /// Skills switched off on the Skills page.
@@ -76,15 +72,11 @@ impl SettingsState {
             proxy: settings.proxy.clone(),
             magpie: settings.magpie.clone(),
             providers,
-            // The page shows magpie's Library file, not the settings
-            // document — `settings.json` no longer carries MCP rows.
-            mcp_servers: Vec::new(),
             theme: settings.effective_theme().to_owned(),
             language: settings.appearance.language.clone(),
             font_size: settings.effective_font_size().to_owned(),
             reasoning: settings.reasoning_effort.clone(),
             saved_reasoning: settings.reasoning_effort.clone(),
-            mcp_with_keys: Vec::new(),
             subagents: settings.subagents.clone(),
             skills: settings.skills.clone(),
             saving: false,
@@ -109,16 +101,6 @@ impl SettingsState {
             skills: self.skills.clone(),
         }
     }
-}
-
-/// The Magpie settings sub-page.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ModelsSubview {
-    /// Gateway status and the model list.
-    #[default]
-    List,
-    /// Refreshing the gateway's model list.
-    Catalog,
 }
 
 /// One settings navigation section (the secondary menu).

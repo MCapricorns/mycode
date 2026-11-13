@@ -4,8 +4,6 @@
 //! clamp their highlight the same way on every frontend, so the ordering
 //! lives here instead of beside one renderer.
 
-use super::settings::{ModelsSubview, SettingsSection};
-
 /// One floating layer Escape can dismiss.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DismissLayer {
@@ -39,27 +37,6 @@ pub fn top_dismiss_layer(
     }
 }
 
-/// Where one Escape press goes inside Settings. Each arm matches the back
-/// control that page actually draws.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SettingsBack {
-    /// Refreshing the model list returns to the Magpie page.
-    ModelsList,
-    /// Back to desk.
-    Desk,
-}
-
-/// The settings page Escape should open. Sub-pages step back once.
-pub fn settings_back_target(section: SettingsSection, models: ModelsSubview) -> SettingsBack {
-    match section {
-        SettingsSection::Models => match models {
-            ModelsSubview::Catalog => SettingsBack::ModelsList,
-            ModelsSubview::List => SettingsBack::Desk,
-        },
-        _ => SettingsBack::Desk,
-    }
-}
-
 /// The picker row a highlight lands on: an explicit selection wins, else the
 /// preferred row, clamped into range.
 pub fn highlight(selected: Option<usize>, len: usize, preferred: usize) -> usize {
@@ -79,10 +56,7 @@ pub fn moved(current: usize, len: usize, down: bool) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DismissLayer, SettingsBack, highlight, moved, settings_back_target, top_dismiss_layer,
-    };
-    use crate::frontend::view_model::{ModelsSubview, SettingsSection};
+    use super::{DismissLayer, highlight, moved, top_dismiss_layer};
 
     #[test]
     fn escape_closes_one_layer_topmost_first() {
@@ -103,18 +77,6 @@ mod tests {
             Some(DismissLayer::Picker)
         );
         assert_eq!(top_dismiss_layer(false, false, false, false), None);
-    }
-
-    #[test]
-    fn settings_escape_matches_the_visible_back_button() {
-        let desk = |section| settings_back_target(section, ModelsSubview::List);
-        assert_eq!(desk(SettingsSection::General), SettingsBack::Desk);
-        assert_eq!(desk(SettingsSection::About), SettingsBack::Desk);
-        assert_eq!(desk(SettingsSection::Mcp), SettingsBack::Desk);
-        assert_eq!(
-            settings_back_target(SettingsSection::Models, ModelsSubview::Catalog),
-            SettingsBack::ModelsList
-        );
     }
 
     #[test]

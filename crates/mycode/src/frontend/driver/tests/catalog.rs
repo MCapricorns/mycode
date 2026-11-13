@@ -111,7 +111,6 @@ fn loaded(settings: AppSettings, revision: u64) -> BridgeReply {
     BridgeReply::Settings(Ok(SettingsSnapshot {
         settings,
         revision: AuthorityRevision::new(revision).unwrap_or(AuthorityRevision::ABSENT),
-        mcp_keys: Vec::new(),
         repairs: Vec::new(),
     }))
 }

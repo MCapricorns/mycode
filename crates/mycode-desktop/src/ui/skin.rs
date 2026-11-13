@@ -1,5 +1,6 @@
 //! Layered paper surfaces, pixel-scale geometry, and translucent panel elevation.
 use gpui_kit::component::theme::Theme;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Background, BoxShadow, Div, Hsla, InteractiveElement as _, Stateful, Styled as _, div, hsla,
     linear_color_stop, linear_gradient, px,
@@ -29,37 +30,12 @@ pub(super) fn panel_fill(theme: &Theme) -> Background {
     )
 }
 
-pub(super) fn ask_glass(theme: &Theme) -> Background {
-    panel_fill(theme)
-}
-
 pub(super) fn glass(theme: &Theme) -> Hsla {
-    theme.title_bar.opacity(0.82)
+    theme.title_bar.opacity(0.84)
 }
 
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
-    theme.sidebar.opacity(0.76)
-}
-
-pub(super) fn frost(theme: &Theme) -> Hsla {
-    theme.secondary
-}
-
-pub(super) fn frost_card(theme: &Theme) -> Hsla {
-    theme.popover
-}
-
-pub(super) fn toast_fill(theme: &Theme) -> Hsla {
-    theme.popover
-}
-
-pub(super) fn frost_hover(theme: &Theme) -> Hsla {
-    theme.secondary_hover
-}
-
-/// Pale accent reserved for action choices, not navigation.
-pub(super) fn frost_accent(theme: &Theme) -> Hsla {
-    theme.accent
+    theme.sidebar.opacity(0.78)
 }
 
 /// Semibold resolves to a real Segoe UI and CJK face on Windows.
@@ -74,7 +50,7 @@ pub(super) fn segment_thumb(theme: &Theme) -> Hsla {
 }
 
 pub(super) fn modal_scrim(theme: &Theme) -> Hsla {
-    hsla(0., 0., 0., if theme.mode.is_dark() { 0.5 } else { 0.28 })
+    hsla(0., 0., 0., if theme.mode.is_dark() { 0.52 } else { 0.28 })
 }
 
 pub(super) const SPACE_PX: f32 = 4.;
@@ -103,14 +79,6 @@ pub(super) fn radius_control() -> gpui_kit::Pixels {
     radius_sm()
 }
 
-pub(super) fn border_subtle(theme: &Theme) -> Hsla {
-    theme.border
-}
-
-pub(super) fn border_strong(theme: &Theme) -> Hsla {
-    theme.input
-}
-
 /// A short contact shadow and a soft outer shadow separate floating surfaces.
 pub(super) fn elevation_shadow(theme: &Theme) -> Vec<BoxShadow> {
     let alpha = if theme.mode.is_dark() { 0.28 } else { 0.10 };
@@ -120,21 +88,26 @@ pub(super) fn elevation_shadow(theme: &Theme) -> Vec<BoxShadow> {
     ]
 }
 
-/// One filled primary action; secondary controls stay neutral.
+/// One filled primary action; secondary controls keep a quiet Paper frame.
 pub(super) fn glass_button(
     id: impl Into<gpui_kit::ElementId>,
     emphasized: bool,
     theme: &Theme,
 ) -> Stateful<Div> {
-    let (fill, ink, border) = if emphasized {
-        (theme.primary, theme.primary_foreground, theme.primary)
+    let (fill, ink, border, hover) = if emphasized {
+        (
+            theme.primary,
+            theme.primary_foreground,
+            super::desk::deepen(theme.primary),
+            super::desk::deepen(theme.primary),
+        )
     } else {
-        (theme.transparent, theme.foreground, border_subtle(theme))
-    };
-    let hover = if emphasized {
-        super::desk::deepen(fill)
-    } else {
-        theme.secondary_hover
+        (
+            theme.secondary.opacity(0.65),
+            theme.foreground,
+            theme.border,
+            theme.secondary_hover,
+        )
     };
     div()
         .id(id)
@@ -151,20 +124,37 @@ pub(super) fn glass_button(
         .bg(fill)
         .text_color(ink)
         .text_sm()
+        .when(emphasized, |this| this.font_weight(WEIGHT_STRONG))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
 }
 
-pub(super) fn glass_border(theme: &Theme) -> Hsla {
-    border_subtle(theme)
-}
-
-pub(super) fn popover(theme: &Theme) -> Hsla {
-    theme.popover
-}
-
-pub(super) fn opaque_menu_fill(theme: &Theme) -> Hsla {
-    theme.popover
+/// Shared visual treatment for square 30px chrome toggle icon buttons.
+pub(super) fn apply_active_toggle(el: Stateful<Div>, active: bool, theme: &Theme) -> Stateful<Div> {
+    let hover = if active {
+        theme.accent
+    } else {
+        theme.secondary_hover
+    };
+    el.size(px(30.))
+        .rounded(radius_control())
+        .border_1()
+        .border_color(if active {
+            theme.accent_foreground.opacity(0.28)
+        } else {
+            theme.transparent
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .text_color(if active {
+            theme.accent_foreground
+        } else {
+            theme.muted_foreground
+        })
+        .when(active, |this| this.bg(theme.accent))
+        .hover(move |this| this.bg(hover))
 }
 
 pub(super) fn menu_scrim(theme: &Theme) -> Hsla {
@@ -176,16 +166,12 @@ pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -
         .id(id)
         .rounded(radius_card())
         .border_1()
-        .border_color(border_subtle(theme))
+        .border_color(theme.border)
         .bg(panel_fill(theme))
         .shadow(elevation_shadow(theme))
         .text_color(theme.popover_foreground)
 }
 
-pub(super) fn dialog_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -> Stateful<Div> {
-    popover_panel(id, theme)
-}
-
 pub(super) fn menu_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -> Stateful<Div> {
-    popover_panel(id, theme).bg(opaque_menu_fill(theme))
+    popover_panel(id, theme).bg(theme.popover)
 }

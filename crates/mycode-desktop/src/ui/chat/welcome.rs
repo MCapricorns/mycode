@@ -152,7 +152,7 @@ pub(super) fn render_welcome(
                                     "welcome-open-project",
                                     IconName::FolderOpen,
                                     t("Open project", "打开项目"),
-                                    false,
+                                    true,
                                     theme,
                                 )
                                 .on_click(cx.listener(|workspace, _, _, cx| {
@@ -182,67 +182,80 @@ pub(super) fn render_welcome(
                     .w_full()
                     .flex()
                     .flex_col()
+                    .gap_2()
                     .child(
                         div()
                             .text_xs()
+                            .font_weight(skin::WEIGHT_STRONG)
                             .text_color(theme.muted_foreground)
-                            .pb_2()
                             .child(t("Return to a project", "接着做一个项目")),
                     )
-                    .children(recents.iter().map(|project| {
+                    .child(
                         div()
-                            .id(format!("recent-{}", element_id(project)))
-                            .group("recent-row")
+                            .w_full()
                             .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_3()
-                            .px_2()
-                            .py_2()
-                            .border_t_1()
+                            .flex_col()
+                            .rounded(skin::radius_card())
+                            .border_1()
                             .border_color(theme.border)
-                            .cursor_pointer()
-                            .hover(|this| this.bg(theme.secondary_hover))
-                            .on_click({
-                                let project = project.clone();
-                                cx.listener(move |workspace, _, _, cx| {
-                                    workspace.on_open_recent(&project, cx)
-                                })
-                            })
-                            .child(
-                                Icon::new(IconName::Folder)
-                                    .xsmall()
-                                    .flex_shrink_0()
-                                    .text_color(theme.muted_foreground),
-                            )
-                            .child(
+                            .bg(theme.secondary.opacity(0.35))
+                            .overflow_hidden()
+                            .children(recents.iter().enumerate().map(|(index, project)| {
                                 div()
-                                    .flex_1()
-                                    .min_w_0()
+                                    .id(format!("recent-{}", element_id(project)))
+                                    .group("recent-row")
                                     .flex()
-                                    .flex_col()
-                                    .child(div().text_sm().truncate().child(project_label(project)))
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_3()
+                                    .px_3()
+                                    .py_2p5()
+                                    .when(index > 0, |this| {
+                                        this.border_t_1().border_color(theme.border)
+                                    })
+                                    .cursor_pointer()
+                                    .hover(|this| this.bg(theme.secondary_hover))
+                                    .on_click({
+                                        let project = project.clone();
+                                        cx.listener(move |workspace, _, _, cx| {
+                                            workspace.on_open_recent(&project, cx)
+                                        })
+                                    })
+                                    .child(
+                                        Icon::new(IconName::Folder)
+                                            .xsmall()
+                                            .flex_shrink_0()
+                                            .text_color(theme.muted_foreground),
+                                    )
                                     .child(
                                         div()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .truncate()
-                                            .child(project.clone()),
-                                    ),
-                            )
-                            .child(hover_delete_button(
-                                format!("recent-remove-{}", element_id(project)),
-                                IconName::X,
-                                "recent-row",
-                                {
-                                    let project = project.clone();
-                                    cx.listener(move |workspace, _, _, cx| {
-                                        workspace.on_remove_recent(&project, cx)
-                                    })
-                                },
-                                cx,
-                            ))
-                    })),
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_col()
+                                            .child(div().text_sm().truncate().child(project_label(project)))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.muted_foreground)
+                                                    .truncate()
+                                                    .child(project.clone()),
+                                            ),
+                                    )
+                                    .child(hover_delete_button(
+                                        format!("recent-remove-{}", element_id(project)),
+                                        IconName::X,
+                                        "recent-row",
+                                        {
+                                            let project = project.clone();
+                                            cx.listener(move |workspace, _, _, cx| {
+                                                workspace.on_remove_recent(&project, cx)
+                                            })
+                                        },
+                                        cx,
+                                    ))
+                            })),
+                    ),
             )
         })
         .into_any_element()
@@ -261,7 +274,6 @@ fn welcome_action(
         theme.foreground
     };
     skin::glass_button(id, emphasized, theme)
-        .text_color(ink)
         .child(Icon::new(icon).with_size(px(15.)).text_color(ink))
         .child(label)
 }

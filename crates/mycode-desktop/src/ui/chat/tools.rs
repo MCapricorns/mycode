@@ -220,7 +220,7 @@ fn subagent_cancel_button(
         .rounded(skin::radius_xs())
         .cursor_pointer()
         .text_color(theme.muted_foreground)
-        .hover(|this| this.bg(skin::frost_hover(theme)).text_color(theme.danger))
+        .hover(|this| this.bg(theme.secondary_hover).text_color(theme.danger))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             cx.stop_propagation();
             workspace.on_cancel_subagent(&call_id, cx);

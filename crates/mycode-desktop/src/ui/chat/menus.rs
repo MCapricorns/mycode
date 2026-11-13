@@ -170,8 +170,8 @@ fn menu_row(
         .rounded(skin::radius_control())
         .text_sm()
         .cursor_pointer()
-        .when(highlighted, |this| this.bg(skin::frost_hover(theme)))
-        .hover(|this| this.bg(skin::frost_hover(theme)))
+        .when(highlighted, |this| this.bg(theme.secondary_hover))
+        .hover(|this| this.bg(theme.secondary_hover))
         .on_click(on_click)
         .child(div().min_w_0().truncate().child(label))
         .when(selected, |this| {

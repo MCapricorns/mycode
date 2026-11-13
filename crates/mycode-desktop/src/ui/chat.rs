@@ -524,6 +524,20 @@ fn render_tool_run(
         return div().into_any_element();
     }
     let theme = cx.theme();
+    let run_card = || {
+        div()
+            .w_full()
+            .min_w_0()
+            .rounded(super::skin::radius_card())
+            .border_1()
+            .border_b_2()
+            .border_color(theme.border.opacity(0.8))
+            .bg(theme.secondary.opacity(0.45))
+            .px_3()
+            .py_2()
+            .flex()
+            .flex_col()
+    };
     if tools.len() >= 2 {
         let id = tools[0].call.event_id.clone();
         let labels: Vec<&str> = tools.iter().map(|tool| tool.call.text.as_ref()).collect();
@@ -541,28 +555,15 @@ fn render_tool_run(
                 .any(|tool| tool_cancellable(tool, workspace, turn_running));
         // A run of tool calls sits in one framed card, like the other
         // transcript blocks, instead of hanging off a bare left rail.
-        let mut column = div()
-            .w_full()
-            .min_w_0()
-            .rounded(px(16.))
-            .border_1()
-            .border_b_2()
-            .border_color(theme.border.opacity(0.75))
-            .bg(theme.muted.opacity(0.45))
-            .px_3()
-            .py_2()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .child(tools::render_tool_batch(
-                &id,
-                &labels,
-                open,
-                has_failed,
-                has_unfinished,
-                turn_running,
-                cx,
-            ));
+        let mut column = run_card().gap(px(2.)).child(tools::render_tool_batch(
+            &id,
+            &labels,
+            open,
+            has_failed,
+            has_unfinished,
+            turn_running,
+            cx,
+        ));
         if open {
             let cards = tools
                 .iter()
@@ -575,18 +576,7 @@ fn render_tool_run(
         }
         return column.into_any_element();
     }
-    div()
-        .w_full()
-        .min_w_0()
-        .rounded(px(16.))
-        .border_1()
-        .border_b_2()
-        .border_color(theme.border.opacity(0.75))
-        .bg(theme.muted.opacity(0.45))
-        .px_3()
-        .py_2()
-        .flex()
-        .flex_col()
+    run_card()
         .child(render_one_tool(
             &tools[0],
             workspace,
@@ -745,14 +735,11 @@ fn render_jump_to_latest(cx: &Context<Workspace>) -> impl IntoElement {
                 .size(px(menus::JUMP_LATEST_BUTTON_PX))
                 .rounded_full()
                 .border_1()
-                .border_color(super::skin::glass_border(theme))
-                .bg(super::skin::popover(theme))
+                .border_color(theme.border)
+                .bg(theme.popover)
                 .text_color(theme.muted_foreground)
                 .cursor_pointer()
-                .hover(|this| {
-                    this.bg(super::skin::frost_hover(theme))
-                        .text_color(theme.foreground)
-                })
+                .hover(|this| this.bg(theme.secondary_hover).text_color(theme.foreground))
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.scroll_conversation_to_bottom(cx);
                 }))

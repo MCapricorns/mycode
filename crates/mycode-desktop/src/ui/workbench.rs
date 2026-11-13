@@ -70,7 +70,7 @@ pub(super) fn render_page_band(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(16.))
+                        .text_size(px(15.))
                         .font_weight(skin::WEIGHT_STRONG)
                         .truncate()
                         .child(title),
@@ -86,9 +86,16 @@ pub(super) fn render_page_band(
         .when(wide && !git.branch.is_empty(), |this| {
             this.child(
                 div()
-                    .max_w(px(160.))
+                    .max_w(px(180.))
+                    .px_2()
+                    .py(px(3.))
+                    .rounded(skin::radius_xs())
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.secondary)
                     .truncate()
                     .text_xs()
+                    .font_family(theme.mono_font_family.clone())
                     .text_color(theme.muted_foreground)
                     .child(git.branch.clone()),
             )

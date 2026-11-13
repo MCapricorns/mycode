@@ -175,9 +175,9 @@ impl FrontendDriver {
         }
         let Some(server) = self
             .vm
-            .settings
-            .as_ref()
-            .and_then(|settings| settings.mcp_servers.iter().find(|s| s.id == server_id))
+            .mcp_library
+            .iter()
+            .find(|s| s.id == server_id)
             .cloned()
         else {
             return false;

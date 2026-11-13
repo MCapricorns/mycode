@@ -149,7 +149,7 @@ pub(crate) fn review_panel(
         .flex_col()
         .rounded(crate::ui::skin::radius_card())
         .border_1()
-        .border_color(crate::ui::skin::border_subtle(theme))
+        .border_color(theme.border)
         .bg(crate::ui::skin::panel_fill(theme))
         .shadow(crate::ui::skin::elevation_shadow(theme))
         .overflow_hidden()
@@ -251,10 +251,10 @@ pub(super) fn render_context_panel(
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .rounded(super::skin::radius_card())
+                .rounded(crate::ui::skin::radius_card())
                 .border_1()
-                .border_color(super::skin::glass_border(theme))
-                .bg(super::skin::panel_fill(theme))
+                .border_color(theme.border)
+                .bg(crate::ui::skin::panel_fill(theme))
                 .child(inspector_bar(true, cx))
                 .child(inspector_body(workspace, cx)),
         )
@@ -302,7 +302,7 @@ pub(super) fn render_inspector_drawer(
                 .flex_col()
                 .rounded(super::skin::radius_card())
                 .border_1()
-                .border_color(super::skin::border_subtle(theme))
+                .border_color(theme.border)
                 .bg(super::skin::panel_fill(theme))
                 .shadow(super::skin::elevation_shadow(theme))
                 .overflow_hidden()
@@ -338,7 +338,7 @@ fn inspector_bar(docked: bool, cx: &Context<Workspace>) -> impl IntoElement {
         .px_3()
         .h(px(48.))
         .border_b_1()
-        .border_color(super::skin::glass_border(theme))
+        .border_color(theme.border)
         .child(
             div()
                 .flex_1()
@@ -434,41 +434,8 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
     };
     let thinking = crate::view_model::selected_reasoning_level(vm);
     let context_window = model_context_window(vm);
-    let model_of = |turn: &crate::view_model::TurnStats| {
-        selected_model
-            .as_deref()
-            .is_none_or(|selected| turn.model == selected)
-    };
-    // Copied before `turn_row` borrows `vm`. The warning outlives the turn
-    // row: it is the prompt after a rewrite, not the summed hit.
     let cache_alert = vm.cache_alert;
-    // Usage accounting is live-only: the running turn reports through the
-    // live meter, and a finished turn keeps its sums as the last-turn row.
-    // These totals cover every request of the turn (one per tool round),
-    // while the context meter is the latest prompt alone.
-    let turn_row = vm
-        .live_turn
-        .as_ref()
-        .filter(|turn| model_of(turn))
-        .map(|turn| {
-            (
-                t("This turn, total", "本轮合计"),
-                t("Turn cache hit", "本轮缓存命中"),
-                turn,
-            )
-        })
-        .or_else(|| {
-            vm.last_turn
-                .as_ref()
-                .filter(|turn| model_of(turn))
-                .map(|turn| {
-                    (
-                        t("Last turn, total", "上一轮合计"),
-                        t("Last turn cache hit", "上一轮缓存命中"),
-                        turn,
-                    )
-                })
-        });
+    let turn_row = super::active_turn_summary(vm);
     let show_turn = turn_row.is_some();
 
     div()

@@ -36,9 +36,7 @@ pub use self::models::{
     canonical_model_id, effective_reasoning_level, model_context_window, model_display_name,
     provider_display_name, selected_reasoning_level,
 };
-pub use self::nav::{
-    DismissLayer, SettingsBack, highlight, moved, settings_back_target, top_dismiss_layer,
-};
+pub use self::nav::{DismissLayer, highlight, moved, top_dismiss_layer};
 pub use self::projects::{
     has_open_folder, newest_session_in_project, open_session_is_empty, project_label,
     project_of_session, project_session_rows, same_project_path, session_rows,
@@ -60,6 +58,6 @@ pub use self::usage::{
 
 // Kept public API: the `FrontendAction` vocabulary is `pub`, so its payload
 // types must be too (`private_interfaces`).
-pub use self::settings::{ModelsSubview, SettingsSection, SettingsState, SkillEntry};
+pub use self::settings::{SettingsSection, SettingsState, SkillEntry};
 pub use self::state::{FrontendAction, MainView, ProxyTestState, UpdateState};
 pub use self::usage::CacheBreak;

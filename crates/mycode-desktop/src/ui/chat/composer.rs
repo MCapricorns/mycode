@@ -235,7 +235,7 @@ pub(super) fn render_composer(
                         .min_h(px(56.))
                         .rounded(skin::radius_card())
                         .border_1()
-                        .border_color(skin::border_subtle(theme))
+                        .border_color(theme.input.opacity(0.8))
                         .bg(skin::panel_fill(theme))
                         .shadow(skin::elevation_shadow(theme))
                         // Dropping a picture or a code file attaches it to
@@ -280,6 +280,9 @@ pub(super) fn render_composer(
                                 .flex_wrap()
                                 .items_center()
                                 .gap(px(6.))
+                                .pt_1p5()
+                                .border_t_1()
+                                .border_color(theme.border.opacity(0.5))
                                 .w_full()
                                 .min_w_0()
                                 .child(composer_pill_chip(
@@ -340,13 +343,14 @@ fn composer_round_button(
         .h(px(30.))
         .min_w(px(30.))
         .flex_shrink_0()
-        .ml_auto()
         .rounded_full()
         .flex()
         .items_center()
         .justify_center()
         .text_color(if !sending && can_send {
             theme.primary_foreground
+        } else if sending {
+            theme.danger
         } else if active {
             theme.foreground
         } else {
@@ -355,15 +359,18 @@ fn composer_round_button(
         .when(!sending && can_send, |this| {
             this.bg(send_fill)
                 .border_1()
-                .border_color(theme.primary)
+                .border_color(crate::ui::desk::deepen(send_fill))
                 .cursor_pointer()
                 .hover(|style| style.bg(crate::ui::desk::deepen(send_fill)))
         })
         .when(sending, |this| {
-            this.px_2()
-                .gap_2()
+            this.px_2p5()
+                .gap_1p5()
+                .border_1()
+                .border_color(theme.danger.opacity(0.35))
+                .bg(theme.danger.opacity(0.12))
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.secondary_hover))
+                .hover(|style| style.bg(theme.danger.opacity(0.2)))
         })
         .on_click(cx.listener(move |workspace, _, window, cx| {
             if sending {
@@ -384,8 +391,13 @@ fn composer_round_button(
             })
         })
         .when(sending, |this| {
-            this.child(div().size(px(9.)).rounded(px(2.)).bg(theme.foreground))
-                .child(div().text_xs().child(t("Stop", "停止")))
+            this.child(div().size(px(8.)).rounded(px(2.)).bg(theme.danger))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(skin::WEIGHT_STRONG)
+                        .child(t("Stop", "停止")),
+                )
         })
         .when(!sending, |this| {
             this.child(Icon::new(IconName::ArrowUp).small())
@@ -406,10 +418,12 @@ fn composer_steer_button(cx: &Context<Workspace>) -> impl IntoElement {
         .justify_center()
         // The accent tint tells the steering arrow from the neutral stop
         // beside it before the tooltip can.
-        .bg(skin::frost_accent(theme))
-        .text_color(theme.primary)
+        .bg(theme.accent)
+        .border_1()
+        .border_color(theme.accent_foreground.opacity(0.3))
+        .text_color(theme.accent_foreground)
         .cursor_pointer()
-        .hover(|style| style.bg(crate::ui::desk::deepen(skin::frost_accent(theme))))
+        .hover(|style| style.bg(crate::ui::desk::deepen(theme.accent)))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_steer_send(cx);
         }))
@@ -522,7 +536,7 @@ fn render_send_choice(cx: &Context<Workspace>) -> impl IntoElement {
         .child(send_choice_row(
             "composer-send-choice-steer",
             IconName::ArrowUp,
-            (skin::frost_accent(theme), theme.primary),
+            (theme.accent, theme.accent_foreground),
             t("Steer this turn", "引导本轮"),
             t(
                 "The agent reads it before its next step; nothing stops.",
@@ -630,7 +644,7 @@ fn send_choice_row(
                 .h(px(22.))
                 .rounded(px(6.))
                 .border_1()
-                .border_color(skin::glass_border(theme))
+                .border_color(theme.border)
                 .flex()
                 .items_center()
                 .text_xs()
@@ -839,23 +853,6 @@ fn context_meter(workspace: &Workspace) -> Option<ComposerMeter> {
         t("cached", "缓存"),
         t("last request hit", "最近请求命中"),
     );
-    let selected_model = vm.selected_model.clone();
-    let model_of = |turn: &crate::view_model::TurnStats| {
-        selected_model
-            .as_deref()
-            .is_none_or(|selected| turn.model == selected)
-    };
-    let turn = vm
-        .live_turn
-        .as_ref()
-        .filter(|turn| model_of(turn))
-        .map(|turn| (t("This turn, total", "本轮合计"), turn))
-        .or_else(|| {
-            vm.last_turn
-                .as_ref()
-                .filter(|turn| model_of(turn))
-                .map(|turn| (t("Last turn, total", "上一轮合计"), turn))
-        });
     let mut detail: Vec<String> = Vec::new();
     if !parts.hit.is_empty() {
         detail.push(parts.hit.clone());
@@ -863,7 +860,7 @@ fn context_meter(workspace: &Workspace) -> Option<ComposerMeter> {
     if !parts.cache.is_empty() {
         detail.push(parts.cache.clone());
     }
-    if let Some((label, turn)) = turn {
+    if let Some((label, _, turn)) = crate::ui::active_turn_summary(vm) {
         detail.push(format!(
             "{label} {} {} · {} {}",
             crate::ui::compact_count(turn.input),
