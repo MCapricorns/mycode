@@ -41,7 +41,7 @@ python -B -m unittest discover -s wiki/tests -v
 
 Markdown 支持标题、段落、行内代码、代码块、链接、加粗、单层列表和表格。已有的独立空锚点用于保留旧链接，其余原始 HTML 会显示为文字。
 
-根目录 index.html 会跳转到 Wiki。GitHub Pages 从 main 分支根目录发布这些静态文件。
+根目录 index.html 提供项目概览与快速入口，并链接至本离线/在线 Wiki。GitHub Pages 从 main 分支根目录发布这些静态文件。
 
 ## 保留旧链接
 

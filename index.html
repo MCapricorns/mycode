@@ -1,13 +1,1175 @@
-<!doctype html>
-<html lang="zh-CN">
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MYCode 文档</title>
-  <link rel="canonical" href="https://mcapricorns.github.io/mycode/wiki/index.html">
-  <meta http-equiv="refresh" content="0; url=wiki/index.html">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="MYCode — 基于 Rust 与 GPUI 构建的叠纸像素风原生桌面编码代理，内置 QuickJS CodeMode、子代理协作、Git Diff 审查与 Magpie 本地网关。">
+<title>MYCode — 原生桌面编码代理 · Native Coding Agent</title>
+<link rel="icon" href="wiki/images/logo.svg" type="image/svg+xml">
+<link rel="canonical" href="https://mcapricorns.github.io/mycode/">
+<script>
+(function () {
+  try {
+    var saved = localStorage.getItem("mycode-theme");
+    var dark = saved ? saved === "dark" : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  } catch (_) {}
+})();
+</script>
+<style>
+:root {
+  color-scheme: light;
+  --frame: #EFE6D9;
+  --paper: #F8F3EA;
+  --surface: #FFFBF4;
+  --raised: #F0E4D5;
+  --active: #E8DDCF;
+  --ink: #26232D;
+  --muted: #625B64;
+  --border: #DDD1C2;
+  --control: #8A7C73;
+  --accent: #C8373D;
+  --accent-ink: #FFFBF4;
+  --accent-soft: #FBE6E3;
+  --ok: #2D6A4F;
+  --ok-soft: #E3EFE7;
+  --warn: #945B1A;
+  --warn-soft: #F7ECDC;
+  --err: #B4232E;
+  --err-soft: #FCE5E5;
+  --code-bg: #1B1A1E;
+  --code-bar: #242328;
+  --code-ink: #F3EDE2;
+  --code-muted: #BEB7AF;
+  --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --mono: "Cascadia Code", "JetBrains Mono", Consolas, ui-monospace, monospace;
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r-lg: 12px;
+  --shadow-sheet: 5px 5px 0 -1px var(--raised), 5px 5px 0 var(--border), 0 14px 36px rgb(38 35 45 / 7%);
+  --shadow-card: 3px 3px 0 -1px var(--raised), 3px 3px 0 var(--border);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --frame: #22222B;
+  --paper: #1B1B22;
+  --surface: #2A2A34;
+  --raised: #30303A;
+  --active: #363640;
+  --ink: #F7F1E8;
+  --muted: #C2BBB2;
+  --border: #40404A;
+  --control: #898690;
+  --accent: #F2786D;
+  --accent-ink: #1B1B22;
+  --accent-soft: #3E2628;
+  --ok: #6FCF97;
+  --ok-soft: #21372B;
+  --warn: #F2C97D;
+  --warn-soft: #382F22;
+  --err: #F28B82;
+  --err-soft: #3D2327;
+  --code-bg: #141316;
+  --code-bar: #212027;
+  --shadow-sheet: 5px 5px 0 -1px var(--raised), 5px 5px 0 var(--border), 0 18px 42px rgb(0 0 0 / 28%);
+  --shadow-card: 3px 3px 0 -1px var(--raised), 3px 3px 0 var(--border);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: linear-gradient(135deg, var(--frame) 0%, var(--paper) 65%, var(--frame) 100%);
+  color: var(--ink);
+  font: 15px/1.65 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--accent-soft); color: var(--ink); }
+a { color: inherit; text-underline-offset: 3px; }
+button { font: inherit; color: inherit; cursor: pointer; background: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+img { max-width: 100%; display: block; }
+code, pre, kbd { font-family: var(--mono); }
+
+.skip {
+  position: fixed;
+  left: 16px;
+  top: -100px;
+  padding: 10px 16px;
+  border-radius: var(--r-sm);
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 600;
+  z-index: 200;
+  text-decoration: none;
+}
+.skip:focus { top: 16px; }
+
+.wrap {
+  width: min(1160px, calc(100% - 32px));
+  margin: 0 auto;
+}
+
+/* Header */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: color-mix(in srgb, var(--frame) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 64px;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  margin-right: auto;
+}
+.brand img { width: 34px; height: 34px; }
+.brand-name { font-size: 18px; font-weight: 700; letter-spacing: -.03em; line-height: 1.1; }
+.brand-tag { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.nav-links a {
+  padding: 6px 11px;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+  font-size: 14px;
+  color: var(--muted);
+}
+.nav-links a:hover { color: var(--ink); background: var(--raised); }
+
+.top-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 13px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--control);
+  background: var(--surface);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--active); }
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 2px 2px 0 var(--border);
+}
+.btn-primary:hover { filter: brightness(1.06); background: var(--accent); }
+.btn-quiet { background: transparent; border-color: var(--border); }
+
+main { padding: 28px 0 56px; display: grid; gap: 28px; }
+
+/* Sheet Surface */
+.sheet {
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 32px;
+  box-shadow: var(--shadow-sheet);
+}
+
+/* Hero */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: 28px;
+  align-items: center;
+}
+.hero-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.hero-logo { width: 52px; height: 52px; flex: none; }
+.hero-wordmark { height: 26px; width: auto; }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--muted);
+}
+.pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.hero h1 {
+  margin: 12px 0 12px;
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.2;
+  letter-spacing: -.03em;
+  font-weight: 750;
+}
+.hero-sub {
+  margin: 0 0 22px;
+  color: var(--muted);
+  font-size: 16px;
+  max-width: 54ch;
+}
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.hero-actions .btn { min-height: 42px; padding: 8px 18px; font-size: 14px; }
+.platform-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* Interactive Desktop Mockup */
+.workbench {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.wb-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--frame);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.wb-dots { display: inline-flex; gap: 6px; }
+.wb-dots span {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.wb-dots span:first-child { background: var(--accent); border-color: var(--accent); }
+.wb-title { font-weight: 600; color: var(--ink); }
+.wb-branch {
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.wb-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--raised);
+  border-bottom: 1px solid var(--border);
+}
+.wb-tabs button {
+  padding: 5px 10px;
+  border-radius: var(--r-xs);
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.wb-tabs button[aria-selected="true"] {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--ink);
+}
+.wb-body {
+  display: grid;
+  grid-template-columns: 146px minmax(0, 1fr);
+  min-height: 274px;
+}
+.wb-nav {
+  background: var(--frame);
+  border-right: 1px solid var(--border);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.wb-nav-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 2px 6px;
+}
+.wb-item {
+  padding: 6px 8px;
+  border-radius: var(--r-xs);
+  border: 1px solid transparent;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-item.is-active {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--ink);
+  font-weight: 600;
+}
+.wb-stage {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.wb-pane { display: none; flex-direction: column; gap: 10px; }
+.wb-pane.is-active { display: flex; }
+.msg-user {
+  align-self: flex-end;
+  max-width: 82%;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  font-size: 12.5px;
+}
+.card-mini {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.card-mini-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--r-xs);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-ok { background: var(--ok-soft); color: var(--ok); }
+.badge-warn { background: var(--warn-soft); color: var(--warn); }
+.badge-accent { background: var(--accent-soft); color: var(--accent); }
+.code-mini {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: var(--r-xs);
+  background: var(--code-bg);
+  color: var(--code-ink);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+.kw { color: #F46A6C; }
+.fn { color: #E3C7A4; }
+.st { color: #D4D6BC; }
+.cm { color: #9F9891; }
+.diff-add { color: #8DE0A6; }
+.diff-del { color: #F48789; }
+
+.wb-footer {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--frame);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* Section headings */
+.section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.section-head h2 {
+  margin: 0 0 4px;
+  font-size: 23px;
+  line-height: 1.3;
+  letter-spacing: -.02em;
+}
+.section-head p { margin: 0; color: var(--muted); font-size: 14px; max-width: 62ch; }
+
+/* Feature Cards */
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 20px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.card-tag {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.card h3 { margin: 2px 0 0; font-size: 17px; }
+.card p { margin: 0; color: var(--muted); font-size: 14px; }
+.card-link {
+  margin-top: auto;
+  padding-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+.card-link:hover { text-decoration: underline; }
+
+/* Agent Roles + Setup Split */
+.grid-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.role-list { display: grid; gap: 10px; }
+.role-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.role-name { font-family: var(--mono); font-weight: 700; font-size: 13px; }
+.role-desc { font-size: 13.5px; color: var(--muted); }
+
+/* Code / Quickstart panel */
+.setup-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+.setup-step {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+}
+.setup-step:last-child { border-bottom: 0; }
+.setup-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.cmd-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: var(--r-xs);
+  background: var(--code-bg);
+  color: var(--code-ink);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow-x: auto;
+}
+.copy-btn {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: var(--r-xs);
+  border: 1px solid #4F4B57;
+  background: var(--code-bar);
+  color: var(--code-ink);
+  font-size: 11.5px;
+}
+.copy-btn:hover { background: #36343F; }
+
+/* Architecture Diagrams */
+.diagram-switch {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--control);
+  background: var(--surface);
+}
+.diagram-switch button {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.diagram-switch button[aria-pressed="true"] {
+  background: var(--active);
+  color: var(--ink);
+}
+.diagram-frame {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: #FFFBF4;
+  padding: 18px;
+  overflow-x: auto;
+}
+.diagram-frame img { margin: 0 auto; max-height: 460px; width: auto; }
+.diagram-caption {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* Shortcuts & Local Storage */
+.kbd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.kbd-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  font-size: 13.5px;
+}
+kbd {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--control);
+  border-bottom-width: 2px;
+  background: var(--paper);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.footer {
+  border-top: 1px solid var(--border);
+  padding: 24px 0 40px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.footer-links { display: flex; flex-wrap: wrap; gap: 16px; }
+.footer-links a { text-decoration: none; }
+.footer-links a:hover { color: var(--ink); text-decoration: underline; }
+
+@media (max-width: 960px) {
+  .hero { grid-template-columns: minmax(0, 1fr); }
+  .grid-4, .grid-split { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .nav-links { display: none; }
+  .sheet { padding: 20px; }
+  .wb-body { grid-template-columns: minmax(0, 1fr); }
+  .wb-nav { display: none; }
+  .role-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition: none !important; }
+}
+</style>
 </head>
 <body>
-  <p><a href="wiki/index.html">打开 MYCode 文档</a></p>
+<a class="skip" href="#main" data-i18n="skip">跳到主要内容</a>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <a class="brand" href="#">
+      <img src="wiki/images/logo.svg" width="34" height="34" alt="MYCode">
+      <span>
+        <span class="brand-name">MYCode</span>
+        <span class="brand-tag" data-i18n="brandTag">原生桌面编码代理</span>
+      </span>
+    </a>
+
+    <nav class="nav-links" aria-label="主导航">
+      <a href="#features" data-i18n="navFeatures">核心能力</a>
+      <a href="#workflow" data-i18n="navWorkflow">架构图解</a>
+      <a href="#quickstart" data-i18n="navStart">快速上手</a>
+      <a href="wiki/index.html" data-i18n="navWiki">工程 Wiki</a>
+    </nav>
+
+    <div class="top-controls">
+      <button class="btn btn-quiet" id="langToggle" type="button" aria-label="Switch language">EN</button>
+      <button class="btn btn-quiet" id="themeToggle" type="button" aria-label="切换主题">深色</button>
+      <a class="btn btn-primary" href="https://github.com/MCapricorns/mycode/releases/latest" data-i18n="navDownload">下载版本</a>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="wrap" tabindex="-1">
+  <!-- Hero Sheet -->
+  <section class="sheet hero" aria-labelledby="hero-title">
+    <div>
+      <div class="hero-brand">
+        <img class="hero-logo" src="wiki/images/logo.svg" width="52" height="52" alt="">
+        <img class="hero-wordmark" src="wiki/images/wordmark.svg" alt="MYCode">
+        <span class="pill"><span class="pill-dot" aria-hidden="true"></span>v0.12.46 · Rust + GPUI</span>
+      </div>
+
+      <h1 id="hero-title" data-i18n="heroTitle">从一句想法，到一次可检查的改动。</h1>
+      <p class="hero-sub" data-i18n="heroSub">
+        叠纸像素风的原生桌面工作台。以 Rust 与 GPUI 构建，在单一界面内完成项目对话、QuickJS CodeMode 工具编排、子代理协同与 Git Diff 逐行审阅。
+      </p>
+
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://github.com/MCapricorns/mycode/releases/latest" data-i18n="ctaDownload">获取桌面安装包</a>
+        <a class="btn" href="wiki/index.html" data-i18n="ctaWiki">打开离线架构 Wiki</a>
+        <a class="btn btn-quiet" href="https://github.com/MCapricorns/mycode" data-i18n="ctaRepo">GitHub 源码</a>
+      </div>
+
+      <p class="platform-note" data-i18n="platformNote">
+        原生支持 Windows x64 / ARM64 与 macOS Apple Silicon，通过本机 Magpie 网关接入模型与 MCP 服务。
+      </p>
+    </div>
+
+    <div class="workbench" role="region" aria-label="MYCode 工作台预览">
+      <div class="wb-titlebar">
+        <span class="wb-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span class="wb-title">mycode-client</span>
+        <span class="wb-branch">git: main</span>
+      </div>
+      <div class="wb-tabs" role="tablist" aria-label="功能演示切换">
+        <button type="button" role="tab" aria-selected="true" data-tab="chat" data-i18n="tabChat">对话与 Diff</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="codemode">CodeMode JS</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="agents" data-i18n="tabAgents">子代理协作</button>
+      </div>
+      <div class="wb-body">
+        <aside class="wb-nav" aria-hidden="true">
+          <div class="wb-nav-label">Workspace</div>
+          <div class="wb-item is-active">mycode-client</div>
+          <div class="wb-item">magpie-gateway</div>
+          <div class="wb-nav-label" style="margin-top:6px;">Threads</div>
+          <div class="wb-item is-active">UI &amp; Code audit</div>
+          <div class="wb-item">QuickJS pooling</div>
+        </aside>
+        <div class="wb-stage">
+          <div class="wb-pane is-active" data-pane="chat">
+            <div class="msg-user" data-i18n="mockPrompt">检查构建警告，统一卡片边界并打开改动 diff。</div>
+            <div class="card-mini">
+              <div class="card-mini-head">
+                <span>cargo clippy &amp; ui diff</span>
+                <span class="badge badge-ok">2 files</span>
+              </div>
+              <pre class="code-mini"><span class="cm">@@ crates/mycode-desktop/src/ui/skin.rs</span>
+<span class="diff-del">- border_color(skin::border_subtle(theme))</span>
+<span class="diff-add">+ border_color(theme.border).rounded(radius_card())</span></pre>
+            </div>
+          </div>
+
+          <div class="wb-pane" data-pane="codemode">
+            <div class="card-mini">
+              <div class="card-mini-head">
+                <span>run_code · QuickJS</span>
+                <span class="badge badge-accent">Promise.all</span>
+              </div>
+              <pre class="code-mini"><span class="kw">const</span> [files, tests] = <span class="kw">await</span> Promise.<span class="fn">all</span>([
+  <span class="fn">callAsync</span>(<span class="st">"grep"</span>, { pattern: <span class="st">"spawn"</span> }),
+  <span class="fn">callAsync</span>(<span class="st">"read_file"</span>, { path: <span class="st">"Cargo.toml"</span> })
+]);</pre>
+            </div>
+          </div>
+
+          <div class="wb-pane" data-pane="agents">
+            <div class="card-mini">
+              <div class="card-mini-head"><span>scout · repo audit</span><span class="badge badge-ok">Done</span></div>
+              <span class="cm" data-i18n="mockScout">只读检索：确认 0 处死代码引用</span>
+            </div>
+            <div class="card-mini">
+              <div class="card-mini-head"><span>artisan · worktree</span><span class="badge badge-warn">Verifying</span></div>
+              <span class="cm" data-i18n="mockArtisan">独立工作树修改并执行测试验证</span>
+            </div>
+            <div class="card-mini">
+              <div class="card-mini-head"><span>sentinel · diff check</span><span class="badge badge-ok">Clean</span></div>
+              <span class="cm" data-i18n="mockSentinel">独立审阅接口边界与反例测试</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="wb-footer">
+        <span data-i18n="mockModel">网关：Magpie · MCode</span>
+        <span>Ctrl+K · @file · /compact</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Capabilities -->
+  <section id="features" class="sheet" aria-labelledby="features-title">
+    <div class="section-head">
+      <div>
+        <h2 id="features-title" data-i18n="featHeading">为本地工程而设计的四个核心模块</h2>
+        <p data-i18n="featSub">工作区仅包含 mycode（运行时、工具、代理与前端状态机）与 mycode-desktop（原生 GPUI 桌面窗口）两个 Rust crate。</p>
+      </div>
+      <a class="btn" href="wiki/index.html#v=graph" data-i18n="featExplore">在图谱中查看源码 →</a>
+    </div>
+
+    <div class="grid-4">
+      <article class="card">
+        <span class="card-tag">GPUI · Paper-Pixel</span>
+        <h3 data-i18n="f1Title">原生叠纸桌面工作台</h3>
+        <p data-i18n="f1Body">
+          支持亮色/深色主题与 S–XL 字体缩放，提供默认聊天空间、可固定或浮层的 Details 面板、语法高亮代码块与内联 Git Diff 检查视图。
+        </p>
+        <a class="card-link" href="https://github.com/MCapricorns/mycode/blob/main/DESIGN.md" data-i18n="f1Link">查看视觉规范 DESIGN.md ↗</a>
+      </article>
+
+      <article class="card">
+        <span class="card-tag">QuickJS · CodeMode</span>
+        <h3 data-i18n="f2Title">脚本化并行工具调用引擎</h3>
+        <p data-i18n="f2Body">
+          内置 QuickJS 运行 run_code 与 wait_code，支持顶层 await、callAsync 与 Promise.all 并发只读检索；单脚本最多调用 256 次工具，写操作与 shell 自动保持串行安全。
+        </p>
+        <a class="card-link" href="wiki/index.html#v=code-mode" data-i18n="f2Link">阅读 CodeMode 引擎文档 →</a>
+      </article>
+
+      <article class="card">
+        <span class="card-tag">scout · artisan · sentinel</span>
+        <h3 data-i18n="f3Title">边界清晰的子代理分工</h3>
+        <p data-i18n="f3Body">
+          调研、实现与独立审查拆分为专用角色：写入角色默认隔离在 Git worktree 中运行，并通过 agent_status、agent_stop 与 agent_message 保持可控。
+        </p>
+        <a class="card-link" href="wiki/index.html#n=agent" data-i18n="f3Link">定位子代理模块源码 →</a>
+      </article>
+
+      <article class="card">
+        <span class="card-tag">Magpie · MCP · Rules</span>
+        <h3 data-i18n="f4Title">本地网关与可扩展配置</h3>
+        <p data-i18n="f4Body">
+          由本机 Magpie 统一提供模型目录与鉴权，热加载全局规则、Skills、角色定义与 MCP 工具；会话账本、索引与工作区状态持久保存在 ~/.mycode。
+        </p>
+        <a class="card-link" href="wiki/index.html#v=architecture" data-i18n="f4Link">查看运行时数据流 →</a>
+      </article>
+    </div>
+  </section>
+
+  <!-- Interactive Diagrams -->
+  <section id="workflow" class="sheet" aria-labelledby="wf-title">
+    <div class="section-head">
+      <div>
+        <h2 id="wf-title" data-i18n="wfHeading">系统架构与消息执行路径</h2>
+        <p data-i18n="wfSub">每次请求经 Magpie 转发模型后，由本地工具循环、QuickJS CodeMode 与子代理协同落地到工作区并写入本地账本。</p>
+      </div>
+      <div class="diagram-switch" role="group" aria-label="架构视图切换">
+        <button type="button" aria-pressed="true" data-diagram="arch" data-i18n="diagArch">模块分层图</button>
+        <button type="button" aria-pressed="false" data-diagram="flow" data-i18n="diagFlow">消息流转图</button>
+      </div>
+    </div>
+
+    <div class="diagram-frame">
+      <img id="diagramImg" src="wiki/images/architecture.svg" alt="MYCode 模块分层架构图">
+    </div>
+    <div class="diagram-caption">
+      <span id="diagramCaption" data-i18n="diagCapArch">mycode 核心运行时与 mycode-desktop 渲染层清晰解耦。</span>
+      <a href="wiki/index.html" data-i18n="diagOpenWiki">前往交互式架构图谱在线读源码 →</a>
+    </div>
+  </section>
+
+  <!-- Subagents & Quickstart -->
+  <section id="quickstart" class="sheet" aria-labelledby="qs-title">
+    <div class="section-head">
+      <div>
+        <h2 id="qs-title" data-i18n="qsHeading">子代理角色与快速上手</h2>
+        <p data-i18n="qsSub">安装 Magpie 插件绑定 MCode 模型后即可运行，也可直接从源码构建桌面客户端。</p>
+      </div>
+    </div>
+
+    <div class="grid-split">
+      <div class="role-list" aria-label="子代理角色表">
+        <div class="role-row">
+          <span class="role-name">scout</span>
+          <span class="role-desc" data-i18n="roleScout">快速检索代码库、文档与引用关系并回报事实依据。</span>
+          <span class="badge badge-ok" data-i18n="roBadge">只读 · 无 Shell</span>
+        </div>
+        <div class="role-row">
+          <span class="role-name">artisan</span>
+          <span class="role-desc" data-i18n="roleArtisan">针对明确范围完成代码实现、重构与本地测试验证。</span>
+          <span class="badge badge-warn" data-i18n="rwBadge">Git Worktree</span>
+        </div>
+        <div class="role-row">
+          <span class="role-name">sentinel</span>
+          <span class="role-desc" data-i18n="roleSentinel">独立审阅 diff 与实现边界，主动寻找反例与回归风险。</span>
+          <span class="badge badge-ok" data-i18n="roBadge2">只读 · 无 Shell</span>
+        </div>
+      </div>
+
+      <div class="setup-panel">
+        <div class="setup-step">
+          <div class="setup-title">
+            <span data-i18n="step1">1. 在 Magpie 安装 MYCode 插件并为 MCode 选择模型</span>
+          </div>
+          <div class="cmd-bar">
+            <code>magpie plugin add github:MCapricorns/magpie-mycode</code>
+            <button class="copy-btn" type="button" data-copy="magpie plugin add github:MCapricorns/magpie-mycode" data-i18n="copy">复制</button>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="setup-title">
+            <span data-i18n="step2">2. 从源码运行或构建桌面端（Rust 2024 + MSVC / Xcode）</span>
+          </div>
+          <div class="cmd-bar">
+            <code>cargo run -p mycode-desktop --locked</code>
+            <button class="copy-btn" type="button" data-copy="cargo run -p mycode-desktop --locked" data-i18n="copy2">复制</button>
+          </div>
+        </div>
+        <div class="setup-step">
+          <div class="setup-title">
+            <span data-i18n="step3">3. 运行工作区测试、Clippy 与 Wiki 一致性验证</span>
+          </div>
+          <div class="cmd-bar">
+            <code>cargo clippy --workspace --all-targets --locked -- -D warnings</code>
+            <button class="copy-btn" type="button" data-copy="cargo clippy --workspace --all-targets --locked -- -D warnings" data-i18n="copy3">复制</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Shortcuts -->
+  <section class="sheet" aria-labelledby="kbd-title">
+    <div class="section-head">
+      <div>
+        <h2 id="kbd-title" data-i18n="kbdHeading">常用快捷键与斜杠命令</h2>
+        <p data-i18n="kbdSub">支持规则层叠（AGENTS.md / MYCODE.md）、@ 文件提及，每条消息最多附带 4 张图片与 8 个文本文件。</p>
+      </div>
+    </div>
+
+    <div class="kbd-grid">
+      <div class="kbd-card"><span data-i18n="kPalette">打开命令面板</span><kbd>Ctrl / Cmd + K</kbd></div>
+      <div class="kbd-card"><span data-i18n="kSteer">运行中补充引导</span><kbd>Ctrl / Cmd + G</kbd></div>
+      <div class="kbd-card"><span data-i18n="kInterrupt">打断并立即发送</span><kbd>Ctrl / Cmd + Enter</kbd></div>
+      <div class="kbd-card"><span data-i18n="kNewline">输入框换行</span><kbd>Shift + Enter</kbd></div>
+      <div class="kbd-card"><span data-i18n="kCompact">压缩当前会话上下文</span><kbd>/compact</kbd></div>
+      <div class="kbd-card"><span data-i18n="kHome">本地数据目录</span><kbd>~/.mycode</kbd></div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer wrap">
+  <div class="footer-inner">
+    <span>MYCode · Apache-2.0 License</span>
+    <div class="footer-links">
+      <a href="wiki/index.html" data-i18n="fWiki">离线架构 Wiki</a>
+      <a href="https://github.com/MCapricorns/mycode/blob/main/README.md">README</a>
+      <a href="https://github.com/MCapricorns/mycode/blob/main/CHANGELOG.md">CHANGELOG</a>
+      <a href="https://github.com/MCapricorns/mycode/releases/latest">Releases</a>
+      <a href="https://github.com/MCapricorns/mycode/issues">Issues</a>
+      <a href="https://usemagpie.ai">Magpie</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var COPY = {
+    zh: {
+      skip: "跳到主要内容",
+      brandTag: "原生桌面编码代理",
+      navFeatures: "核心能力",
+      navWorkflow: "架构图解",
+      navStart: "快速上手",
+      navWiki: "工程 Wiki",
+      navDownload: "下载版本",
+      heroTitle: "从一句想法，到一次可检查的改动。",
+      heroSub: "叠纸像素风的原生桌面工作台。以 Rust 与 GPUI 构建，在单一界面内完成项目对话、QuickJS CodeMode 工具编排、子代理协同与 Git Diff 逐行审阅。",
+      ctaDownload: "获取桌面安装包",
+      ctaWiki: "打开离线架构 Wiki",
+      ctaRepo: "GitHub 源码",
+      platformNote: "原生支持 Windows x64 / ARM64 与 macOS Apple Silicon，通过本机 Magpie 网关接入模型与 MCP 服务。",
+      tabChat: "对话与 Diff",
+      tabAgents: "子代理协作",
+      mockPrompt: "检查构建警告，统一卡片边界并打开改动 diff。",
+      mockScout: "只读检索：确认 0 处死代码引用",
+      mockArtisan: "独立工作树修改并执行测试验证",
+      mockSentinel: "独立审阅接口边界与反例测试",
+      mockModel: "网关：Magpie · MCode",
+      featHeading: "为本地工程而设计的四个核心模块",
+      featSub: "工作区仅包含 mycode（运行时、工具、代理与前端状态机）与 mycode-desktop（原生 GPUI 桌面窗口）两个 Rust crate。",
+      featExplore: "在图谱中查看源码 →",
+      f1Title: "原生叠纸桌面工作台",
+      f1Body: "支持亮色/深色主题与 S–XL 字体缩放，提供默认聊天空间、可固定或浮层的 Details 面板、语法高亮代码块与内联 Git Diff 检查视图。",
+      f1Link: "查看视觉规范 DESIGN.md ↗",
+      f2Title: "脚本化并行工具调用引擎",
+      f2Body: "内置 QuickJS 运行 run_code 与 wait_code，支持顶层 await、callAsync 与 Promise.all 并发只读检索；单脚本最多调用 256 次工具，写操作与 shell 自动保持串行安全。",
+      f2Link: "阅读 CodeMode 引擎文档 →",
+      f3Title: "边界清晰的子代理分工",
+      f3Body: "调研、实现与独立审查拆分为专用角色：写入角色默认隔离在 Git worktree 中运行，并通过 agent_status、agent_stop 与 agent_message 保持可控。",
+      f3Link: "定位子代理模块源码 →",
+      f4Title: "本地网关与可扩展配置",
+      f4Body: "由本机 Magpie 统一提供模型目录与鉴权，热加载全局规则、Skills、角色定义与 MCP 工具；会话账本、索引与工作区状态持久保存在 ~/.mycode。",
+      f4Link: "查看运行时数据流 →",
+      wfHeading: "系统架构与消息执行路径",
+      wfSub: "每次请求经 Magpie 转发模型后，由本地工具循环、QuickJS CodeMode 与子代理协同落地到工作区并写入本地账本。",
+      diagArch: "模块分层图",
+      diagFlow: "消息流转图",
+      diagCapArch: "mycode 核心运行时与 mycode-desktop 渲染层清晰解耦。",
+      diagCapFlow: "用户消息、模型流式输出、CodeMode 工具执行与本地持久化账本闭环。",
+      diagOpenWiki: "前往交互式架构图谱在线读源码 →",
+      qsHeading: "子代理角色与快速上手",
+      qsSub: "安装 Magpie 插件绑定 MCode 模型后即可运行，也可直接从源码构建桌面客户端。",
+      roleScout: "快速检索代码库、文档与引用关系并回报事实依据。",
+      roleArtisan: "针对明确范围完成代码实现、重构与本地测试验证。",
+      roleSentinel: "独立审阅 diff 与实现边界，主动寻找反例与回归风险。",
+      roBadge: "只读 · 无 Shell",
+      roBadge2: "只读 · 无 Shell",
+      rwBadge: "Git Worktree",
+      step1: "1. 在 Magpie 安装 MYCode 插件并为 MCode 选择模型",
+      step2: "2. 从源码运行或构建桌面端（Rust 2024 + MSVC / Xcode）",
+      step3: "3. 运行工作区测试、Clippy 与 Wiki 一致性验证",
+      copy: "复制",
+      copy2: "复制",
+      copy3: "复制",
+      copied: "已复制",
+      kbdHeading: "常用快捷键与斜杠命令",
+      kbdSub: "支持规则层叠（AGENTS.md / MYCODE.md）、@ 文件提及，每条消息最多附带 4 张图片与 8 个文本文件。",
+      kPalette: "打开命令面板",
+      kSteer: "运行中补充引导",
+      kInterrupt: "打断并立即发送",
+      kNewline: "输入框换行",
+      kCompact: "压缩当前会话上下文",
+      kHome: "本地数据目录",
+      fWiki: "离线架构 Wiki",
+      themeLight: "浅色",
+      themeDark: "深色"
+    },
+    en: {
+      skip: "Skip to main content",
+      brandTag: "Native Coding Agent",
+      navFeatures: "Capabilities",
+      navWorkflow: "Architecture",
+      navStart: "Quick Start",
+      navWiki: "Engineering Wiki",
+      navDownload: "Releases",
+      heroTitle: "From an idea to an inspectable change.",
+      heroSub: "A layered Paper-Pixel desktop workbench built with Rust and GPUI. Chat over your codebase, run QuickJS CodeMode tool scripts, coordinate subagents, and audit Git diffs in one native app.",
+      ctaDownload: "Download Release",
+      ctaWiki: "Open Offline Wiki",
+      ctaRepo: "GitHub Repository",
+      platformNote: "Native builds for Windows x64 / ARM64 and macOS Apple Silicon, routed through your local Magpie gateway.",
+      tabChat: "Chat & Diff",
+      tabAgents: "Subagents",
+      mockPrompt: "Audit warnings, unify card borders, and open the diff.",
+      mockScout: "Read-only search: 0 dead symbol references left",
+      mockArtisan: "Editing & verifying inside isolated Git worktree",
+      mockSentinel: "Independent review of diff boundaries & edge cases",
+      mockModel: "Gateway: Magpie · MCode",
+      featHeading: "Four building blocks designed for local engineering",
+      featSub: "Structured cleanly into two Cargo crates: mycode (runtime, tools, subagents, frontend reducer) and mycode-desktop (GPUI native window).",
+      featExplore: "Browse source graph →",
+      f1Title: "Native Paper-Pixel Workbench",
+      f1Body: "Light & dark paper palettes, S–XL interface scales, default chat workspace, docked or floating Details drawers, highlighted code blocks, and inline Git diff inspection.",
+      f1Link: "Read DESIGN.md spec ↗",
+      f2Title: "QuickJS CodeMode Execution",
+      f2Body: "Runs run_code / wait_code with top-level await, callAsync, and Promise.all for concurrent read/search batching (up to 256 calls/script), while writes and shell calls stay strictly serialized.",
+      f2Link: "Read CodeMode engine docs →",
+      f3Title: "Scoped Subagent Collaboration",
+      f3Body: "Split research, implementation, and review across scout, artisan (Git worktree isolated), and sentinel—monitored and controlled via agent_status, agent_stop, and agent_message.",
+      f3Link: "Inspect agent module source →",
+      f4Title: "Magpie Gateway & Local Ledger",
+      f4Body: "Connects models, global rules, Skills, agent roles, and MCP tools via Magpie, with hot-reload into running turns and persistent SQLite + JSON ledgers in ~/.mycode.",
+      f4Link: "Explore runtime dataflow →",
+      wfHeading: "Architecture & Message Execution",
+      wfSub: "Requests route through Magpie to upstream models while tool loops, QuickJS CodeMode, and subagents operate directly on your workspace and persistent session ledger.",
+      diagArch: "Layered Modules",
+      diagFlow: "Message Flow",
+      diagCapArch: "Clean separation between the GPUI desktop shell (mycode-desktop) and core runtime (mycode).",
+      diagCapFlow: "Closed loop across user prompts, model streaming, CodeMode execution, and durable session storage.",
+      diagOpenWiki: "Explore embedded source files in the Wiki →",
+      qsHeading: "Subagent Roles & Quick Start",
+      qsSub: "Bind MCode in Magpie to begin immediately, or build from source with Rust 2024.",
+      roleScout: "Read-only search across code, docs, and call sites with cited evidence.",
+      roleArtisan: "Implements scoped changes and runs verification tests inside an isolated worktree.",
+      roleSentinel: "Audits finished diffs and implementation claims for edge-case counterexamples.",
+      roBadge: "Read-only · No Shell",
+      roBadge2: "Read-only · No Shell",
+      rwBadge: "Git Worktree",
+      step1: "1. Install the MYCode plugin in Magpie and assign a model to MCode",
+      step2: "2. Run or build the native desktop client from source (MSVC / Xcode)",
+      step3: "3. Verify tests, Clippy lints, and embedded Wiki integrity",
+      copy: "Copy",
+      copy2: "Copy",
+      copy3: "Copy",
+      copied: "Copied",
+      kbdHeading: "Shortcuts & Workspace Limits",
+      kbdSub: "Supports rule cascades (AGENTS.md / MYCODE.md), @ file mentions, and up to 4 images + 8 text files per prompt.",
+      kPalette: "Command palette",
+      kSteer: "Steer running turn",
+      kInterrupt: "Interrupt & send",
+      kNewline: "Insert newline",
+      kCompact: "Compact conversation context",
+      kHome: "Local state directory",
+      fWiki: "Offline Engineering Wiki",
+      themeLight: "Light",
+      themeDark: "Dark"
+    }
+  };
+
+  var lang = "zh";
+  var activeDiagram = "arch";
+  var root = document.documentElement;
+  var themeBtn = document.getElementById("themeToggle");
+  var langBtn = document.getElementById("langToggle");
+
+  function syncThemeLabel() {
+    var dark = root.dataset.theme === "dark";
+    themeBtn.textContent = dark ? COPY[lang].themeLight : COPY[lang].themeDark;
+    themeBtn.setAttribute("aria-pressed", dark ? "true" : "false");
+  }
+
+  function applyLang(nextLang) {
+    lang = nextLang;
+    root.lang = lang === "zh" ? "zh-CN" : "en";
+    langBtn.textContent = lang === "zh" ? "EN" : "中文";
+    var dict = COPY[lang];
+    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+      var key = el.dataset.i18n;
+      if (dict[key]) el.textContent = dict[key];
+    });
+    document.getElementById("diagramCaption").textContent =
+      activeDiagram === "arch" ? dict.diagCapArch : dict.diagCapFlow;
+    syncThemeLabel();
+  }
+
+  themeBtn.addEventListener("click", function () {
+    var next = root.dataset.theme === "dark" ? "light" : "dark";
+    root.dataset.theme = next;
+    try { localStorage.setItem("mycode-theme", next); } catch (_) {}
+    syncThemeLabel();
+  });
+
+  langBtn.addEventListener("click", function () {
+    applyLang(lang === "zh" ? "en" : "zh");
+  });
+
+  // Workbench preview tabs
+  document.querySelectorAll("[data-tab]").forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      var target = tab.dataset.tab;
+      document.querySelectorAll("[data-tab]").forEach(function (t) {
+        t.setAttribute("aria-selected", t === tab ? "true" : "false");
+      });
+      document.querySelectorAll("[data-pane]").forEach(function (pane) {
+        pane.classList.toggle("is-active", pane.dataset.pane === target);
+      });
+    });
+  });
+
+  // Diagram switcher
+  document.querySelectorAll("[data-diagram]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      activeDiagram = btn.dataset.diagram;
+      document.querySelectorAll("[data-diagram]").forEach(function (b) {
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      });
+      var img = document.getElementById("diagramImg");
+      var cap = document.getElementById("diagramCaption");
+      if (activeDiagram === "arch") {
+        img.src = "wiki/images/architecture.svg";
+        img.alt = "MYCode architecture diagram";
+        cap.textContent = COPY[lang].diagCapArch;
+      } else {
+        img.src = "wiki/images/message-flow.svg";
+        img.alt = "MYCode message flow diagram";
+        cap.textContent = COPY[lang].diagCapFlow;
+      }
+    });
+  });
+
+  // Command copy buttons
+  document.querySelectorAll("[data-copy]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.dataset.copy;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+          var original = btn.dataset.i18n ? COPY[lang][btn.dataset.i18n] : btn.textContent;
+          btn.textContent = COPY[lang].copied;
+          setTimeout(function () { btn.textContent = original; }, 1400);
+        });
+      }
+    });
+  });
+
+  syncThemeLabel();
+})();
+</script>
 </body>
 </html>
