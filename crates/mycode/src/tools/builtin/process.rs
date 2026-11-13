@@ -135,7 +135,10 @@ pub(crate) fn timeout_notice(
 #[cfg(windows)]
 pub use windows::WindowsStdioProcess;
 #[cfg(windows)]
-pub(crate) use windows::{WindowsJob, current_process_is_in_job, resume_thread_handle};
+pub(crate) use windows::{
+    ProcThreadAttributeList, WindowsJob, clear_inherit, current_process_is_in_job,
+    inheritable_pipe, open_nul, resume_thread_handle, terminate_process, unicode_env_block,
+};
 
 /// Serializes host-controlled write/edit/shell operations so they cannot
 /// race a retained executable pin. Same-account processes outside this process

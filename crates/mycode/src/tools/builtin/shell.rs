@@ -652,10 +652,11 @@ fn command_too_long_with(
         .map_or_else(|| "unrepresentable".to_owned(), |value| value.to_string());
     let encoded =
         encoded_len.map_or_else(|| "overflowed usize".to_owned(), |value| value.to_string());
-    let executable_name = executable.file_name().map_or_else(
-        || std::borrow::Cow::Borrowed("pwsh.exe"),
-        |name| name.to_string_lossy(),
-    );
+    let executable_name = executable
+        .file_name()
+        .map_or(std::borrow::Cow::Borrowed("pwsh.exe"), |name| {
+            name.to_string_lossy()
+        });
     ToolError::InvalidArgs(format!(
         "command is too long for PowerShell's 32,767 UTF-16-code-unit command-line \
          limit (including the terminator): encoded length is {encoded}, maximum \

@@ -517,7 +517,7 @@ fn wide_nul(value: &OsStr) -> io::Result<Vec<u16>> {
     Ok(wide)
 }
 
-fn unicode_env_block(entries: &[(OsString, OsString)]) -> Vec<u16> {
+pub(crate) fn unicode_env_block(entries: &[(OsString, OsString)]) -> Vec<u16> {
     let mut block = Vec::new();
     for (key, value) in entries {
         block.extend(key.encode_wide());
@@ -532,7 +532,7 @@ fn unicode_env_block(entries: &[(OsString, OsString)]) -> Vec<u16> {
     block
 }
 
-fn inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
+pub(crate) fn inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
     use std::mem::size_of;
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::System::Pipes::CreatePipe;
@@ -559,7 +559,7 @@ fn inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
     })
 }
 
-fn clear_inherit(handle: &OwnedHandle) -> io::Result<()> {
+pub(crate) fn clear_inherit(handle: &OwnedHandle) -> io::Result<()> {
     use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
 
     // SAFETY: `handle` is live. Clearing HANDLE_FLAG_INHERIT is documented.
@@ -571,7 +571,7 @@ fn clear_inherit(handle: &OwnedHandle) -> io::Result<()> {
     }
 }
 
-fn open_nul() -> io::Result<OwnedHandle> {
+pub(crate) fn open_nul() -> io::Result<OwnedHandle> {
     use std::mem::size_of;
     use windows_sys::Win32::Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
@@ -618,7 +618,7 @@ fn exit_status(process: &OwnedHandle) -> io::Result<ExitStatus> {
     Ok(ExitStatus::from_raw(code))
 }
 
-fn terminate_process(process: &OwnedHandle) -> io::Result<()> {
+pub(crate) fn terminate_process(process: &OwnedHandle) -> io::Result<()> {
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
 
@@ -640,13 +640,15 @@ fn terminate_process(process: &OwnedHandle) -> io::Result<()> {
 
 /// Inherited-handle list so a concurrent spawn cannot leak pipe ends into
 /// this child. The storage must outlive `CreateProcessW`.
-struct ProcThreadAttributeList {
+pub(crate) struct ProcThreadAttributeList {
     list: windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST,
     _storage: Vec<usize>,
 }
 
 impl ProcThreadAttributeList {
-    fn with_handles(handles: &[windows_sys::Win32::Foundation::HANDLE]) -> io::Result<Self> {
+    pub(crate) fn with_handles(
+        handles: &[windows_sys::Win32::Foundation::HANDLE],
+    ) -> io::Result<Self> {
         use std::mem::size_of;
         use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
         use windows_sys::Win32::System::Threading::{
@@ -704,7 +706,9 @@ impl ProcThreadAttributeList {
         Ok(attributes)
     }
 
-    fn as_ptr(&self) -> windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST {
+    pub(crate) fn as_ptr(
+        &self,
+    ) -> windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST {
         self.list
     }
 }

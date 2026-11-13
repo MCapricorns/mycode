@@ -27,29 +27,25 @@ use std::ptr::{null, null_mut};
 
 use windows_sys::Win32::Foundation::{
     CompareObjectHandles, ERROR_ACCESS_DENIED, ERROR_INSUFFICIENT_BUFFER, GENERIC_READ,
-    HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation, WAIT_FAILED, WAIT_OBJECT_0,
-    WAIT_TIMEOUT,
+    INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_TIMEOUT,
 };
-use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
-use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED,
-    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, GetProcessId, INFINITE,
-    InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
-    PROCESS_NAME_WIN32, QueryFullProcessImageNameW, STARTF_USESHOWWINDOW, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, STARTUPINFOW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+    GetProcessId, INFINITE, PROCESS_INFORMATION, PROCESS_NAME_WIN32, QueryFullProcessImageNameW,
+    STARTF_USESHOWWINDOW, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, WaitForSingleObject,
 };
 
 use super::argv::windows_command_line_utf16;
 use super::resolve::{PinnedImage, identity_of, rehash_image_cancellable, verify_pinned_digest};
 use super::spawn::{SpawnFailure, SpawnFailureKind, SpawnGate, finish_pending_spawn_cleanup};
 use crate::tools::builtin::process::{
-    ProcessTree, WindowsJob, combine_teardown_results, current_process_is_in_job,
-    resume_thread_handle,
+    ProcThreadAttributeList, ProcessTree, WindowsJob, clear_inherit, combine_teardown_results,
+    current_process_is_in_job, inheritable_pipe, open_nul, resume_thread_handle, terminate_process,
+    unicode_env_block,
 };
 use crate::tools::tool::ToolError;
 
@@ -98,7 +94,7 @@ impl WindowsChild {
     }
 
     pub(super) fn terminate(&self) -> std::io::Result<()> {
-        terminate(&self.process)
+        terminate_process(&self.process)
     }
 }
 
@@ -231,12 +227,12 @@ impl SuspendedProcess {
         let process = self.process();
         let containment = match self.job.as_ref() {
             Some(job) => job.terminate(),
-            None => terminate(process),
+            None => terminate_process(process),
         };
         let leader = if containment.is_ok() {
             wait_process(process)
         } else {
-            let fallback = terminate(process);
+            let fallback = terminate_process(process);
             if fallback.is_ok() {
                 wait_process(process)
             } else {
@@ -282,80 +278,6 @@ impl Drop for SuspendedProcess {
     }
 }
 
-/// RAII storage for one initialized process-thread attribute list.
-struct ProcThreadAttributeList {
-    list: windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST,
-    _storage: Vec<usize>,
-}
-
-impl ProcThreadAttributeList {
-    fn with_handle_list(
-        handles: &[windows_sys::Win32::Foundation::HANDLE],
-    ) -> Result<Self, ToolError> {
-        let mut bytes = 0_usize;
-        // SAFETY: a null list is the documented sizing call; `bytes` is valid
-        // output storage. The call must fail with ERROR_INSUFFICIENT_BUFFER.
-        let sized = unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &raw mut bytes) };
-        let sizing_error = std::io::Error::last_os_error();
-        if sized != 0
-            || bytes == 0
-            || sizing_error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32)
-        {
-            return Err(ToolError::Execution(format!(
-                "failed to size the inherited-handle attribute list: {sizing_error}"
-            )));
-        }
-
-        let units = bytes.div_ceil(size_of::<usize>());
-        let mut storage = vec![0_usize; units];
-        let list = storage.as_mut_ptr().cast();
-        // SAFETY: `storage` is aligned, writable, and at least `bytes` long.
-        if unsafe { InitializeProcThreadAttributeList(list, 1, 0, &raw mut bytes) } == 0 {
-            return Err(ToolError::Execution(format!(
-                "failed to initialize the inherited-handle attribute list: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        let attributes = Self {
-            list,
-            _storage: storage,
-        };
-        // SAFETY: `attributes.list` is initialized for one attribute and
-        // `handles` remains live through CreateProcessW. The byte count uses
-        // HANDLE units, not UTF-16 or character units.
-        let updated = unsafe {
-            UpdateProcThreadAttribute(
-                attributes.list,
-                0,
-                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                handles.as_ptr().cast(),
-                std::mem::size_of_val(handles),
-                null_mut(),
-                null(),
-            )
-        };
-        if updated == 0 {
-            return Err(ToolError::Execution(format!(
-                "failed to restrict inherited child handles: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        Ok(attributes)
-    }
-
-    fn as_ptr(&self) -> windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST {
-        self.list
-    }
-}
-
-impl Drop for ProcThreadAttributeList {
-    fn drop(&mut self) {
-        // SAFETY: `list` was initialized once and is deleted exactly once
-        // before its backing storage is released.
-        unsafe { DeleteProcThreadAttributeList(self.list) };
-    }
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "spawn uses the pinned snapshot, window policy, and nested-Job retry mode"
@@ -378,11 +300,16 @@ fn spawn_attempt(
     let directory = wide_os(cwd.as_os_str())?;
     let env_block = unicode_env_block(env);
 
-    let stdin = open_nul()?;
-    let (stdout_read, stdout_write) = inheritable_pipe()?;
-    let (stderr_read, stderr_write) = inheritable_pipe()?;
-    clear_inherit(&stdout_read)?;
-    clear_inherit(&stderr_read)?;
+    let stdin =
+        open_nul().map_err(|err| ToolError::Execution(format!("failed to open NUL: {err}")))?;
+    let (stdout_read, stdout_write) = inheritable_pipe()
+        .map_err(|err| ToolError::Execution(format!("failed to create stdio pipes: {err}")))?;
+    let (stderr_read, stderr_write) = inheritable_pipe()
+        .map_err(|err| ToolError::Execution(format!("failed to create stdio pipes: {err}")))?;
+    clear_inherit(&stdout_read)
+        .map_err(|err| ToolError::Execution(format!("failed to clear handle inherit: {err}")))?;
+    clear_inherit(&stderr_read)
+        .map_err(|err| ToolError::Execution(format!("failed to clear handle inherit: {err}")))?;
 
     let mut flags = CREATE_UNICODE_ENVIRONMENT
         | CREATE_NEW_PROCESS_GROUP
@@ -398,7 +325,8 @@ fn spawn_attempt(
         stdout_write.as_raw_handle(),
         stderr_write.as_raw_handle(),
     ];
-    let attributes = ProcThreadAttributeList::with_handle_list(&inherited)?;
+    let attributes = ProcThreadAttributeList::with_handles(&inherited)
+        .map_err(|err| ToolError::Execution(err.to_string()))?;
     let startup = STARTUPINFOEXW {
         StartupInfo: STARTUPINFOW {
             cb: u32::try_from(size_of::<STARTUPINFOEXW>()).expect("STARTUPINFOEXW fits u32"),
@@ -608,76 +536,6 @@ fn open_image_for_compare(path: &std::ffi::OsStr) -> Result<File, ToolError> {
     Ok(File::from(unsafe { OwnedHandle::from_raw_handle(raw) }))
 }
 
-fn inheritable_pipe() -> Result<(OwnedHandle, OwnedHandle), ToolError> {
-    let mut sa = SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
-            .expect("SECURITY_ATTRIBUTES fits u32"),
-        lpSecurityDescriptor: null_mut(),
-        bInheritHandle: 1,
-    };
-    let mut read = null_mut();
-    let mut write = null_mut();
-    // SAFETY: `sa.nLength` is set; both out-handles are writable HANDLE slots.
-    let ok = unsafe { CreatePipe(&raw mut read, &raw mut write, &raw mut sa, 0) };
-    if ok == 0 {
-        return Err(ToolError::Execution(format!(
-            "failed to create stdio pipes: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    // SAFETY: CreatePipe returned two uniquely owned handles.
-    Ok(unsafe {
-        (
-            OwnedHandle::from_raw_handle(read),
-            OwnedHandle::from_raw_handle(write),
-        )
-    })
-}
-
-fn clear_inherit(handle: &OwnedHandle) -> Result<(), ToolError> {
-    // SAFETY: `handle` is live; clearing HANDLE_FLAG_INHERIT is documented.
-    let ok = unsafe { SetHandleInformation(handle.as_raw_handle(), HANDLE_FLAG_INHERIT, 0) };
-    if ok == 0 {
-        Err(ToolError::Execution(format!(
-            "failed to clear handle inherit: {}",
-            std::io::Error::last_os_error()
-        )))
-    } else {
-        Ok(())
-    }
-}
-
-fn open_nul() -> Result<OwnedHandle, ToolError> {
-    let mut wide: Vec<u16> = OsString::from(r"\\.\NUL").encode_wide().collect();
-    wide.push(0);
-    let mut sa = SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
-            .expect("SECURITY_ATTRIBUTES fits u32"),
-        lpSecurityDescriptor: null_mut(),
-        bInheritHandle: 1,
-    };
-    // SAFETY: `wide` is NUL-terminated UTF-16 for the NUL device.
-    let raw = unsafe {
-        CreateFileW(
-            wide.as_ptr(),
-            GENERIC_READ,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            &raw mut sa,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            null_mut(),
-        )
-    };
-    if raw == INVALID_HANDLE_VALUE {
-        return Err(ToolError::Execution(format!(
-            "failed to open NUL: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    // SAFETY: CreateFileW returned a fresh owned HANDLE.
-    Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
-}
-
 /// Returns an equivalent non-verbatim spelling when legacy parsing is safe.
 ///
 /// PowerShell derives `PSHOME` from the `lpApplicationName` spelling. A local
@@ -760,39 +618,6 @@ fn wide_os(value: &std::ffi::OsStr) -> Result<Vec<u16>, ToolError> {
     }
     wide.push(0);
     Ok(wide)
-}
-
-fn unicode_env_block(entries: &[(OsString, OsString)]) -> Vec<u16> {
-    let mut block = Vec::new();
-    for (key, value) in entries {
-        block.extend(key.encode_wide());
-        block.push(u16::from(b'='));
-        block.extend(value.encode_wide());
-        block.push(0);
-    }
-    block.push(0);
-    if block.len() < 2 {
-        block = vec![0, 0];
-    }
-    block
-}
-
-fn terminate(process: &impl AsRawHandle) -> std::io::Result<()> {
-    let handle = process.as_raw_handle();
-    // SAFETY: `handle` is a live process handle with PROCESS_TERMINATE access.
-    if unsafe { TerminateProcess(handle, 1) } != 0 {
-        return Ok(());
-    }
-    let terminate_error = std::io::Error::last_os_error();
-    // TerminateProcess reports access denied after a process has terminated.
-    // A signaled process handle proves that cleanup may continue to its wait.
-    // SAFETY: `handle` is a live process handle with SYNCHRONIZE access; a zero
-    // timeout only observes its current signaled state.
-    if unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0 {
-        Ok(())
-    } else {
-        Err(terminate_error)
-    }
 }
 
 fn duplicate_handle(handle: &OwnedHandle) -> std::io::Result<OwnedHandle> {
