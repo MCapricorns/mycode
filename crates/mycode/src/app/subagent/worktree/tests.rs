@@ -25,7 +25,7 @@ impl Repository {
         let root = std::env::temp_dir().join(format!(
             "mycode-worktree-test-{}-{}",
             std::process::id(),
-            crate::core::unix_now().as_nanos()
+            uuid::Uuid::new_v4()
         ));
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
