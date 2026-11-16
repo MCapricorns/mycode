@@ -140,10 +140,15 @@ pub fn run_apply_update_helper(args: &ApplyUpdateArgs) -> Result<(), String> {
     // A background stage can be armed hours before the user quits. Expiring
     // this wait would exhaust swap retries while Windows still locks the exe.
     wait_for_process_exit(args.wait_pid);
-    // Sibling helpers share the staged source and the target's incoming
-    // path, so a loser's replace can fail mid-flight even though the swap
-    // landed. Checking the target digest treats that as applied — the
-    // relaunch flag, not the rename win, decides who restarts the app.
+    // Staging and an install click can both arm a helper for the same target.
+    // Keep its incoming file, backup, rollback, and cleanup under one OS lock.
+    // A sibling must inspect the installed digest only after the winner has
+    // finished, otherwise its rollback can delete the winner's new binary.
+    let update_lock = open_update_lock(&args.target)?;
+    update_lock
+        .lock()
+        .map_err(|error| format!("updater lock: {error}"))?;
+    // The relaunch flag, not the rename win, decides who restarts the app.
     let applied = |args: &ApplyUpdateArgs| -> Result<bool, String> {
         if super::file_sha256(&args.target)
             .is_ok_and(|hash| hash.eq_ignore_ascii_case(&args.sha256))
@@ -187,6 +192,26 @@ pub fn run_apply_update_helper(args: &ApplyUpdateArgs) -> Result<(), String> {
     } else {
         last
     })
+}
+
+/// Opens the target's persistent coordination file; the caller must lock it.
+///
+/// Never unlink this file: waiting helpers retain its inode/handle, and a
+/// replacement file would let a new helper acquire a different lock.
+/// Startup cleanup uses the same file with a nonblocking lock attempt.
+pub(super) fn open_update_lock(target: &Path) -> Result<std::fs::File, String> {
+    let name = target
+        .file_name()
+        .ok_or_else(|| "target has no file name".to_owned())?;
+    let mut lock_name = name.to_os_string();
+    lock_name.push(".mycode-update-lock");
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(target.with_file_name(lock_name))
+        .map_err(|error| format!("updater lock: {error}"))
 }
 
 #[cfg(windows)]
@@ -444,7 +469,10 @@ fn relaunch_target(target: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{helper_arguments, parse_apply_update_args, replace_verified_executable};
+    use super::{
+        ApplyUpdateArgs, helper_arguments, open_update_lock, parse_apply_update_args,
+        replace_verified_executable, run_apply_update_helper,
+    };
     use std::path::Path;
 
     #[test]
@@ -504,5 +532,82 @@ mod tests {
         assert!(error.message.contains("sha256"), "{}", error.message);
         assert_eq!(std::fs::read(&target).unwrap(), b"new-bytes");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sibling_helper_waits_and_rechecks_the_winners_installed_binary() {
+        let dir = scratch("serialized-swap");
+        let target = dir.join("app.exe");
+        let source = dir.join("next.exe");
+        std::fs::write(&target, b"old-bytes").unwrap();
+        std::fs::write(&source, b"new-bytes").unwrap();
+        let args = ApplyUpdateArgs {
+            target: target.clone(),
+            source: source.clone(),
+            sha256: super::super::sha256_hex(b"new-bytes"),
+            wait_pid: 0,
+            relaunch: false,
+        };
+        // Hold the same OS lock as the first helper while a sibling starts.
+        // Separate opens contend across processes as well as these threads.
+        let winner = open_update_lock(&target).unwrap();
+        winner.lock().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let sibling = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let outcome = run_apply_update_helper(&args);
+            let _ = finished_tx.send(());
+            outcome
+        });
+        started_rx.recv().unwrap();
+        let blocked = matches!(
+            finished_rx.recv_timeout(std::time::Duration::from_millis(200)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        let unchanged = std::fs::read(&target).unwrap() == b"old-bytes";
+        // Model the winner finishing and startup consuming its pending file.
+        // The sibling must recognize the installed digest, not retry the swap.
+        std::fs::write(&target, b"new-bytes").unwrap();
+        std::fs::remove_file(&source).unwrap();
+        drop(winner);
+        let outcome = sibling.join().unwrap();
+        let actual = std::fs::read(&target).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(blocked, "a sibling must wait for the active target swap");
+        assert!(
+            unchanged,
+            "a waiting sibling must not modify the installation"
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(actual, b"new-bytes");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn startup_cleanup_keeps_files_owned_by_an_active_swap() {
+        let dir = scratch("locked-cleanup");
+        let target = dir.join("app.exe");
+        let backup = super::super::previous_path(&target);
+        let incoming = super::super::incoming_path(&target);
+        std::fs::write(&backup, b"backup").unwrap();
+        std::fs::write(&incoming, b"incoming").unwrap();
+        let lock = open_update_lock(&target).unwrap();
+        lock.lock().unwrap();
+        super::super::cleanup_previous_binary_at(&target);
+        let backup_kept = backup.is_file();
+        let incoming_kept = incoming.is_file();
+        drop(lock);
+        super::super::cleanup_previous_binary_at(&target);
+        let cleaned = !backup.exists() && !incoming.exists();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(
+            backup_kept && incoming_kept,
+            "an active swap owns both files"
+        );
+        assert!(
+            cleaned,
+            "an idle target's leftovers should still be removed"
+        );
     }
 }

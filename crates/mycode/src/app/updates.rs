@@ -918,7 +918,24 @@ pub fn cleanup_previous_binary() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    for path in [previous_path(&exe), incoming_path(&exe)] {
+    cleanup_previous_binary_at(&exe);
+}
+
+fn cleanup_previous_binary_at(exe: &Path) {
+    // A desktop launched while a Windows helper is swapping must not delete
+    // that helper's incoming file or rollback backup. Skip a busy target
+    // rather than blocking desktop startup behind the helper's retry loop.
+    #[cfg(windows)]
+    let _update_lock = {
+        let Ok(lock) = apply::open_update_lock(exe) else {
+            return;
+        };
+        if lock.try_lock().is_err() {
+            return;
+        }
+        lock
+    };
+    for path in [previous_path(exe), incoming_path(exe)] {
         let Ok(meta) = path.metadata() else {
             continue;
         };
