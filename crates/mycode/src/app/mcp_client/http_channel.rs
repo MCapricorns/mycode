@@ -214,38 +214,33 @@ async fn streaming_sse_reply(
     tools_changed: &AtomicBool,
 ) -> Result<Option<Value>, McpError> {
     let mut bytes = Vec::new();
-    let mut scanned = 0;
     let mut line_start = 0;
-    let mut event_start = 0;
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|error| McpError::transport(format!("response body failed: {error}")))?
     {
-        if bytes.len().saturating_add(chunk.len()) > MAX_MESSAGE_BYTES {
-            return Err(McpError::Oversized);
-        }
-        bytes.extend_from_slice(&chunk);
-        for index in scanned..bytes.len() {
-            if bytes[index] != b'\n' {
+        // Bound the current event, not all notifications seen before the
+        // reply. A transport chunk can contain several complete events.
+        for part in chunk.split_inclusive(|byte| *byte == b'\n') {
+            if bytes.len().saturating_add(part.len()) > MAX_MESSAGE_BYTES {
+                return Err(McpError::Oversized);
+            }
+            bytes.extend_from_slice(part);
+            if part.last() != Some(&b'\n') {
                 continue;
             }
-            let empty =
-                index == line_start || (index == line_start + 1 && bytes[line_start] == b'\r');
-            if empty {
-                if let Some(reply) =
-                    sse_reply_with_changes(&bytes[event_start..=index], id, tools_changed)?
-                {
+            if matches!(&bytes[line_start..], b"\n" | b"\r\n") {
+                if let Some(reply) = sse_reply_with_changes(&bytes, id, tools_changed)? {
                     return Ok(Some(reply));
                 }
-                event_start = index + 1;
+                bytes.clear();
             }
-            line_start = index + 1;
+            line_start = bytes.len();
         }
-        scanned = bytes.len();
     }
     // Retain support for servers that omit the final blank line before EOF.
-    sse_reply_with_changes(&bytes[event_start..], id, tools_changed)
+    sse_reply_with_changes(&bytes, id, tools_changed)
 }
 
 /// Extracts the JSON-RPC response from an SSE body.
@@ -428,6 +423,42 @@ mod tests {
             .expect("error");
         assert!(reply["error"].is_object());
         assert!(sse_reply(b"data: [DONE]\n\n", Some(2)).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn sse_size_limit_applies_to_each_event_not_the_entire_stream() {
+        let notification = format!(
+            "data: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"message\":\"{}\"}}}}\r\n\r\n",
+            "x".repeat(super::MAX_MESSAGE_BYTES / 2),
+        );
+        let reply = b"data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"ok\":true}}\n\n";
+        for coalesced in [false, true] {
+            let mut chunks = vec![bytes::Bytes::from(notification.clone()); 3];
+            chunks.push(bytes::Bytes::from_static(reply));
+            if coalesced {
+                chunks = vec![bytes::Bytes::from(chunks.concat())];
+            }
+            let stream =
+                futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+            let response =
+                reqwest::Response::from(http::Response::new(reqwest::Body::wrap_stream(stream)));
+            let reply =
+                super::streaming_sse_reply(response, Some(7), &super::AtomicBool::new(false))
+                    .await
+                    .unwrap()
+                    .expect("reply");
+            assert_eq!(reply["result"]["ok"], true);
+        }
+    }
+
+    #[tokio::test]
+    async fn sse_still_rejects_a_single_oversized_event() {
+        let bytes = vec![b'x'; super::MAX_MESSAGE_BYTES + 1];
+        let response = reqwest::Response::from(http::Response::new(bytes));
+        assert_eq!(
+            super::streaming_sse_reply(response, Some(7), &super::AtomicBool::new(false)).await,
+            Err(super::McpError::Oversized),
+        );
     }
 
     #[tokio::test]
