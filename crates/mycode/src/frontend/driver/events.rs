@@ -21,6 +21,16 @@ impl FrontendDriver {
     /// the frontend must perform (toasts, update dialog, scroll hints).
     pub fn on_event(&mut self, event: BridgeEvent, out: &mut Vec<Effect>) {
         if let BridgeEvent::ChatDone { session_id, .. }
+        | BridgeEvent::ChatFailed { session_id, .. }
+        | BridgeEvent::CompactFinished { session_id, .. } = &event
+            && self.pending_open.as_deref() == Some(session_id.as_str())
+        {
+            // Replies and events have independent delivery queues. A read
+            // taken while busy must not restore that state after its terminal
+            // event was consumed, even when another chat is still visible.
+            self.request_open_session(session_id);
+        }
+        if let BridgeEvent::ChatDone { session_id, .. }
         | BridgeEvent::ChatFailed { session_id, .. } = &event
         {
             self.submitted_turns.remove(session_id);

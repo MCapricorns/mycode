@@ -568,6 +568,9 @@ impl FrontendDriver {
     fn finish_delete(&mut self, session_id: &str, reply: BridgeReply, out: &mut Vec<Effect>) {
         match reply {
             BridgeReply::SessionDeleted(Ok(())) => {
+                if self.pending_open.as_deref() == Some(session_id) {
+                    self.pending_open = None;
+                }
                 self.submitted_turns.remove(session_id);
                 self.pending_send_attachments.remove(session_id);
                 self.failed_send_drafts.remove(session_id);

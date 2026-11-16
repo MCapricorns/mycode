@@ -57,13 +57,6 @@ fn overlapping_creates_keep_their_own_project_and_only_the_newest_opens() {
             driver.vm.session_projects,
             [(project_chat.session_id, project)]
         );
-        assert!(
-            !driver
-                .vm
-                .session_projects
-                .iter()
-                .any(|(session, _)| session == &default_chat.session_id)
-        );
         driver.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }
@@ -79,7 +72,10 @@ fn a_create_reply_cannot_replace_an_explicitly_opened_conversation() {
     driver.pending_create = Some(1);
     driver.request_open_session(&selected.session_id);
     driver.on_reply(
-        ReplyScope::Open(selected.session_id.clone()),
+        ReplyScope::Open {
+            session: selected.session_id.clone(),
+            generation: driver.open_generation,
+        },
         BridgeReply::Conversation(Ok(conversation(
             &selected.session_id,
             &selected.root_branch_id,

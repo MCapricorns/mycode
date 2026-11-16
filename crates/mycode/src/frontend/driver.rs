@@ -124,7 +124,10 @@ pub(crate) enum ReplyScope {
     ProxyTest(String),
     /// A tool probe belongs to the exact Library server configuration read.
     McpProbe(Box<crate::config::McpServerSettings>),
-    Open(String),
+    Open {
+        session: String,
+        generation: u64,
+    },
     /// A create keeps its original project and may open only while current.
     Create {
         request: u64,
@@ -183,9 +186,12 @@ pub(crate) struct RecallRequest {
 }
 
 impl ReplyScope {
-    pub(crate) fn for_command(command: &BridgeCommand) -> Self {
+    pub(crate) fn for_command(command: &BridgeCommand, open_generation: u64) -> Self {
         match command {
-            BridgeCommand::OpenSession(session) => Self::Open(session.to_string()),
+            BridgeCommand::OpenSession(session) => Self::Open {
+                session: session.to_string(),
+                generation: open_generation,
+            },
             BridgeCommand::TestProxy { proxy } => Self::ProxyTest(proxy.clone()),
             BridgeCommand::SendMessage { .. } => Self::Send,
             BridgeCommand::ChatTurn {
@@ -231,7 +237,12 @@ impl ReplyScope {
         }
     }
 
-    fn applies(&self, vm: &WorkspaceState, pending_open: Option<&str>) -> bool {
+    fn applies(
+        &self,
+        vm: &WorkspaceState,
+        pending_open: Option<&str>,
+        open_generation: u64,
+    ) -> bool {
         match self {
             Self::Global
             | Self::Settings { .. }
@@ -239,7 +250,10 @@ impl ReplyScope {
             | Self::Send
             | Self::SentTurn { .. }
             | Self::Create { .. } => true,
-            Self::Open(session) => pending_open == Some(session.as_str()),
+            Self::Open {
+                session,
+                generation,
+            } => pending_open == Some(session.as_str()) && *generation == open_generation,
             Self::ProxyTest(proxy) => vm
                 .settings
                 .as_ref()
@@ -368,6 +382,9 @@ pub struct FrontendDriver {
     /// Session whose conversation-open is in flight. Conversation replies
     /// for anything else are dropped, so a parked desk stays parked.
     pending_open: Option<String>,
+    /// Distinguishes successive reads of the same chat, including refreshes
+    /// after a terminal event overtakes an in-flight snapshot.
+    open_generation: u64,
     /// Monotonic identity for session creation requests.
     create_generation: u64,
     /// Only this create may replace the current conversation.
@@ -502,6 +519,7 @@ impl FrontendDriver {
             welcome_attachments: crate::core::Attachments::default(),
             welcome_send_is_note: false,
             pending_open: None,
+            open_generation: 0,
             create_generation: 0,
             pending_create: None,
             pending_composer_prefill: None,
@@ -680,7 +698,7 @@ impl FrontendDriver {
     /// Enqueues one command immediately; its reply lands on the inbox
     /// tagged with its scope.
     pub fn dispatch(&self, command: BridgeCommand) {
-        let scope = ReplyScope::for_command(&command);
+        let scope = ReplyScope::for_command(&command, self.open_generation);
         self.dispatch_scoped(command, scope);
     }
 
@@ -740,7 +758,7 @@ impl FrontendDriver {
         while let Ok(message) = self.inbox.try_recv() {
             match message {
                 DriverMsg::Reply { scope, reply } => {
-                    if scope.applies(&self.vm, self.pending_open.as_deref()) {
+                    if scope.applies(&self.vm, self.pending_open.as_deref(), self.open_generation) {
                         self.on_reply(scope, *reply, out);
                     }
                     // Any reply can end the reopen a held send waits on,

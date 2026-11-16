@@ -8,6 +8,7 @@ mod recall;
 mod runtime_guards;
 mod scroll;
 mod sends;
+mod snapshots;
 
 fn conversation(session: &str, branch: &str) -> ActiveConversation {
     ActiveConversation {
@@ -50,19 +51,7 @@ fn rejected_start_releases_sending_and_removes_the_waiting_bubble() {
 fn a_chat_opened_mid_turn_reloads_from_the_ledger_when_the_turn_ends() {
     use crate::app::{BranchId, BridgeEvent, BridgeReply, ConversationEntry, EntryKind, SessionId};
 
-    let root = std::env::temp_dir().join(format!(
-        "mycode-driver-resync-{}-{}",
-        std::process::id(),
-        crate::core::unix_now().as_nanos()
-    ));
-    std::fs::create_dir_all(&root).expect("root");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
-    }
-    let home = crate::config::HomeLayout::from_root(&root).expect("home");
-    let mut driver = super::FrontendDriver::start(home, || {});
+    let (mut driver, root) = scratch_driver("resync");
     let session = SessionId::generate().expect("session").as_str().to_owned();
     let branch = BranchId::generate().expect("branch").as_str().to_owned();
     let mut running = conversation(&session, &branch);
@@ -70,7 +59,10 @@ fn a_chat_opened_mid_turn_reloads_from_the_ledger_when_the_turn_ends() {
     let mut out = Vec::new();
     driver.pending_open = Some(session.clone());
     driver.on_reply(
-        ReplyScope::Open(session.clone()),
+        ReplyScope::Open {
+            session: session.clone(),
+            generation: driver.open_generation,
+        },
         BridgeReply::Conversation(Ok(running)),
         &mut out,
     );
@@ -163,7 +155,10 @@ fn removing_a_project_keeps_its_conversation_and_working_directory() {
     active.running = false;
     driver.pending_open = Some(session.clone());
     driver.on_reply(
-        ReplyScope::Open(session),
+        ReplyScope::Open {
+            session,
+            generation: driver.open_generation,
+        },
         crate::app::BridgeReply::Conversation(Ok(active)),
         &mut effects,
     );
@@ -188,7 +183,10 @@ fn a_chat_opened_mid_compact_unlocks_when_the_compaction_finishes() {
     let mut out = Vec::new();
     driver.pending_open = Some(session.clone());
     driver.on_reply(
-        ReplyScope::Open(session.clone()),
+        ReplyScope::Open {
+            session: session.clone(),
+            generation: driver.open_generation,
+        },
         BridgeReply::Conversation(Ok(compacting)),
         &mut out,
     );
@@ -347,19 +345,7 @@ fn an_interrupt_during_auto_compaction_waits_for_the_summary() {
 
 #[test]
 fn ensure_catalog_loads_once_the_composer_has_a_model() {
-    let root = std::env::temp_dir().join(format!(
-        "mycode-driver-catalog-{}-{}",
-        std::process::id(),
-        crate::core::unix_now().as_nanos()
-    ));
-    std::fs::create_dir_all(&root).expect("root");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("mode");
-    }
-    let home = crate::config::HomeLayout::from_root(&root).expect("home");
-    let mut driver = super::FrontendDriver::start(home, || {});
+    let (mut driver, root) = scratch_driver("catalog");
     // Nothing selected on a fresh launch: no surface reads the catalog, so
     // the document stays a lazy load.
     driver.ensure_catalog();

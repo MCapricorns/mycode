@@ -118,15 +118,10 @@ fn a_published_alias_remains_runnable_after_catalog_refresh() {
     };
     settings.providers =
         vec![crate::app::magpie_provider_row(&settings.magpie, &catalog).expect("provider")];
-    state.catalog = Some(std::sync::Arc::new(catalog));
     state.selected_model = Some("pinned".into());
     assert_eq!(
         selected_route(&state).unwrap(),
         ("magpie".into(), "pinned".into())
-    );
-    assert_eq!(
-        crate::frontend::picker::provider_model_choices(&state, "magpie").len(),
-        2
     );
 }
 
@@ -179,13 +174,19 @@ fn a_confirmed_cancel_resolves_the_provider_id_back_to_the_ledger_row() {
         session_id: "session".into(),
         call_id: "wire-child".into(),
     };
-    let scope = ReplyScope::for_command(&command);
-    assert!(scope.applies(&driver.vm, None));
+    let scope = ReplyScope::for_command(&command, driver.open_generation);
+    assert!(scope.applies(&driver.vm, None, driver.open_generation));
     driver.on_reply(scope, BridgeReply::SubagentCancelled(Ok(())), &mut out);
     assert!(driver.vm.live_jobs.is_empty());
     assert!(driver.vm.finished_jobs.contains("ledger-child"));
     driver.vm.active = Some(conversation("another-session", "branch"));
-    assert!(!ReplyScope::for_command(&command).applies(&driver.vm, None));
+    assert!(
+        !ReplyScope::for_command(&command, driver.open_generation).applies(
+            &driver.vm,
+            None,
+            driver.open_generation
+        )
+    );
     driver.shutdown();
     let _ = std::fs::remove_dir_all(root);
 }

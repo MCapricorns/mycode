@@ -187,6 +187,7 @@ impl FrontendDriver {
             return;
         };
         self.pending_create = None;
+        self.open_generation = self.open_generation.wrapping_add(1);
         self.pending_open = Some(session_id.to_owned());
         self.dispatch(BridgeCommand::OpenSession(parsed));
     }
