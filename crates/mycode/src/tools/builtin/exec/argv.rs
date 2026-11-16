@@ -1,5 +1,4 @@
 //! MSVC-style Windows argv quoting for `CreateProcessW` launches.
-#![cfg_attr(not(windows), allow(dead_code))]
 //!
 //! `CreateProcessW` receives a single UTF-16 command line. argv0 is always
 //! quoted. Empty arguments and arguments containing whitespace or `"` are

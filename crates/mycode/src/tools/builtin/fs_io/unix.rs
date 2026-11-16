@@ -6,7 +6,7 @@
 //! them by publishing a new inode.
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io;
 use std::os::fd::AsFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
@@ -14,8 +14,8 @@ use rustix::fs::{self as rfs, AtFlags, Mode, OFlags};
 use rustix::io::Errno;
 
 use super::{
-    ChildOpen, FileIdentity, FileKind, FileMeta, MAX_DIR_WIDTH, OpenedChild, WRITE_CHUNK,
-    check_cancel, map_not_found,
+    ChildOpen, FileIdentity, FileKind, FileMeta, MAX_DIR_WIDTH, OpenedChild, check_cancel,
+    map_not_found,
 };
 use crate::tools::builtin::fs_search::{unix_device_identity, validate_component_name};
 use tokio_util::sync::CancellationToken;
@@ -494,68 +494,6 @@ where
 /// fails.
 pub(super) fn create_mode_probe(parent: &File, name: &OsStr) -> io::Result<u32> {
     create_mode_probe_with(parent, name, stat_meta)
-}
-
-/// Writes `bytes` in chunks, then flushes and synchronizes `file`.
-///
-/// # Errors
-///
-/// Returns an I/O error on write, flush, sync, or cancellation.
-pub(super) fn write_all_sync(
-    file: &mut File,
-    bytes: &[u8],
-    cancel: &CancellationToken,
-) -> io::Result<()> {
-    let mut offset = 0usize;
-    while offset < bytes.len() {
-        check_cancel(cancel)?;
-        let end = (offset + WRITE_CHUNK).min(bytes.len());
-        file.write_all(&bytes[offset..end])?;
-        offset = end;
-    }
-    file.flush()?;
-    sync_file(file)
-}
-
-/// Reads `file` up to `declared_size` and fails if the stream disagrees.
-///
-/// # Errors
-///
-/// Returns an I/O error when the read is cancelled, exceeds `max_bytes`, or
-/// does not match `declared_size`.
-pub(super) fn read_exact_capped(
-    file: &mut File,
-    declared_size: u64,
-    max_bytes: u64,
-    cancel: &CancellationToken,
-) -> io::Result<Vec<u8>> {
-    if declared_size > max_bytes {
-        return Err(io::Error::other("file exceeds the read size limit"));
-    }
-    let expected = usize::try_from(declared_size)
-        .map_err(|_| io::Error::other("file exceeds the read size limit"))?;
-    let mut out = Vec::new();
-    let mut buf = [0u8; WRITE_CHUNK];
-    loop {
-        check_cancel(cancel)?;
-        let read = file.read(&mut buf)?;
-        if read == 0 {
-            break;
-        }
-        let next = out.len().saturating_add(read);
-        if next as u64 > declared_size || next as u64 > max_bytes {
-            return Err(io::Error::other(
-                "file grew or exceeded the read size limit",
-            ));
-        }
-        out.extend_from_slice(&buf[..read]);
-    }
-    if out.len() != expected {
-        return Err(io::Error::other(
-            "file size changed during read or did not match metadata",
-        ));
-    }
-    Ok(out)
 }
 
 pub(super) fn current_meta(file: &File) -> io::Result<FileMeta> {

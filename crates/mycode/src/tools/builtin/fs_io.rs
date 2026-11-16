@@ -132,6 +132,16 @@ mod read;
 mod types;
 mod write;
 
+#[cfg(any(unix, windows))]
+mod content;
+#[cfg(any(unix, windows))]
+use content::{read_exact_capped, write_all_sync};
+#[cfg(not(any(unix, windows)))]
+use sys::{read_exact_capped, write_all_sync};
+
+#[cfg(all(test, any(unix, windows)))]
+mod tests;
+
 // Canonical walk-width cap lives in `fs_search`; re-exported for the sys modules.
 use crate::tools::builtin::fs_search::MAX_DIR_WIDTH;
 

@@ -168,7 +168,7 @@ pub(super) fn read_raw_file(
             "file identity changed before read".to_owned(),
         ));
     }
-    let raw = sys::read_exact_capped(&mut file, before.size, MAX_READ_SCAN_BYTES, cancel).map_err(
+    let raw = read_exact_capped(&mut file, before.size, MAX_READ_SCAN_BYTES, cancel).map_err(
         |error| {
             if error.kind() == ErrorKind::Interrupted {
                 ToolError::Execution(error.to_string())

@@ -285,7 +285,7 @@ fn write_existing(
         let mut reader = existing
             .try_clone()
             .map_err(|error| ToolError::Execution(format!("failed to reopen {key}: {error}")))?;
-        let raw = sys::read_exact_capped(&mut reader, live.size, MAX_READ_SCAN_BYTES, cancel)
+        let raw = read_exact_capped(&mut reader, live.size, MAX_READ_SCAN_BYTES, cancel)
             .map_err(|error| ToolError::Execution(format!("failed to hash {key}: {error}")))?;
         let current = revision_token(&live, &content_hash(&raw));
         if current.as_str() != expected {
@@ -511,7 +511,7 @@ fn create_temp_in(
 /// Returns [`ToolError`] when writing, flushing, syncing, or a cancel check
 /// fails.
 fn write_temp(mut file: File, bytes: &[u8], cancel: &CancellationToken) -> Result<File, ToolError> {
-    sys::write_all_sync(&mut file, bytes, cancel).map_err(|error| {
+    write_all_sync(&mut file, bytes, cancel).map_err(|error| {
         if error.kind() == ErrorKind::Interrupted {
             ToolError::Execution(error.to_string())
         } else {
@@ -689,7 +689,7 @@ fn finish_write(
             "published file was replaced before verification".to_owned(),
         ));
     }
-    let raw = sys::read_exact_capped(
+    let raw = read_exact_capped(
         &mut published.file,
         published.meta.size,
         MAX_READ_SCAN_BYTES.max(bytes_written as u64),
