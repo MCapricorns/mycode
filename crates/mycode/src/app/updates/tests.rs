@@ -60,6 +60,94 @@ fn scratch(label: &str) -> std::path::PathBuf {
     dir
 }
 
+fn pending_fixture(label: &str) -> crate::config::HomeLayout {
+    let home = crate::config::HomeLayout::from_root(scratch(label)).unwrap();
+    let dir = super::pending_dir(&home);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (pending, sha, version, _) = super::pending_paths(&dir, super::ASSET_FAMILY);
+    std::fs::write(pending, b"abc").unwrap();
+    std::fs::write(sha, ABC_SHA256).unwrap();
+    std::fs::write(version, "99999.0.0").unwrap();
+    home
+}
+
+#[cfg(windows)]
+#[test]
+fn a_later_startup_removes_a_helper_left_locked_during_applied_cleanup() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    let home = pending_fixture("locked-helper-cleanup");
+    let dir = super::pending_dir(&home);
+    let (_, _, version, _) = super::pending_paths(&dir, super::ASSET_FAMILY);
+    std::fs::write(version, super::current_version()).unwrap();
+    let helper = dir.join("mycode-update-helper-1-1.exe");
+    std::fs::write(&helper, b"running helper").unwrap();
+    let locked = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&helper)
+        .unwrap();
+    let first = super::reconcile_pending_update_with(&home, |_| {
+        panic!("an applied update must not start another helper")
+    });
+    let deferred = helper.exists();
+    drop(locked);
+    let second = super::reconcile_pending_update_with(&home, |_| {
+        panic!("an empty pending slot must not start a helper")
+    });
+    let removed = !helper.exists();
+    std::fs::remove_dir_all(home.root()).unwrap();
+    assert_eq!(
+        first,
+        super::PendingUpdate::Applied(super::current_version().into())
+    );
+    assert!(deferred, "the running helper is temporarily locked");
+    assert_eq!(second, super::PendingUpdate::None);
+    assert!(removed, "the next startup must retry helper cleanup");
+}
+
+#[test]
+fn an_unwritable_attempt_counter_keeps_the_app_open_and_the_payload_available() {
+    let home = pending_fixture("unwritable-attempts");
+    let (pending, sha, version, attempts) =
+        super::pending_paths(&super::pending_dir(&home), super::ASSET_FAMILY);
+    // A directory makes the write fail on both Windows and Unix, including
+    // privileged CI accounts that can bypass a read-only permission bit.
+    std::fs::create_dir(&attempts).unwrap();
+    let outcome = super::reconcile_pending_update_with(&home, |_| {
+        panic!("an unrecorded attempt must not start an update helper")
+    });
+    let retained = pending.is_file() && sha.is_file() && version.is_file();
+    std::fs::remove_dir_all(home.root()).unwrap();
+    assert_eq!(outcome, super::PendingUpdate::None);
+    assert!(
+        retained,
+        "a manual update must still have its verified payload"
+    );
+}
+
+#[test]
+fn a_failed_helper_start_still_consumes_the_last_recorded_attempt() {
+    let home = pending_fixture("last-attempt");
+    let (pending, _, _, attempts) =
+        super::pending_paths(&super::pending_dir(&home), super::ASSET_FAMILY);
+    std::fs::write(&attempts, (super::MAX_PENDING_ATTEMPTS - 1).to_string()).unwrap();
+    let mut armed = false;
+    let outcome = super::reconcile_pending_update_with(&home, |_| {
+        armed = true;
+        Err("helper could not start".to_owned())
+    });
+    let next = super::reconcile_pending_update_with(&home, |_| {
+        panic!("an exhausted attempt budget must not start a helper")
+    });
+    let removed = !pending.exists();
+    std::fs::remove_dir_all(home.root()).unwrap();
+    assert!(armed);
+    assert_eq!(outcome, super::PendingUpdate::None);
+    assert_eq!(next, super::PendingUpdate::None);
+    assert!(removed);
+}
+
 #[cfg(unix)]
 fn output_text(output: &std::process::Output) -> String {
     format!(

@@ -673,21 +673,24 @@ pub fn reconcile_pending_update(home: &crate::config::HomeLayout, relaunch: bool
     if crate::app::install::install_skipped() {
         return PendingUpdate::None;
     }
+    reconcile_pending_update_with(home, |prepared| arm_staged_update(prepared, relaunch))
+}
+
+fn reconcile_pending_update_with(
+    home: &crate::config::HomeLayout,
+    arm: impl FnOnce(&PreparedUpdate) -> Result<(), String>,
+) -> PendingUpdate {
     let dir = pending_dir(home);
     let (pending, sha_file, version_file, attempts_file) = pending_paths(&dir, ASSET_FAMILY);
-    let cleanup = |include_helpers: bool| {
+    let cleanup = || {
         for path in [&pending, &sha_file, &version_file, &attempts_file] {
             let _ = std::fs::remove_file(path);
         }
-        if include_helpers {
-            sweep_update_helpers(&dir);
-        }
+        sweep_update_helpers(&dir);
     };
     if !pending.is_file() {
         // No payload: drop stray sidecars and dead helpers together.
-        if version_file.exists() || sha_file.exists() || attempts_file.exists() {
-            cleanup(true);
-        }
+        cleanup();
         return PendingUpdate::None;
     }
     let version = std::fs::read_to_string(&version_file)
@@ -697,11 +700,11 @@ pub fn reconcile_pending_update(home: &crate::config::HomeLayout, relaunch: bool
         .ok()
         .map(|value| value.trim().to_owned());
     let (Some(version), Some(sha)) = (version, sha) else {
-        cleanup(true);
+        cleanup();
         return PendingUpdate::None;
     };
     if !is_newer(&version, current_version()) {
-        cleanup(true);
+        cleanup();
         return if version.trim_start_matches('v') == current_version() {
             PendingUpdate::Applied(version)
         } else {
@@ -710,7 +713,7 @@ pub fn reconcile_pending_update(home: &crate::config::HomeLayout, relaunch: bool
     }
     let actual = file_sha256(&pending);
     if !actual.is_ok_and(|hash| hash.eq_ignore_ascii_case(&sha)) {
-        cleanup(true);
+        cleanup();
         return PendingUpdate::None;
     }
     let attempts: u32 = std::fs::read_to_string(&attempts_file)
@@ -718,18 +721,23 @@ pub fn reconcile_pending_update(home: &crate::config::HomeLayout, relaunch: bool
         .and_then(|value| value.trim().parse().ok())
         .unwrap_or(0);
     if attempts >= MAX_PENDING_ATTEMPTS {
-        cleanup(true);
+        cleanup();
         return PendingUpdate::None;
     }
     // Count before arming so a spawn that crashes still bounds the loop.
-    let _ = std::fs::write(&attempts_file, (attempts + 1).to_string());
+    // If the counter cannot be stored, keep the app open and retain the
+    // payload for manual installation instead of creating an unbounded
+    // exit/relaunch cycle whose next startup reads the same old count.
+    if std::fs::write(&attempts_file, (attempts + 1).to_string()).is_err() {
+        return PendingUpdate::None;
+    }
     let staged = PreparedUpdate {
         version: version.clone(),
         new_binary: pending,
         stage_dir: dir,
         binary_sha256: sha,
     };
-    match arm_staged_update(&staged, relaunch) {
+    match arm(&staged) {
         Ok(()) => PendingUpdate::Armed(version),
         Err(_) => PendingUpdate::None,
     }
