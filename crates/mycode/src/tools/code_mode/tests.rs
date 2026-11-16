@@ -29,12 +29,16 @@ impl ToolDyn for SlowTool {
 
     fn execute_dyn<'a>(
         &'a self,
-        _args: Value,
-        _ctx: &'a ToolCtx,
+        args: Value,
+        ctx: &'a ToolCtx,
         _out: &'a mut ToolStream,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'a>> {
         Box::pin(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            if args["wait_for_cancel"] == true {
+                ctx.cancel.cancelled().await;
+            } else {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
             Ok(ToolResult::text("slow done"))
         })
     }
@@ -588,8 +592,8 @@ async fn the_progress_stream_closes_when_run_code_returns_a_running_cell() {
         let ctx = ToolCtx::new(&root);
         tool.execute_dyn(
             json!({
-                "script": r#"call("slow", {}); complete("done");"#,
-                "yield_time_ms": 20,
+                "script": r#"call("slow", {wait_for_cancel: true}); complete("done");"#,
+                "yield_time_ms": 60_000,
             }),
             &ctx,
             &mut producer,
@@ -597,20 +601,25 @@ async fn the_progress_stream_closes_when_run_code_returns_a_running_cell() {
         .await
     });
 
-    let items = tokio::time::timeout(Duration::from_secs(3), consumer.drain())
-        .await
-        .expect("the progress stream closes when run_code returns");
+    let items = tokio::time::timeout(Duration::from_secs(3), async {
+        let first = consumer.recv().await.expect("the child started");
+        assert!(matches!(&first, ToolStreamItem::Progress(update)
+            if matches!(super::CodeModeProgress::parse(&update.message),
+                Some(super::CodeModeProgress::Started { name, .. }) if name == "slow")));
+        // Yield only once the dispatcher owns the running child, regardless
+        // of how long the independent script thread took to start.
+        cells.get(SCOPE, "cell-0").unwrap().mark_yielded();
+        let mut items = vec![first];
+        items.extend(consumer.drain().await);
+        items
+    })
+    .await
+    .expect("the progress stream closes when run_code returns");
     assert!(
         items
             .iter()
             .all(|item| !matches!(item, ToolStreamItem::Terminal(_))),
         "run_code streams progress only; the terminal is the returned result"
-    );
-    assert!(
-        items
-            .iter()
-            .any(|item| matches!(item, ToolStreamItem::Progress(_))),
-        "the call progress reached the stream: {items:?}"
     );
     let result = handle
         .await

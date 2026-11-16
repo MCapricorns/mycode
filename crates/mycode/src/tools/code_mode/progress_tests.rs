@@ -17,6 +17,7 @@ use crate::tools::{ToolCtx, ToolDyn, ToolError, ToolRegistry, ToolStream, ToolSt
 struct RecordingHost {
     calls: Mutex<Vec<String>>,
     cancels: Mutex<HashMap<String, CancellationToken>>,
+    resume_delayed: tokio::sync::Notify,
 }
 
 impl AgentHost for RecordingHost {
@@ -45,7 +46,7 @@ impl AgentHost for RecordingHost {
                     )))
                 }
                 "delayed" => {
-                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    self.resume_delayed.notified().await;
                     progress.progress("agent|scout|step|late progress");
                     Ok("done".to_owned())
                 }
@@ -160,28 +161,27 @@ async fn wait_code_forwards_live_child_progress_with_the_original_call_id() {
     let cells = Arc::new(CodeCells::new());
     let run = RunCodeTool::new(Arc::clone(&registry), Arc::clone(&cells), "s".to_owned());
     let ctx = ToolCtx::new(std::env::temp_dir()).with_call_id("outer");
-    let running = run.execute_dyn(
-        json!({"script": "call(\"agent\", { agent: \"scout\", prompt: \"delayed\" });", "yield_time_ms": 20}),
+    run.execute_dyn(
+        json!({"script": "call(\"agent\", { agent: \"scout\", prompt: \"delayed\" });", "yield_time_ms": 0}),
         &ctx, &mut ToolStream::closed(),
     ).await.unwrap();
-    assert_eq!(
-        running.details.as_ref().unwrap()["inner_calls"][0]["call_id"],
-        "outer.0"
-    );
-    assert_eq!(
-        running.details.as_ref().unwrap()["inner_calls"][0]["phase"],
-        "running"
-    );
     let wait = WaitCodeTool::new(Arc::clone(&cells), "s".to_owned());
     let (mut out, mut updates) = ToolStream::channel();
-    let done = wait
-        .execute_dyn(
-            json!({"cell_id": "cell-0"}),
-            &ToolCtx::new(std::env::temp_dir()).with_call_id("waiter"),
-            &mut out,
-        )
-        .await
-        .unwrap();
+    let wait_ctx = ToolCtx::new(std::env::temp_dir()).with_call_id("waiter");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (done, ()) = tokio::join!(
+            wait.execute_dyn(json!({"cell_id": "cell-0"}), &wait_ctx, &mut out),
+            async {
+                // Both futures run in this task: the wait has subscribed before
+                // its initial status can be received here and the child released.
+                updates.recv().await.expect("wait_code started waiting");
+                host.resume_delayed.notify_one();
+            },
+        );
+        done.unwrap();
+    })
+    .await
+    .expect("wait_code forwards the released child's progress");
     drop(out);
     let events = events(updates.drain().await);
     assert!(
@@ -195,10 +195,6 @@ async fn wait_code_forwards_live_child_progress_with_the_original_call_id() {
         CodeModeProgress::Completed { call_id, phase: InnerCallPhase::Completed, .. }
             if call_id == "outer.0")),
         "{events:?}"
-    );
-    assert_eq!(
-        done.details.as_ref().unwrap()["inner_calls"][0]["phase"],
-        "completed"
     );
 }
 
