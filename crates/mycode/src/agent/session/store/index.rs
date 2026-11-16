@@ -251,12 +251,14 @@ impl SessionStore {
             params![session.as_str(), branch.as_str()],
         )
         .map_err(|_| StoreError::Storage)?;
-        tx.commit().map_err(|_| StoreError::Storage)?;
         let paths = SessionPaths::at(&self.home, dir.to_owned());
         let absolute = paths
             .absolute(&paths.session_dir())
             .map_err(|_| StoreError::Unavailable)?;
+        // Do not publish index rows for a session whose directory cannot be
+        // created. An I/O error here rolls back both rows with the transaction.
         std::fs::create_dir_all(absolute).map_err(|_| StoreError::Storage)?;
+        tx.commit().map_err(|_| StoreError::Storage)?;
         self.dirs
             .borrow_mut()
             .insert(session.clone(), dir.to_owned());
@@ -1002,3 +1004,6 @@ pub(crate) fn delete_indexed_session(
 mod connection;
 pub(crate) use self::connection::decode_head;
 use self::connection::*;
+
+#[cfg(test)]
+mod tests;
