@@ -19,6 +19,16 @@
 
 ---
 
+## v0.12.48 更新摘要
+
+- **会话一致性**：忽略过期的打开快照，避免回合结束或删除会话后恢复旧状态；创建会话目录失败时回滚索引。
+- **MCP 长流**：按单个 SSE 事件检查消息大小，允许多条通知累计超过限制后正常返回工具结果。
+- **Windows 更新恢复**：协调并发安装与启动清理，保护安装中的备份和临时文件；重试计数保存失败时保持应用运行，空闲时继续清理更新残留。
+
+完整变更见 [更新日志](CHANGELOG.md)。
+
+---
+
 ## 概览
 
 MYCode 由核心运行时 `mycode` 与原生桌面壳 `mycode-desktop` 构成。打开即可在默认空间发起对话；绑定本地项目后，模型可通过内置工具与 QuickJS 脚本读取仓库、并发检索、编辑文件、执行命令，并通过独立的 `Diff` 与 `Details` 面板逐项检验结果。
@@ -189,12 +199,15 @@ cargo run -p mycode-desktop --locked
 cargo build --release -p mycode-desktop --locked
 ```
 
-提交前建议完整执行以下检查：
+Windows 本机使用 PowerShell 执行以下检查，只编译当前 native target；其他平台和架构由 GitHub Actions 验证，无需在本机添加 target。`--all-targets` 指当前平台的各类 Cargo 构建目标。
 
-```sh
+```powershell
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+$previousRustdocFlags = $env:RUSTDOCFLAGS
+$env:RUSTDOCFLAGS = "-D warnings"
+cargo doc --workspace --no-deps --locked
+$env:RUSTDOCFLAGS = $previousRustdocFlags
 cargo test --workspace --locked
 cargo test -p mycode-desktop --features test-support --locked
 python scripts/make_icon.py --check

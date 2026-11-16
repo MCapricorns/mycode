@@ -8,6 +8,21 @@
 
 ## [Unreleased]
 
+## [0.12.48] - 2026-11-16
+
+### Fixed
+
+- 修复 Windows 更新 helper 并发替换与启动清理之间的竞争，避免删除正在替换的程序或回滚文件；更新重试计数无法写入时保持应用打开，后续启动继续清理曾被占用的更新 helper。
+- 修复回合结束、快速切换同一会话及删除会话后迟到的打开结果覆盖当前界面的问题，避免已结束的会话重新显示为运行中或已删除会话重新出现。
+- 会话目录创建失败时回滚 SQLite 索引，避免留下无法打开的会话，并允许使用相同标识重试。
+- MCP SSE 按单个事件限制缓冲大小，避免正常的长通知流因累计超过上限而中断，同时保留单事件大小限制。
+
+### Changed
+
+- 复用 Windows 与 Unix 文件工具的有界内容读写逻辑，移除重复实现及不适用平台的编译路径。
+- 清理多余扫描状态、固定参数分支、重复测试初始化与断言；CodeMode 进度测试使用实际事件同步，worktree 测试使用独立临时目录，移除短延时启动与时间戳唯一性假设。
+- 更新 README、主页中英文版本摘要及离线 Wiki 源码快照。
+
 ## [0.12.47] - 2026-11-13
 
 ### Changed
@@ -738,7 +753,8 @@
 - CLI 欢迎区显示 Ferris 螃蟹（hi ferris）；转录里中断/错误行（`[error] …`）红色加粗，思考改为品红斜体，与正文区分开。
 - 回合进行中显示已用时间：CLI 每秒刷新并显示最新一行思考，桌面状态行同样带耗时。
 
-[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.47...HEAD
+[Unreleased]: https://github.com/MCapricorns/mycode/compare/v0.12.48...HEAD
+[0.12.48]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.48
 [0.12.47]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.47
 [0.12.46]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.46
 [0.12.45]: https://github.com/MCapricorns/mycode/releases/tag/v0.12.45
