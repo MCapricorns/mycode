@@ -22,10 +22,10 @@ use std::future::Future;
 use std::pin::Pin;
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 #[cfg(not(windows))]
 use tokio::process::Child;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 
 #[cfg(windows)]
 use crate::tools::WindowsStdioProcess;
@@ -44,6 +44,99 @@ const STDERR_LINE_CHARS: usize = 400;
 /// Grace period between closing stdin and killing the child on shutdown.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(1500);
 
+#[derive(Clone, Debug)]
+enum ReaderFailure {
+    Closed,
+    Error(McpError),
+}
+
+type PendingResponse = oneshot::Sender<Result<Value, ReaderFailure>>;
+type ResponseReceiver = oneshot::Receiver<Result<Value, ReaderFailure>>;
+
+#[derive(Default)]
+struct ReplyState {
+    pending: Option<(u64, PendingResponse)>,
+    failure: Option<ReaderFailure>,
+}
+
+/// Only the current request may retain a reply. Notifications and stale ids
+/// never queue up behind an idle client or consume unbounded memory.
+#[derive(Default)]
+struct ReplyRouter {
+    state: StdMutex<ReplyState>,
+}
+
+impl ReplyRouter {
+    fn register(
+        self: &Arc<Self>,
+        id: u64,
+    ) -> Result<(ResponseReceiver, PendingReply), ReaderFailure> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(failure) = &state.failure {
+            return Err(failure.clone());
+        }
+        let (sender, receiver) = oneshot::channel();
+        state.pending = Some((id, sender));
+        Ok((
+            receiver,
+            PendingReply {
+                id,
+                router: Arc::clone(self),
+            },
+        ))
+    }
+
+    fn deliver(&self, value: Value) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|(id, _)| value["id"].as_u64() == Some(*id))
+            && let Some((_, sender)) = state.pending.take()
+        {
+            let _ = sender.send(Ok(value));
+        }
+    }
+
+    fn fail(&self, failure: ReaderFailure) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.failure.is_none() {
+            state.failure = Some(failure.clone());
+        }
+        if let Some((_, sender)) = state.pending.take() {
+            let _ = sender.send(Err(failure));
+        }
+    }
+}
+
+/// A timed-out, cancelled, or failed write cannot leave an abandoned waiter.
+struct PendingReply {
+    id: u64,
+    router: Arc<ReplyRouter>,
+}
+
+impl Drop for PendingReply {
+    fn drop(&mut self) {
+        let mut state = self
+            .router
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.pending.as_ref().is_some_and(|(id, _)| *id == self.id) {
+            state.pending = None;
+        }
+    }
+}
+
 /// One live stdio server session.
 ///
 /// The child is killed when the channel drops; stdout stays bounded by
@@ -51,11 +144,14 @@ const SHUTDOWN_GRACE: Duration = Duration::from_millis(1500);
 /// messages.
 pub struct StdioChannel {
     child: Mutex<HostChild>,
-    stdin: Mutex<Option<tokio::process::ChildStdin>>,
-    stdout: Mutex<BufReader<tokio::process::ChildStdout>>,
+    stdin: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
+    /// One exchange at a time; notifications continue while no exchange runs.
+    exchange: Mutex<()>,
+    replies: Arc<ReplyRouter>,
+    stdout_reader: tokio::task::JoinHandle<()>,
     stderr_tail: Arc<StdMutex<VecDeque<String>>>,
     timeout: Duration,
-    tools_changed: AtomicBool,
+    tools_changed: Arc<AtomicBool>,
     /// Process-group id captured at spawn. Shutdown signals the group.
     #[cfg(unix)]
     group_id: AtomicI32,
@@ -102,13 +198,25 @@ impl StdioChannel {
                 collect_stderr(BufReader::new(stderr), &tail).await;
             });
         }
+        let stdin = Arc::new(Mutex::new(Some(stdin)));
+        let replies = Arc::new(ReplyRouter::default());
+        let tools_changed = Arc::new(AtomicBool::new(false));
+        let stdout_reader = tokio::spawn(read_stdout(
+            BufReader::new(stdout),
+            Arc::clone(&stdin),
+            Arc::clone(&replies),
+            Arc::clone(&tools_changed),
+            timeout,
+        ));
         Ok(Self {
             child: Mutex::new(child),
-            stdin: Mutex::new(Some(stdin)),
-            stdout: Mutex::new(BufReader::new(stdout)),
+            stdin,
+            exchange: Mutex::new(()),
+            replies,
+            stdout_reader,
             stderr_tail,
             timeout,
-            tools_changed: AtomicBool::new(false),
+            tools_changed,
             #[cfg(unix)]
             group_id,
         })
@@ -120,6 +228,8 @@ impl StdioChannel {
     /// server can exit on its own; `.cmd` launchers on Windows spawn the
     /// real server as a grandchild that only a stdin EOF reaches.
     pub async fn shutdown(&self) {
+        self.stdout_reader.abort();
+        self.replies.fail(ReaderFailure::Closed);
         self.stdin.lock().await.take();
         let mut child = self.child.lock().await;
         let _ = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await;
@@ -177,86 +287,13 @@ impl StdioChannel {
     }
 
     async fn write_line(&self, line: &[u8]) -> Result<(), McpError> {
-        let mut guard = self.stdin.lock().await;
-        let stdin = guard
-            .as_mut()
-            .ok_or_else(|| McpError::transport("server stdin is closed"))?;
-        let write = async {
-            stdin.write_all(line).await?;
-            stdin.write_all(b"\n").await?;
-            stdin.flush().await
-        };
-        write
-            .await
-            .map_err(|error| McpError::transport(format!("write to server failed: {error}")))
-    }
-
-    async fn wait_for(&self, id: u64) -> Result<Value, McpError> {
-        let mut raw = Vec::new();
-        loop {
-            let read =
-                read_bounded_line(&mut *self.stdout.lock().await, &mut raw, MAX_MESSAGE_BYTES)
-                    .await
-                    .map_err(|error| {
-                        McpError::transport(format!("read from server failed: {error}"))
-                    })?;
-            match read {
-                LineRead::Eof => return Err(McpError::transport(self.closed_reason().await)),
-                LineRead::Oversized => return Err(McpError::Oversized),
-                LineRead::Line => {}
-            }
-            // Servers occasionally log to stdout; a non-JSON line is noise,
-            // not a protocol failure.
-            let Ok(text) = std::str::from_utf8(&raw) else {
-                continue;
-            };
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-                continue;
-            };
-            if value["method"].as_str() == Some("notifications/tools/list_changed")
-                && value["id"].is_null()
-            {
-                self.tools_changed.store(true, Ordering::Relaxed);
-            }
-            if value["method"].is_string() && !value["id"].is_null() {
-                self.answer_server_request(&value).await?;
-                continue;
-            }
-            if value["id"].as_u64() != Some(id) {
-                // Notifications and stale replies are skipped.
-                continue;
-            }
-            if let Some(error) = value.get("error").filter(|error| error.is_object()) {
-                return Err(McpError::server(error));
-            }
-            return Ok(value["result"].clone());
-        }
-    }
-
-    /// Replies to a server-initiated request so the server never blocks on
-    /// a capability this client does not offer.
-    async fn answer_server_request(&self, request: &Value) -> Result<(), McpError> {
-        let reply = if request["method"].as_str() == Some("ping") {
-            json!({"jsonrpc": "2.0", "id": request["id"], "result": {}})
-        } else {
-            json!({
-                "jsonrpc": "2.0",
-                "id": request["id"],
-                "error": {"code": -32601, "message": "method not supported by this client"},
-            })
-        };
-        let line =
-            serde_json::to_vec(&reply).map_err(|error| McpError::protocol(error.to_string()))?;
-        self.write_line(&line).await
+        write_line(&self.stdin, line).await
     }
 }
 
 impl Drop for StdioChannel {
     fn drop(&mut self) {
+        self.stdout_reader.abort();
         #[cfg(unix)]
         self.kill_process_group();
     }
@@ -287,8 +324,28 @@ impl JsonRpcChannel for StdioChannel {
             // The deadline includes backpressure on stdin: a server that
             // stops reading must not hang the turn before reply waiting starts.
             let exchange = async {
+                let _exchange = self.exchange.lock().await;
+                let (reply, _pending) = match self.replies.register(id) {
+                    Ok(pending) => pending,
+                    Err(ReaderFailure::Closed) => {
+                        return Err(McpError::transport(self.closed_reason().await));
+                    }
+                    Err(ReaderFailure::Error(error)) => return Err(error),
+                };
                 self.write_line(&line).await?;
-                self.wait_for(id).await
+                match reply.await {
+                    Ok(Ok(mut value)) => {
+                        if let Some(error) = value.get("error").filter(|error| error.is_object()) {
+                            Err(McpError::server(error))
+                        } else {
+                            Ok(value["result"].take())
+                        }
+                    }
+                    Ok(Err(ReaderFailure::Error(error))) => Err(error),
+                    Ok(Err(ReaderFailure::Closed)) | Err(_) => {
+                        Err(McpError::transport(self.closed_reason().await))
+                    }
+                }
             };
             match tokio::time::timeout(self.timeout, exchange).await {
                 Ok(outcome) => outcome,
@@ -318,6 +375,87 @@ impl JsonRpcChannel for StdioChannel {
             StdioChannel::shutdown(self).await;
         })
     }
+}
+
+async fn write_line<W>(stdin: &Mutex<Option<W>>, line: &[u8]) -> Result<(), McpError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut guard = stdin.lock().await;
+    let stdin = guard
+        .as_mut()
+        .ok_or_else(|| McpError::transport("server stdin is closed"))?;
+    let write = async {
+        stdin.write_all(line).await?;
+        stdin.write_all(b"\n").await?;
+        stdin.flush().await
+    };
+    write
+        .await
+        .map_err(|error| McpError::transport(format!("write to server failed: {error}")))
+}
+
+/// Continuously consumes stdout, including notifications between RPCs.
+/// Server-initiated requests receive bounded replies even while the client
+/// is idle. A failed read/write wakes the waiter and rejects later requests.
+async fn read_stdout<R, W>(
+    mut stdout: R,
+    stdin: Arc<Mutex<Option<W>>>,
+    replies: Arc<ReplyRouter>,
+    tools_changed: Arc<AtomicBool>,
+    timeout: Duration,
+) where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut raw = Vec::new();
+    let failure = loop {
+        match read_bounded_line(&mut stdout, &mut raw, MAX_MESSAGE_BYTES).await {
+            Ok(LineRead::Eof) => break ReaderFailure::Closed,
+            Ok(LineRead::Oversized) => break ReaderFailure::Error(McpError::Oversized),
+            Ok(LineRead::Line) => {}
+            Err(error) => {
+                break ReaderFailure::Error(McpError::transport(format!(
+                    "read from server failed: {error}"
+                )));
+            }
+        }
+        // Some servers log to stdout; invalid JSON lines remain ignorable.
+        let Ok(value) = serde_json::from_slice::<Value>(&raw) else {
+            continue;
+        };
+        if value["method"].as_str() == Some("notifications/tools/list_changed")
+            && value["id"].is_null()
+        {
+            tools_changed.store(true, Ordering::Relaxed);
+        }
+        if value["method"].is_string() && !value["id"].is_null() {
+            let reply = if value["method"].as_str() == Some("ping") {
+                json!({"jsonrpc": "2.0", "id": value["id"], "result": {}})
+            } else {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": value["id"],
+                    "error": {"code": -32601, "message": "method not supported by this client"},
+                })
+            };
+            let line = match serde_json::to_vec(&reply) {
+                Ok(line) => line,
+                Err(error) => break ReaderFailure::Error(McpError::protocol(error.to_string())),
+            };
+            if line.len() > MAX_MESSAGE_BYTES {
+                break ReaderFailure::Error(McpError::Oversized);
+            }
+            match tokio::time::timeout(timeout, write_line(&stdin, &line)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => break ReaderFailure::Error(error),
+                Err(_) => break ReaderFailure::Error(McpError::Timeout),
+            }
+        } else {
+            replies.deliver(value);
+        }
+    };
+    replies.fail(failure);
 }
 
 /// Drain diagnostic lines without buffering an unbounded line from the child.
@@ -559,6 +697,108 @@ fn launch_stdio_process(
 #[cfg(test)]
 mod tests {
     use super::filter_stdio_env;
+
+    #[tokio::test]
+    async fn idle_notifications_and_server_pings_do_not_wait_for_an_rpc() {
+        use super::{ReplyRouter, read_stdout};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+
+        let (client, server) = tokio::io::duplex(4096);
+        let (stdout, stdin) = tokio::io::split(client);
+        let replies = Arc::new(ReplyRouter::default());
+        let changed = Arc::new(AtomicBool::new(false));
+        let reader = tokio::spawn(read_stdout(
+            BufReader::new(stdout),
+            Arc::new(tokio::sync::Mutex::new(Some(stdin))),
+            Arc::clone(&replies),
+            Arc::clone(&changed),
+            Duration::from_secs(2),
+        ));
+        let mut server = BufReader::new(server);
+        server
+            .get_mut()
+            .write_all(
+                concat!(
+                    "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n",
+                    "{\"jsonrpc\":\"2.0\",\"id\":\"server-ping\",\"method\":\"ping\"}\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(2), server.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        let pong: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(pong["id"], "server-ping");
+        assert!(pong["result"].is_object());
+        assert!(changed.swap(false, Ordering::Relaxed));
+        assert!(!changed.load(Ordering::Relaxed));
+
+        // A normal reply still reaches its caller after idle notifications,
+        // while unsolicited or stale ids never occupy a response queue.
+        let (reply, _pending) = replies.register(41).unwrap();
+        server
+            .get_mut()
+            .write_all(
+                concat!(
+                    "{\"jsonrpc\":\"2.0\",\"id\":40,\"result\":\"stale\"}\n",
+                    "{\"jsonrpc\":\"2.0\",\"id\":41,\"result\":{\"ok\":true}}\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), reply)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["result"]["ok"], true);
+        reader.abort();
+        let _ = reader.await;
+    }
+
+    #[tokio::test]
+    async fn a_dropped_exchange_retires_its_waiter_and_skips_a_late_reply() {
+        let replies = std::sync::Arc::new(super::ReplyRouter::default());
+        let (first, pending) = replies.register(1).unwrap();
+        drop(pending);
+        assert!(first.await.is_err());
+        let (second, _pending) = replies.register(2).unwrap();
+        replies.deliver(serde_json::json!({"id": 1, "result": "cancelled"}));
+        replies.deliver(serde_json::json!({"id": 2, "result": "current"}));
+        assert_eq!(second.await.unwrap().unwrap()["result"], "current");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_idle_line_fails_pending_and_future_exchanges() {
+        let replies = std::sync::Arc::new(super::ReplyRouter::default());
+        let (reply, _pending) = replies.register(1).unwrap();
+        let mut bytes = vec![b'x'; super::MAX_MESSAGE_BYTES + 1];
+        bytes.push(b'\n');
+        super::read_stdout(
+            bytes.as_slice(),
+            std::sync::Arc::new(tokio::sync::Mutex::new(Some(tokio::io::sink()))),
+            std::sync::Arc::clone(&replies),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+        assert!(matches!(
+            reply.await.unwrap(),
+            Err(super::ReaderFailure::Error(super::McpError::Oversized))
+        ));
+        assert!(matches!(
+            replies.register(2),
+            Err(super::ReaderFailure::Error(super::McpError::Oversized))
+        ));
+    }
 
     #[tokio::test]
     async fn stderr_keeps_only_the_latest_nonempty_lines() {
