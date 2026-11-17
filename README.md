@@ -86,6 +86,8 @@ MYCode 由核心运行时 `mycode` 与原生桌面壳 `mycode-desktop` 构成。
 - **Paper-Pixel 工作台**：支持亮色/深色两套纸感主题与 `S / M / L / XL` 四档界面字号（详见 [DESIGN.md](DESIGN.md)）；窗口大小调整不会静默覆盖字号设置。
 - **Details 检查面板**：按「子代理任务」「文件改动」「模型与用量」清晰分组，支持右侧固定停靠或浮层展开，点击变更文件即可查看高亮 Git diff。
 - **会话状态隔离**：模型与思考强度按会话独立保存，模型徽章保留网关返回的来源标识（不同来源的同名模型分别列出），思考档位仅展示模型声明的支持级别。
+- **失败后继续**：模型请求失败会保留已收到的内容和已完成的工具结果。通过「继续任务」从当前记录接着工作，不自动重放之前的工具操作，也不覆盖未发送草稿。
+- **回合预算**：设置 → 通用可调整主代理与子代理共享的模型请求上限，默认 64；达到上限后保留进度，可显式继续。该计数包含上下文溢出后的模型重发，不包括网络层内部重试和摘要请求，不是 token 或费用限额。
 
 ### 附件与输入限制
 
@@ -221,6 +223,7 @@ python -B -m unittest discover -s wiki/tests -v
 
 - 架构设计与源码深入导览：[运行时架构](wiki/architecture/runtime.md) · [CodeMode 引擎](wiki/architecture/code-mode-engine.md) · [性能记录](wiki/memory-report.md) · [Wiki 维护说明](wiki/README.md)
 - CI 自动覆盖 Windows x64 / ARM64、macOS Apple Silicon 与 Ubuntu 24.04 x64；触发 `[release]` 推送需提前在 `CHANGELOG.md` 写入具体变更说明。
+- 固定代码任务评测：`cargo test -p mycode --test code_tasks --locked` 离线运行真实工具与独立代码验收，已纳入 workspace 测试；[评测说明](crates/mycode/tests/fixtures/code_tasks/README.md) 提供显式开启的真实模型评测命令、请求上限及结果解读。
 
 ---
 

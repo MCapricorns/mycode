@@ -363,7 +363,7 @@
       "label": "模型与工具循环",
       "group": "module",
       "lane": 5,
-      "summary": "向模型发请求，逐步接收回复，执行模型要求的工具，再把结果发回模型，直到答复完成或用户停止。对话记录会保存，界面线程不执行这个循环。",
+      "summary": "向模型发请求，逐步接收回复并执行工具，直到完成、失败、达到主子代理共享预算或用户停止。失败保留进度，可显式继续；界面线程不执行这个循环。",
       "links": [
         "app",
         "sessions",
@@ -372,6 +372,7 @@
       ],
       "files": [
         "crates/mycode/src/agent.rs",
+        "crates/mycode/src/agent/budget.rs",
         "crates/mycode/src/agent/turn.rs",
         "crates/mycode/src/agent/prompt.rs"
       ]
@@ -519,6 +520,7 @@
       "files": [
         "crates/mycode/src/config.rs",
         "crates/mycode/src/config/settings.rs",
+        "crates/mycode/src/config/settings/run_limits.rs",
         "crates/mycode/src/config/home.rs",
         "crates/mycode/src/config/subagents.rs",
         "crates/mycode/src/config/resources.rs"
