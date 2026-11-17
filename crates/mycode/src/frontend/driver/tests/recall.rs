@@ -137,3 +137,28 @@ fn recall_restores_exact_text_only_after_success_and_drops_stale_replies() {
     driver.shutdown();
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn recalling_a_failed_tail_clears_its_continue_action() {
+    let (mut driver, root) = scratch_driver("recall-failed-tail");
+    let session = SessionId::generate().unwrap();
+    let branch = BranchId::generate().unwrap();
+    let mut active = conversation(session.as_str(), branch.as_str());
+    active.entries.push(user_entry());
+    driver.vm.active = Some(active.clone());
+    driver.vm.turn_alert = Some("provider failed".into());
+    assert!(driver.recovery_target().is_some());
+    let mut successful = user_entry();
+    successful.kind = EntryKind::AssistantMessage;
+    successful.text = "completed earlier task".into();
+    active.entries.push(successful);
+    driver.on_reply(
+        super::ReplyScope::Global,
+        BridgeReply::Recalled(Ok((Box::new(active), Some("edit failed request".into())))),
+        &mut Vec::new(),
+    );
+    assert!(driver.turn_failure_message().is_none());
+    assert!(driver.recovery_target().is_none());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}

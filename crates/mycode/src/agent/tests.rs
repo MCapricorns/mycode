@@ -85,11 +85,8 @@ async fn provider_error_keeps_streamed_thinking() {
     let outcome = agent
         .prompt(Message::User(UserMessage::text("开始写")), &env)
         .await
-        .expect("completed turn");
-    assert!(matches!(
-        outcome,
-        crate::core::events::TurnOutcome::Completed
-    ));
+        .expect_err("provider failure must not complete the turn");
+    assert!(matches!(outcome, crate::core::MycodeError::Provider(_)));
     assert_eq!(assistant_thinking(&agent), "plan the edit");
     let text = assistant_text(&agent);
     assert!(text.contains("partial"));
@@ -262,3 +259,4 @@ impl crate::tools::ToolDyn for NoteTool {
 }
 
 mod dispatch;
+mod recovery;

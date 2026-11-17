@@ -606,6 +606,17 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
             settings::language_selected(state, language);
         }
         FrontendAction::SettingsThemeSelected(theme) => settings::theme_selected(state, &theme),
+        FrontendAction::SettingsModelRequestLimitSelected(limit) => {
+            if crate::config::RunLimitsSettings::is_valid_limit(limit) {
+                settings::edit_settings(state, |settings| {
+                    if settings.run_limits.max_model_requests == limit {
+                        return false;
+                    }
+                    settings.run_limits.max_model_requests = limit;
+                    true
+                });
+            }
+        }
         FrontendAction::SettingsFontSizeSelected(font_size) => {
             settings::font_size_selected(state, font_size);
         }

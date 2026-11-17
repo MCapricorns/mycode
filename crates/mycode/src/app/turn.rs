@@ -207,6 +207,9 @@ async fn run_chat_turn_on(
 ) -> Result<BridgeEvent, String> {
     let home = &state.home;
     let wire = WireProvider::new(resolved.clone(), transport);
+    let budget = Arc::new(crate::agent::TurnBudget::new(
+        settings.run_limits.max_model_requests,
+    ));
 
     // The tool working directory is the bound project (created on demand).
     let cwd_for_mkdir = cwd.clone();
@@ -295,6 +298,7 @@ async fn run_chat_turn_on(
                     state.mcp_pool.clone(),
                     Arc::clone(&state.code_cells),
                 )
+                .with_budget(Arc::clone(&budget))
                 .with_context(
                     Arc::clone(&state.catalog),
                     provider.clone(),
@@ -501,6 +505,7 @@ async fn run_chat_turn_on(
 
     agent.seed_history(history);
     let env = crate::agent::TurnEnv::new(&wire, &registry, &hooks)
+        .with_budget(budget)
         .with_cancel(control.cancel.clone())
         .with_events(agent_tx)
         .with_cwd(cwd)

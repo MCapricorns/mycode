@@ -414,12 +414,28 @@ async fn a_request_still_over_the_window_is_not_shrunk_twice() {
     let tools = ToolRegistry::new();
     let env = TurnEnv::new(&provider, &tools, &hooks);
     let mut agent = seeded_agent(4);
-    agent
+    let error = agent
         .prompt(Message::User(UserMessage::text("now")), &env)
         .await
-        .expect("completed turn");
+        .expect_err("a second overflow must remain a provider failure");
+    assert!(
+        matches!(error, crate::core::MycodeError::Provider(ref detail)
+        if detail.contains("maximum context length"))
+    );
     assert_eq!(*sizes.lock().expect("sizes"), [5, 3]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     let text = assistant_text(&agent);
     assert!(text.contains("maximum context length"), "{text}");
+    assert!(text.starts_with(crate::core::INTERRUPTED_RESPONSE_PREFIX));
+    // The single shrink remains effective and the failure is appended to
+    // that history, so an explicit continuation can reuse the saved state.
+    assert_eq!(agent.state().messages().len(), 4);
+    assert!(
+        matches!(agent.state().messages()[2].as_ref(), Message::User(user)
+        if user.content == UserMessage::text("now").content)
+    );
+    assert!(
+        matches!(agent.state().messages()[3].as_ref(), Message::Assistant(assistant)
+        if assistant.stop_reason == StopReason::Error)
+    );
 }

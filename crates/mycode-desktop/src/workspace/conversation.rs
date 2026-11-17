@@ -21,6 +21,25 @@ impl DeleteConfirmation {
 }
 
 impl Workspace {
+    pub(crate) fn turn_failure_message(&self) -> Option<String> {
+        self.driver.turn_failure_message()
+    }
+
+    pub(crate) fn recovery_target(&self) -> Option<mycode::frontend::driver::RecoveryTarget> {
+        self.driver.recovery_target()
+    }
+
+    pub(crate) fn on_continue_failed_turn(
+        &mut self,
+        target: &mycode::frontend::driver::RecoveryTarget,
+        cx: &mut Context<Self>,
+    ) {
+        self.driver_do(
+            |driver, effects| driver.continue_failed_turn(target, effects),
+            cx,
+        );
+    }
+
     /// Copies an assistant reply from its card's copy action. The text
     /// arrives already converted to plain text by the transcript, so the
     /// clipboard never carries Markdown markers or rich formatting.

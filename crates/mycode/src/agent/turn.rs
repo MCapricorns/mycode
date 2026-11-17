@@ -77,6 +77,7 @@ pub(crate) async fn stream_assistant(
     state: &mut AgentState,
     started: &mut bool,
     pending_user: &mut Option<Arc<Message>>,
+    budget: &crate::agent::TurnBudget,
 ) -> Result<SharedMessage, TurnFailure> {
     let system_prompt = if config.system_prompt.is_empty() {
         Arc::from([build_system_prompt(env.tools)])
@@ -137,6 +138,13 @@ pub(crate) async fn stream_assistant(
     // resend would repeat what the user already saw.
     let mut may_shrink = env.hooks.recovers_overflow();
     'request: loop {
+        if token.is_cancelled() {
+            return Err(TurnFailure::Aborted);
+        }
+        if let Err(error) = budget.try_start_request() {
+            emit(env, AgentEvent::Error(error.clone()));
+            return Err(TurnFailure::Error(error));
+        }
         // One request gets a child token: dropping its receiver must stop that
         // producer without cancelling later response cycles in the same turn.
         let request_cancel = token.child_token();
@@ -161,7 +169,7 @@ pub(crate) async fn stream_assistant(
                 }
                 // Nothing has streamed. Keep a visible assistant line instead of
                 // dropping the turn.
-                return Ok(commit_interrupted(
+                return Err(keep_failed_partial(
                     env,
                     state,
                     String::new(),
@@ -229,7 +237,7 @@ pub(crate) async fn stream_assistant(
                         request = smaller;
                         continue 'request;
                     }
-                    return Ok(commit_interrupted(
+                    return Err(keep_failed_partial(
                         env,
                         state,
                         draft_thinking,
@@ -249,7 +257,7 @@ pub(crate) async fn stream_assistant(
                 draft_text,
             ));
         }
-        return Ok(commit_interrupted(
+        return Err(keep_failed_partial(
             env,
             state,
             draft_thinking,
@@ -257,6 +265,26 @@ pub(crate) async fn stream_assistant(
             "provider stream ended without a terminal event",
         ));
     }
+}
+
+/// Keeps received output before reporting a failure to the ledger/UI.
+/// Returning an error prevents a provider failure from becoming Completed.
+fn keep_failed_partial(
+    env: &TurnEnv<'_>,
+    state: &mut AgentState,
+    thinking: String,
+    text: String,
+    detail: &str,
+) -> TurnFailure {
+    commit_interrupted(env, state, thinking, text, detail);
+    TurnFailure::Error(provider_failed(env, detail))
+}
+
+/// Emits the failure only after any partial assistant/tool records were kept.
+pub(crate) fn provider_failed(env: &TurnEnv<'_>, detail: impl Into<String>) -> MycodeError {
+    let error = MycodeError::Provider(detail.into());
+    emit(env, AgentEvent::Error(error.clone()));
+    error
 }
 
 /// Asks the overflow hook for a smaller request than `refused`.

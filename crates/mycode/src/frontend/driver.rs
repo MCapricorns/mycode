@@ -36,6 +36,7 @@ mod sends;
 mod sessions;
 mod settings;
 mod turn;
+pub use turn::RecoveryTarget;
 mod updates;
 
 #[cfg(test)]

@@ -4,16 +4,18 @@
 //! cancellation, steering and compaction hooks. `session` persists events and
 //! recovers committed branches independently of the desktop.
 //!
-//! One prompt is one turn, containing as many provider/tool cycles as needed.
+//! One prompt is one turn, bounded by a shared model-request allowance.
 //! Cancellation retains streamed text and thinking, marks the interruption,
 //! and returns an aborted outcome after in-flight work settles.
 
+mod budget;
 pub mod env;
 pub mod hooks;
 mod prompt;
 pub mod session;
 mod turn;
 
+pub use budget::{DEFAULT_MAX_MODEL_REQUESTS, TurnBudget};
 pub use env::{SteerInbox, TurnEnv};
 pub use hooks::HookRunner;
 pub use prompt::{build_system_prompt, shell_tool_name};
@@ -152,7 +154,8 @@ impl Agent {
     /// [`TurnOutcome::Aborted`] and keeps the in-flight partial
     /// (thinking, text, and an interruption line); a formed tool call
     /// only arrives with `Done`. Incomplete tool calls are not executed.
-    /// A provider failure keeps the same partial and completes the turn.
+    /// Provider failures and exhausted request budgets preserve completed
+    /// work and return an error so the caller can offer explicit continuation.
     /// Tool-level failures never end the turn (they become `is_error`
     /// tool results the model can react to). Steers queued on
     /// [`TurnEnv::steer`] are appended at loop boundaries and do not
@@ -168,7 +171,9 @@ impl Agent {
         // A dropped prompt must cancel detached work started by its tools.
         // Completed turns deliberately keep yielded code cells collectible.
         let cancel_on_drop = token.clone().drop_guard();
-        let outcome = run_turn(&self.config, &mut self.state, msg, env, &token).await;
+        let default_budget = TurnBudget::default();
+        let budget = env.budget.as_deref().unwrap_or(&default_budget);
+        let outcome = run_turn(&self.config, &mut self.state, msg, env, &token, budget).await;
         if matches!(outcome, Ok(TurnOutcome::Completed)) {
             cancel_on_drop.disarm();
         }
@@ -186,9 +191,10 @@ async fn run_turn(
     msg: Message,
     env: &TurnEnv<'_>,
     token: &CancellationToken,
+    budget: &TurnBudget,
 ) -> Result<TurnOutcome, MycodeError> {
     let mut started = false;
-    let outcome = agent_loop(config, state, msg, env, token, &mut started).await;
+    let outcome = agent_loop(config, state, msg, env, token, &mut started, budget).await;
     if started {
         match &outcome {
             Ok(outcome) => turn::emit(env, AgentEvent::TurnEnded(*outcome)),
@@ -208,6 +214,7 @@ async fn agent_loop(
     env: &TurnEnv<'_>,
     token: &CancellationToken,
     started: &mut bool,
+    budget: &TurnBudget,
 ) -> Result<TurnOutcome, MycodeError> {
     let saved = state.messages.clone();
     let prompt = Arc::new(prompt_msg);
@@ -231,21 +238,28 @@ async fn agent_loop(
             drain_steers(env, state);
         }
 
-        let assistant =
-            match turn::stream_assistant(env, token, config, state, started, &mut pending_user)
-                .await
-            {
-                Ok(message) => message,
-                Err(TurnFailure::Aborted) => {
-                    aborted = true;
-                    break;
-                }
-                Err(TurnFailure::NotStarted(err)) => {
-                    state.messages = saved;
-                    return Err(err);
-                }
-                Err(TurnFailure::Error(err)) => return Err(err),
-            };
+        let assistant = match turn::stream_assistant(
+            env,
+            token,
+            config,
+            state,
+            started,
+            &mut pending_user,
+            budget,
+        )
+        .await
+        {
+            Ok(message) => message,
+            Err(TurnFailure::Aborted) => {
+                aborted = true;
+                break;
+            }
+            Err(TurnFailure::NotStarted(err)) => {
+                state.messages = saved;
+                return Err(err);
+            }
+            Err(TurnFailure::Error(err)) => return Err(err),
+        };
         // The response cycle only ever appends an assistant message; reuse
         // that shared message instead of copying it back out of history.
         let Message::Assistant(assistant) = assistant.as_ref() else {
@@ -263,8 +277,8 @@ async fn agent_loop(
 
         if calls.is_empty() || assistant.stop_reason == StopReason::Error {
             // A failed stream may still name tool calls. Pair each one
-            // with an error result and do not run them. A queued steer
-            // still continues this turn; otherwise it ends.
+            // with an error result and do not run them. An interrupted
+            // response ends as failed so continuation is an explicit action.
             if assistant.stop_reason == StopReason::Error {
                 for call in calls
                     .iter()
@@ -273,6 +287,16 @@ async fn agent_loop(
                     let message = turn::fail_interrupted_call(env, call);
                     turn::push_shared(env, state, message);
                 }
+                return Err(turn::provider_failed(
+                    env,
+                    "provider returned an interrupted response",
+                ));
+            }
+            if assistant.stop_reason == StopReason::Length {
+                return Err(turn::provider_failed(
+                    env,
+                    "response reached the output limit before completion",
+                ));
             }
             // No further tool calls: this response would end the turn.
             // A steer that landed while it streamed starts another cycle
@@ -528,3 +552,6 @@ fn drain_steers(env: &TurnEnv<'_>, state: &mut AgentState) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod budget_tests;

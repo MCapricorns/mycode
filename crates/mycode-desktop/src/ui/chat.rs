@@ -423,9 +423,9 @@ pub(super) fn render_chat(
                                             this.child(preparing)
                                         })
                                         .when_some(
-                                            workspace.vm().turn_alert.as_ref(),
+                                            workspace.turn_failure_message(),
                                             |this, alert| {
-                                                this.child(render_turn_alert(alert, cx.theme()))
+                                                this.child(render_turn_alert(&alert, workspace, cx))
                                             },
                                         ),
                                 ),
@@ -462,23 +462,59 @@ pub(super) fn render_chat(
 /// is not mistaken for a completed answer.
 fn render_turn_alert(
     message: &str,
-    theme: &gpui_kit::component::theme::Theme,
+    workspace: &Workspace,
+    cx: &Context<Workspace>,
 ) -> gpui_kit::AnyElement {
+    let theme = cx.theme();
     div()
         .id("turn-alert")
         .w_full()
         .px_4()
         .py(px(6.))
         .flex()
-        .items_center()
+        .flex_col()
+        .items_start()
         .gap_2()
-        .child(crate::ui::lamp(theme.danger))
         .child(
             div()
-                .text_sm()
-                .text_color(theme.danger)
-                .child(message.to_owned()),
+                .w_full()
+                .min_w_0()
+                .flex()
+                .items_start()
+                .gap_2()
+                .child(div().pt(px(5.)).child(crate::ui::lamp(theme.danger)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .text_sm()
+                        .text_color(theme.danger)
+                        .child(message.to_owned()),
+                ),
         )
+        .when_some(workspace.recovery_target(), |this, target| {
+            this.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        super::skin::glass_button("continue-failed-turn", false, theme)
+                            .h(px(28.))
+                            .text_xs()
+                            .child(t("Continue task", "继续任务"))
+                            .on_click(cx.listener(move |workspace, _, _, cx| {
+                                workspace.on_continue_failed_turn(&target, cx);
+                            })),
+                    )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(t(
+                        "Uses saved progress; keeps your draft.",
+                        "从已保存的进度继续，保留当前草稿。",
+                    ))),
+            )
+        })
         .into_any_element()
 }
 

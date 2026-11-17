@@ -10,6 +10,8 @@ pub(super) struct SubmittedTurn {
     /// Taken once the commit succeeds; `None` means its turn was dispatched.
     pub(super) command: Option<Result<BridgeCommand, String>>,
     pub(super) first_message: bool,
+    /// Generated continuation requests must not become composer drafts.
+    pub(super) restore_text_on_failure: bool,
     /// Stop during persistence waits for the commit but must not start a model.
     pub(super) cancelled: bool,
 }
@@ -141,6 +143,12 @@ impl FrontendDriver {
         out: &mut Vec<Effect>,
     ) {
         let submitted = self.submitted_turns.remove(session);
+        if submitted
+            .as_ref()
+            .is_some_and(|turn| !turn.restore_text_on_failure)
+        {
+            text.clear();
+        }
         let attachments = self
             .pending_send_attachments
             .remove(session)
@@ -157,8 +165,10 @@ impl FrontendDriver {
             }
             text.push_str(&send);
         }
-        self.failed_send_drafts
-            .insert(session.to_owned(), FailedSendDraft { text, attachments });
+        if !text.is_empty() || !attachments.is_empty() {
+            self.failed_send_drafts
+                .insert(session.to_owned(), FailedSendDraft { text, attachments });
+        }
         if visible {
             self.act(
                 FrontendAction::ChatFailed {

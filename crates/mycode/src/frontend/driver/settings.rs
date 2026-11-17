@@ -280,6 +280,24 @@ impl FrontendDriver {
 
     // ---- appearance & language ----
 
+    /// Saves the shared model request allowance for subsequent turns.
+    pub fn select_model_request_limit(&mut self, limit: u32, out: &mut Vec<Effect>) {
+        if !crate::config::RunLimitsSettings::is_valid_limit(limit)
+            || self
+                .vm
+                .settings
+                .as_ref()
+                .is_none_or(|settings| settings.run_limits.max_model_requests == limit)
+        {
+            return;
+        }
+        self.act(
+            FrontendAction::SettingsModelRequestLimitSelected(limit),
+            out,
+        );
+        self.save_settings(out);
+    }
+
     /// Applies and persists dark or light.
     pub fn select_theme(&mut self, theme_id: &str, out: &mut Vec<Effect>) {
         let theme_id = crate::frontend::theme::normalize_theme(theme_id);

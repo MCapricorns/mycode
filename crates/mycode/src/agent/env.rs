@@ -98,6 +98,9 @@ pub struct TurnEnv<'a> {
     /// Steers to fold into this turn at the next loop boundary.
     /// `None` for a turn that does not accept them (a nested agent).
     pub steer: Option<Arc<SteerInbox>>,
+    /// Shared request allowance for this turn and its children. When absent,
+    /// each `Agent::prompt` creates a fresh default allowance.
+    pub budget: Option<Arc<crate::agent::TurnBudget>>,
 }
 
 impl<'a> TurnEnv<'a> {
@@ -118,6 +121,7 @@ impl<'a> TurnEnv<'a> {
             extra_roots: Vec::new(),
             read_roots: Vec::new(),
             steer: None,
+            budget: None,
         }
     }
 
@@ -154,6 +158,12 @@ impl<'a> TurnEnv<'a> {
     /// Accept steers into this turn. Drained at loop boundaries only.
     pub fn with_steer(mut self, steer: Option<Arc<SteerInbox>>) -> Self {
         self.steer = steer;
+        self
+    }
+
+    /// Shares one request allowance with the parent and sibling agents.
+    pub fn with_budget(mut self, budget: Arc<crate::agent::TurnBudget>) -> Self {
+        self.budget = Some(budget);
         self
     }
 }

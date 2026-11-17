@@ -323,6 +323,8 @@ pub enum FrontendAction {
     SettingsThemeSelected(String),
     /// The user picked an interface font size (`s`, `m`, `l`, `xl`).
     SettingsFontSizeSelected(String),
+    /// Sets the request allowance shared by a turn and its subagents.
+    SettingsModelRequestLimitSelected(u32),
     /// Opens, closes, or pins the right inspector. Layout only.
     InspectorChanged {
         /// Whether the inspector is visible.

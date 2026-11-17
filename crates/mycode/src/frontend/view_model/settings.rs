@@ -42,6 +42,8 @@ pub struct SettingsState {
     pub saved_reasoning: Option<String>,
     /// Subagent role enablement, model routes, and thinking overrides.
     pub subagents: crate::config::SubagentSettings,
+    /// Shared limits for the main agent and its delegated work.
+    pub run_limits: crate::config::RunLimitsSettings,
     /// Skills switched off on the Skills page.
     pub skills: crate::config::SkillsSettings,
     /// A save is in flight.
@@ -78,6 +80,7 @@ impl SettingsState {
             reasoning: settings.reasoning_effort.clone(),
             saved_reasoning: settings.reasoning_effort.clone(),
             subagents: settings.subagents.clone(),
+            run_limits: settings.run_limits.clone(),
             skills: settings.skills.clone(),
             saving: false,
             dirty: false,
@@ -98,6 +101,7 @@ impl SettingsState {
             },
             reasoning_effort: self.saved_reasoning.clone(),
             subagents: self.subagents.clone(),
+            run_limits: self.run_limits.clone(),
             skills: self.skills.clone(),
         }
     }
@@ -106,7 +110,7 @@ impl SettingsState {
 /// One settings navigation section (the secondary menu).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SettingsSection {
-    /// Theme, language, and network.
+    /// Appearance, execution limits, and network.
     #[default]
     General,
     /// The keys the window binds.
@@ -153,7 +157,10 @@ impl SettingsSection {
     /// One-line description shown in the page header and matched by nav search.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::General => t("Appearance, language, and identity", "外观、语言与身份"),
+            Self::General => t(
+                "Appearance, run limits, and network",
+                "外观、回合预算与网络",
+            ),
             Self::Shortcuts => t(
                 "Keys for sending, steering, and getting around",
                 "发送、引导与界面导航的按键",
@@ -196,6 +203,40 @@ impl SettingsSection {
 #[cfg(test)]
 mod tests {
     use super::SettingsSection;
+
+    #[test]
+    fn request_limit_survives_other_settings_edits_and_rejects_invalid_values() {
+        use crate::frontend::view_model::{FrontendAction, SettingsState, WorkspaceState, reduce};
+
+        let mut document = crate::config::AppSettings::default();
+        document.run_limits.max_model_requests = 96;
+        let mut state = WorkspaceState {
+            settings: Some(SettingsState::from_settings(&document, 7)),
+            ..WorkspaceState::default()
+        };
+        reduce(
+            &mut state,
+            FrontendAction::SettingsModelRequestLimitSelected(128),
+        );
+        reduce(
+            &mut state,
+            FrontendAction::SettingsThemeSelected("light".into()),
+        );
+        let saved = state.settings.as_ref().unwrap().to_settings();
+        assert_eq!(saved.run_limits.max_model_requests, 128);
+        assert_eq!(saved.appearance.theme, "light");
+        let epoch = state.settings.as_ref().unwrap().edit_epoch;
+        for value in [0, u32::MAX, 128] {
+            reduce(
+                &mut state,
+                FrontendAction::SettingsModelRequestLimitSelected(value),
+            );
+        }
+        let settings = state.settings.as_ref().unwrap();
+        assert_eq!(settings.edit_epoch, epoch);
+        assert_eq!(settings.to_settings().run_limits.max_model_requests, 128);
+        assert!(settings.to_settings().validate().is_ok());
+    }
 
     #[test]
     fn nav_groups_match_the_settings_shell() {

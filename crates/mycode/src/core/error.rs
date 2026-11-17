@@ -22,6 +22,9 @@ pub enum MycodeError {
     /// Tool execution failure.
     #[error("tool error: {0}")]
     Tool(String),
+    /// The parent turn and its children exhausted their shared request allowance.
+    #[error("turn budget exceeded: {0}")]
+    BudgetExceeded(String),
 }
 
 impl From<std::io::Error> for MycodeError {

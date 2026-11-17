@@ -36,6 +36,163 @@ fn user_entry() -> ConversationEntry {
     }
 }
 
+fn interrupted_entry() -> ConversationEntry {
+    ConversationEntry {
+        event_id: "evt1-00000000000000000000000000000003".into(),
+        kind: EntryKind::AssistantMessage,
+        text: format!(
+            "kept partial\n\n{}",
+            crate::core::interrupted_response_text("connection reset")
+        )
+        .into(),
+        call_id: None,
+        thinking: "kept reasoning".into(),
+        agent_states: None,
+    }
+}
+
+#[test]
+fn continuing_a_reopened_failure_appends_a_request_and_preserves_the_draft() {
+    let (mut driver, root) = scratch_driver("continue-saved-failure");
+    let (session, _) = ready_send(&mut driver);
+    let active = driver.vm.active.as_mut().unwrap();
+    active.entries = vec![user_entry(), interrupted_entry()];
+    let mut summary = user_entry();
+    summary.event_id = "evt1-00000000000000000000000000000004".into();
+    summary.text = crate::app::display_summary_text("completed tool results").into();
+    active.entries.push(summary);
+    active.head = interrupted_entry().event_id;
+    driver.vm.composer_draft = "my next edit".into();
+    assert!(driver.vm.turn_alert.is_none(), "failure survives reopening");
+    assert_eq!(
+        driver.turn_failure_message().as_deref(),
+        Some("connection reset")
+    );
+    let target = driver
+        .recovery_target()
+        .expect("saved failure can continue");
+    let mut out = Vec::new();
+    driver.continue_failed_turn(&target, &mut out);
+    assert_eq!(driver.vm.composer_draft, "my next edit");
+    assert!(
+        !out.iter()
+            .any(|effect| matches!(effect, super::super::Effect::ComposerSet { .. }))
+    );
+    let Some(BridgeCommand::SendMessage {
+        session: sent_to,
+        text,
+        attachments,
+        ..
+    }) = driver.held_send.as_ref()
+    else {
+        panic!("continuation must commit a new user message before requesting a model")
+    };
+    assert_eq!(sent_to.as_str(), session);
+    assert!(!text.is_empty());
+    assert!(attachments.is_empty());
+    assert_eq!(
+        driver.vm.active.as_ref().unwrap().entries[1],
+        interrupted_entry()
+    );
+    driver.continue_failed_turn(&target, &mut out);
+    assert_eq!(
+        driver.submitted_turns.len(),
+        1,
+        "double click cannot resubmit"
+    );
+    assert!(driver.recovery_target().is_none());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_stale_continue_button_cannot_recover_a_different_head_or_chat() {
+    let (mut driver, root) = scratch_driver("continue-stale-target");
+    let (session, _) = ready_send(&mut driver);
+    driver.vm.active.as_mut().unwrap().entries = vec![user_entry(), interrupted_entry()];
+    let target = driver.recovery_target().unwrap();
+    let mut out = Vec::new();
+    driver.vm.active.as_mut().unwrap().head = interrupted_entry().event_id;
+    driver.continue_failed_turn(&target, &mut out);
+    assert!(driver.held_send.is_none());
+    let target = driver.recovery_target().unwrap();
+    driver.pending_open = Some(SessionId::generate().unwrap().to_string());
+    driver.continue_failed_turn(&target, &mut out);
+    assert!(
+        driver.held_send.is_none(),
+        "navigation already targets another chat"
+    );
+    driver.pending_open = Some(session);
+    driver
+        .vm
+        .active
+        .as_mut()
+        .unwrap()
+        .entries
+        .push(user_entry());
+    assert!(
+        driver.recovery_target().is_none(),
+        "a newer request supersedes the failure"
+    );
+    driver.continue_failed_turn(&target, &mut out);
+    assert!(driver.held_send.is_none());
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn continuing_without_a_valid_route_keeps_the_failed_turn_unchanged() {
+    let (mut driver, root) = scratch_driver("continue-unavailable-route");
+    ready_send(&mut driver);
+    driver.vm.active.as_mut().unwrap().entries = vec![user_entry(), interrupted_entry()];
+    let target = driver.recovery_target().unwrap();
+    driver.vm.selected_model = Some("removed-model".into());
+    driver.continue_failed_turn(&target, &mut Vec::new());
+    assert!(driver.held_send.is_none());
+    assert!(driver.submitted_turns.is_empty());
+    assert_eq!(driver.recovery_target(), Some(target));
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_failed_continuation_commit_never_inserts_generated_text_into_the_draft() {
+    for offscreen in [false, true] {
+        let (mut driver, root) = scratch_driver("continue-commit-failure");
+        let (session, _) = ready_send(&mut driver);
+        driver.vm.active.as_mut().unwrap().entries = vec![user_entry(), interrupted_entry()];
+        let target = driver.recovery_target().unwrap();
+        let mut out = Vec::new();
+        driver.continue_failed_turn(&target, &mut out);
+        let Some(BridgeCommand::SendMessage { text, .. }) = driver.held_send.take() else {
+            panic!("missing continuation")
+        };
+        if offscreen {
+            driver.park_conversation(&mut out);
+        }
+        driver.vm.composer_draft = "unsent follow-up".into();
+        out.clear();
+        driver.on_reply(
+            ReplyScope::Send,
+            BridgeReply::Sent {
+                session: session.clone(),
+                text,
+                outcome: Err("ledger write refused".into()),
+            },
+            &mut out,
+        );
+        assert_eq!(driver.vm.composer_draft, "unsent follow-up");
+        assert!(!out.iter().any(|effect| matches!(
+            effect,
+            super::super::Effect::ComposerSet { .. } | super::super::Effect::AttachmentsRestored(_)
+        )));
+        assert!(!driver.failed_send_drafts.contains_key(&session));
+        assert!(!driver.submitted_turns.contains_key(&session));
+        driver.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
 #[test]
 fn a_start_rejection_returns_an_interrupt_draft_to_its_original_chat() {
     for offscreen in [false, true] {

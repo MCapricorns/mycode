@@ -74,6 +74,10 @@ impl Workspace {
 
     // ---- skills ----
 
+    pub(crate) fn on_select_model_request_limit(&mut self, limit: u32, cx: &mut Context<Self>) {
+        self.driver_do(|d, fx| d.select_model_request_limit(limit, fx), cx);
+    }
+
     pub(crate) fn on_skill_enabled(&mut self, slug: &str, enabled: bool, cx: &mut Context<Self>) {
         self.apply_action(
             FrontendAction::SettingsSkillToggled(slug.to_owned(), enabled),

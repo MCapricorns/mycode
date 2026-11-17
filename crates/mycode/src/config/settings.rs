@@ -17,6 +17,7 @@ mod magpie;
 mod mcp;
 mod providers;
 mod proxy;
+mod run_limits;
 mod skills;
 mod subagent_roles;
 
@@ -25,11 +26,13 @@ pub(crate) use mcp::{MAX_MCP_ARGS, MAX_MCP_HEADERS, is_env_var_name, is_header_n
 pub use mcp::{MAX_MCP_ENV_VARS, MAX_MCP_SERVERS, McpServerSettings, is_mcp_executable};
 pub use providers::{MAX_HIDDEN_MODELS_PER_PROVIDER, ProviderSettings};
 pub use proxy::{PROXY_SCHEMES, ProxyPreference};
+pub use run_limits::{MAX_MODEL_REQUESTS_LIMIT, RunLimitsSettings};
 pub use skills::{MAX_DISABLED_SKILLS, SkillsSettings};
 pub use subagent_roles::{SubagentRoleSettings, SubagentSettings};
 
 use serde::{Deserialize, Serialize};
 
+use run_limits::run_limits_are_default;
 use skills::skills_are_default;
 use subagent_roles::subagents_are_default;
 
@@ -120,6 +123,9 @@ pub struct AppSettings {
     /// Skills the user switched off.
     #[serde(default, skip_serializing_if = "skills_are_default")]
     pub skills: SkillsSettings,
+    /// Combined per-turn request allowance, including delegated agents.
+    #[serde(default, skip_serializing_if = "run_limits_are_default")]
+    pub run_limits: RunLimitsSettings,
 }
 
 impl AppSettings {
@@ -173,6 +179,11 @@ impl AppSettings {
         }
         self.validate_subagent_roles()?;
         self.validate_skills()?;
+        if !RunLimitsSettings::is_valid_limit(self.run_limits.max_model_requests) {
+            return Err(invalid(
+                "runLimits.maxModelRequests: must be between 1 and 4096",
+            ));
+        }
         Ok(())
     }
 }
@@ -511,6 +522,13 @@ pub fn salvage_app_settings(document: &serde_json::Value) -> Option<AppSettings>
                 probe.skills.disabled.push(slug);
             });
         }
+    }
+    if let Some(run_limits) =
+        crate::config::document_repair::salvage_field::<RunLimitsSettings>(object, "runLimits")
+    {
+        crate::config::document_repair::salvage_adopt(&mut settings, valid, |probe| {
+            probe.run_limits = run_limits;
+        });
     }
     valid(&settings).then_some(settings)
 }

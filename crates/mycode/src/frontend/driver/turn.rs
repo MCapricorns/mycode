@@ -5,6 +5,14 @@ use crate::app::{BranchId, BridgeCommand, SessionId};
 use super::{Effect, FrontendDriver, HeldInterrupt, ReplyScope, ToastKind};
 use crate::frontend::view_model::{EntryKind, FrontendAction};
 
+/// The saved conversation a rendered continuation action belongs to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryTarget {
+    session: String,
+    branch: String,
+    head: String,
+}
+
 /// Resolve exactly the model shown in the picker. A stale session pin must
 /// never silently spend a request on another provider or model.
 pub(super) fn selected_route(
@@ -35,6 +43,83 @@ pub(super) fn selected_route(
 }
 
 impl FrontendDriver {
+    /// The current failure, including one recovered from the saved transcript.
+    pub fn turn_failure_message(&self) -> Option<String> {
+        let active = self.vm.active.as_ref()?;
+        if self.vm.sending || self.vm.compacting || active.running || active.compacting {
+            return None;
+        }
+        if let Some(message) = &self.vm.turn_alert {
+            return Some(message.clone());
+        }
+        let last_message = active.entries.iter().rev().find(|entry| {
+            matches!(
+                entry.kind,
+                EntryKind::UserMessage | EntryKind::AssistantMessage
+            ) && !crate::app::is_compaction_summary(&entry.text)
+        })?;
+        if last_message.kind != EntryKind::AssistantMessage {
+            return None;
+        }
+        last_message
+            .text
+            .lines()
+            .last()?
+            .strip_prefix(crate::core::INTERRUPTED_RESPONSE_PREFIX)
+            .map(|detail| detail.trim().to_owned())
+    }
+
+    /// Capture the saved head, so an old button cannot continue another turn.
+    pub fn recovery_target(&self) -> Option<RecoveryTarget> {
+        self.turn_failure_message()?;
+        let active = self.vm.active.as_ref()?;
+        if self.submitted_turns.contains_key(&active.session_id)
+            || self
+                .pending_open
+                .as_ref()
+                .is_some_and(|id| id != &active.session_id)
+            || (!active
+                .entries
+                .iter()
+                .any(|entry| entry.kind == EntryKind::UserMessage)
+                && active.older_before.is_none())
+        {
+            return None;
+        }
+        self.open_turn_target()?;
+        Some(RecoveryTarget {
+            session: active.session_id.clone(),
+            branch: active.branch_id.clone(),
+            head: active.head.clone(),
+        })
+    }
+
+    /// Continue from the durable ledger by appending a new user request.
+    /// Existing tool calls and results stay in history and are never replayed.
+    pub fn continue_failed_turn(&mut self, target: &RecoveryTarget, out: &mut Vec<Effect>) {
+        if self.recovery_target().as_ref() != Some(target) {
+            return;
+        }
+        if let Err(message) = selected_route(&self.vm) {
+            self.toast(message, ToastKind::Info, out);
+            return;
+        }
+        let text = crate::frontend::i18n::t(
+            "Continue the interrupted task from the saved conversation. Review the completed tool results and current state first; do not repeat completed actions with side effects. If an action's outcome is uncertain, verify it before deciding whether to retry.",
+            "从已保存的对话继续中断的任务。先检查已完成的工具结果和当前状态；不要重复已经完成且有副作用的操作。如果某个操作的结果不确定，先验证再决定是否重试。",
+        );
+        // Keep the user's next draft and attachments untouched.
+        if self.send_text(
+            text.to_owned(),
+            false,
+            crate::core::Attachments::default(),
+            out,
+        ) && let Some(submitted) = self.submitted_turns.get_mut(&target.session)
+        {
+            submitted.restore_text_on_failure = false;
+        }
+    }
+
     /// Compacts the active conversation with exactly the picked model.
     pub fn compact(&mut self, out: &mut Vec<Effect>) {
         if self.vm.sending {
@@ -608,6 +693,7 @@ impl FrontendDriver {
                 branch: branch.to_string(),
                 command: Some(command),
                 first_message,
+                restore_text_on_failure: true,
                 cancelled: false,
             },
         );

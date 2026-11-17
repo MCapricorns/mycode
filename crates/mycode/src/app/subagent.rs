@@ -54,6 +54,8 @@ pub(crate) struct BridgeAgentHost {
     /// Cross-turn code cells shared with the parent turn; each child run
     /// uses a distinct scope so concurrent runs cannot collect each other's cells.
     code_cells: Arc<crate::tools::CodeCells>,
+    /// One allowance for the parent's turn and all runs launched by this host.
+    budget: Arc<crate::agent::TurnBudget>,
     /// Model catalog plus the parent turn's provider and model, so a child
     /// learns its own context window and compacts like the parent does.
     context: Option<ChildContext>,
@@ -95,9 +97,18 @@ impl BridgeAgentHost {
             cancels,
             mcp_pool,
             code_cells,
+            budget: Arc::new(crate::agent::TurnBudget::new(
+                settings.run_limits.max_model_requests,
+            )),
             context: None,
             steers: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Shares the parent turn's request allowance with every child run.
+    pub(crate) fn with_budget(mut self, budget: Arc<crate::agent::TurnBudget>) -> Self {
+        self.budget = budget;
+        self
     }
 
     /// Lets each child size its context window from the catalog.
@@ -743,8 +754,10 @@ impl BridgeAgentHost {
         let mut agent = Agent::new(config);
         let prompt = Message::User(crate::core::UserMessage::text(request.prompt.clone()));
         let role_label = role.name.clone();
+        let budget = Arc::clone(&self.budget);
         let mut run = tokio::spawn(crate::tools::builtin::inherit_agent_activity(async move {
             let env = crate::agent::TurnEnv::new(&wire, &registry, &hooks)
+                .with_budget(budget)
                 .with_cancel(run_cancel)
                 .with_steer(Some(steer))
                 .with_events(event_tx)

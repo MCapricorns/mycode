@@ -266,8 +266,34 @@ impl LedgerPump {
                     };
                 }
                 AgentEvent::Error(error) => {
-                    // Best effort: the error is the report either way.
-                    let _ = self.commit_held_step(pending_assistant.take()).await;
+                    // A budget or setup failure may arrive between responses.
+                    // Keep a durable failure marker so reopening this chat can
+                    // offer continuation without replaying its completed tools.
+                    let mut assistant = match pending_assistant.take().map(Arc::unwrap_or_clone) {
+                        Some(Message::Assistant(assistant)) => assistant,
+                        _ => AssistantMessage {
+                            blocks: Vec::new(),
+                            usage: None,
+                            stop_reason: crate::core::StopReason::Error,
+                        },
+                    };
+                    let text = assistant.text();
+                    if !text.lines().last().is_some_and(|line| {
+                        line.starts_with(crate::core::INTERRUPTED_RESPONSE_PREFIX)
+                    }) {
+                        let separator = if text.is_empty() { "" } else { "\n\n" };
+                        assistant
+                            .blocks
+                            .push(ContentBlock::Text(crate::core::TextBlock::new(format!(
+                                "{separator}{}",
+                                crate::core::interrupted_response_text(&error.to_string())
+                            ))));
+                    }
+                    assistant.stop_reason = crate::core::StopReason::Error;
+                    let held = Arc::new(Message::Assistant(assistant));
+                    // Best effort: the original failure is reported even if
+                    // storage cannot preserve its partial response.
+                    let _ = self.commit_held_step(Some(held)).await;
                     self.publish_deferred().await;
                     return self.fail(format!("agent error: {error}")).await;
                 }
@@ -643,13 +669,108 @@ mod tests {
 
     #[tokio::test]
     async fn an_aborted_turn_persists_its_partial_text_and_thinking() {
+        assert_durable_interruption(Err(crate::core::ProviderErrorKind::Cancelled)).await;
+    }
+
+    #[tokio::test]
+    async fn a_provider_failure_persists_its_partial_and_reports_failure() {
+        assert_durable_interruption(Err(crate::core::ProviderErrorKind::Unavailable)).await;
+    }
+
+    #[tokio::test]
+    async fn an_error_terminal_without_a_marker_persists_a_recoverable_partial() {
+        assert_durable_interruption(Ok(crate::core::StopReason::Error)).await;
+    }
+
+    #[tokio::test]
+    async fn an_output_limit_terminal_persists_a_recoverable_partial() {
+        assert_durable_interruption(Ok(crate::core::StopReason::Length)).await;
+    }
+
+    #[tokio::test]
+    async fn a_budget_failure_without_partial_text_keeps_a_durable_recovery_marker() {
+        let root = std::env::temp_dir().join(format!(
+            "mycode-pump-budget-{}-{}",
+            std::process::id(),
+            crate::core::unix_now().as_nanos()
+        ));
+        let home = crate::config::HomeLayout::from_root(&root).unwrap();
+        let service = crate::agent::session::SessionService::new(&home);
+        let created = service.create(None).await.unwrap();
+        let writer = HeadWriter::new(
+            service.clone(),
+            created.session_id.clone(),
+            created.branch_id.clone(),
+            crate::agent::session::HeadStamp::Empty,
+        );
+        writer
+            .write(EventKind::Message, b"continue task")
+            .await
+            .unwrap();
+        let final_head = writer.clone();
+        let (events, mut frontend) = mpsc::unbounded_channel();
+        let (bus, rx) = broadcast::channel(8);
+        let pump = LedgerPump {
+            events,
+            writer,
+            session_id: Arc::from(created.session_id.as_str()),
+            deferred: DeferredSummaries::default(),
+            cancel: CancellationToken::new(),
+            usage_model: "test".into(),
+            started: std::time::Instant::now(),
+        };
+        bus.send(AgentEvent::Error(crate::core::MycodeError::BudgetExceeded(
+            "request limit reached".into(),
+        )))
+        .unwrap();
+        let terminal = pump.run(rx).await;
+        assert!(
+            matches!(terminal, BridgeEvent::ChatFailed { ref message, .. }
+            if message.contains("request limit reached") && message != CHAT_CANCELLED)
+        );
+        let history = crate::app::ledger::ledger_history(
+            &service,
+            &created.session_id,
+            &created.branch_id,
+            &final_head.stamp().await,
+        )
+        .await
+        .unwrap();
+        let Some(Message::Assistant(assistant)) = history.last().map(AsRef::as_ref) else {
+            panic!("missing durable recovery marker")
+        };
+        assert_eq!(assistant.stop_reason, crate::core::StopReason::Error);
+        assert!(
+            assistant
+                .text()
+                .starts_with(crate::core::INTERRUPTED_RESPONSE_PREFIX)
+        );
+        assert!(assistant.text().contains("request limit reached"));
+        assert!(matches!(
+            frontend.try_recv(),
+            Ok(BridgeEvent::AssistantStep { .. })
+        ));
+        drop(final_head);
+        service.shutdown().await;
+        for _ in 0..100 {
+            if !root.exists() || std::fs::remove_dir_all(&root).is_ok() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the session actor kept the temporary home open");
+    }
+
+    async fn assert_durable_interruption(
+        terminal: Result<crate::core::StopReason, crate::core::ProviderErrorKind>,
+    ) {
         use crate::agent::session::SessionService;
         use crate::agent::{Agent, AgentConfig, HookRunner};
         use crate::core::{
             EventStream, Provider, ProviderError, Request, StopReason, StreamEvent, ThinkingBlock,
         };
 
-        struct Interrupted;
+        struct Interrupted(Result<StopReason, crate::core::ProviderErrorKind>);
         impl Provider for Interrupted {
             fn stream<'a>(
                 &'a self,
@@ -670,11 +791,20 @@ mod tests {
                     sender
                         .send(StreamEvent::TextDelta("kept partial".to_owned()))
                         .await;
-                    sender
-                        .send(StreamEvent::Error(ProviderError::new(
-                            crate::core::ProviderErrorKind::Cancelled,
-                        )))
-                        .await;
+                    let terminal = match self.0 {
+                        Err(kind) => StreamEvent::Error(ProviderError::new(kind)),
+                        Ok(stop_reason) => StreamEvent::Done {
+                            message: AssistantMessage {
+                                blocks: vec![
+                                    ContentBlock::Thinking(ThinkingBlock::new("kept thinking")),
+                                    ContentBlock::Text(crate::core::TextBlock::new("kept partial")),
+                                ],
+                                usage: None,
+                                stop_reason,
+                            },
+                        },
+                    };
+                    sender.send(terminal).await;
                     Ok(stream)
                 })
             }
@@ -717,22 +847,29 @@ mod tests {
         );
         let tools = crate::tools::ToolRegistry::new();
         let hooks = HookRunner::new();
-        let env = crate::agent::TurnEnv::new(&Interrupted, &tools, &hooks)
+        let provider = Interrupted(terminal);
+        let env = crate::agent::TurnEnv::new(&provider, &tools, &hooks)
             .with_events(bus)
             .with_cancel(cancel);
         let mut agent = Agent::new(AgentConfig::new());
-        assert_eq!(
-            agent
-                .prompt(Message::User(UserMessage::text("start")), &env)
-                .await
-                .unwrap(),
-            TurnOutcome::Aborted
-        );
+        let outcome = agent
+            .prompt(Message::User(UserMessage::text("start")), &env)
+            .await;
+        let cancelled = terminal == Err(crate::core::ProviderErrorKind::Cancelled);
+        if cancelled {
+            assert_eq!(outcome.unwrap(), TurnOutcome::Aborted);
+        } else {
+            assert!(matches!(
+                outcome,
+                Err(crate::core::MycodeError::Provider(_))
+            ));
+        }
         drop(env);
         let terminal = pump.await.unwrap();
-        assert!(
-            matches!(terminal, BridgeEvent::ChatFailed { ref message, .. } if message == CHAT_CANCELLED)
-        );
+        let BridgeEvent::ChatFailed { message, .. } = terminal else {
+            panic!("an interruption must not report completion")
+        };
+        assert_eq!(message == CHAT_CANCELLED, cancelled);
         let memory = crate::app::ledger::ledger_history(
             &service,
             &created.session_id,
@@ -745,7 +882,12 @@ mod tests {
             panic!("missing durable partial")
         };
         assert!(assistant.text().contains("kept partial"));
-        assert!(assistant.text().contains("interrupted by user"));
+        assert!(
+            assistant
+                .text()
+                .contains(crate::core::INTERRUPTED_RESPONSE_PREFIX)
+        );
+        assert_eq!(assistant.text().contains("interrupted by user"), cancelled);
         assert_eq!(assistant.stop_reason, StopReason::Error);
         assert!(assistant.blocks.iter().any(|block| matches!(block, ContentBlock::Thinking(ThinkingBlock { text, .. }) if text == "kept thinking")));
         let mut persisted = 0;

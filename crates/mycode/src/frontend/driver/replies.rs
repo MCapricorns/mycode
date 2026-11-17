@@ -232,6 +232,9 @@ impl FrontendDriver {
             }
             BridgeReply::Recalled(Ok((conversation, edit))) => {
                 let session_id = conversation.session_id.clone();
+                // The failed tail was rewound. Its ephemeral error must not
+                // offer continuation against an earlier successful head.
+                self.vm.turn_alert = None;
                 self.act(FrontendAction::ConversationOpened(*conversation), out);
                 self.follow_session_project(&session_id, out);
                 if let Some(text) = edit {

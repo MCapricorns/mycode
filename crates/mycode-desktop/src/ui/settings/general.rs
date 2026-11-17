@@ -1,5 +1,5 @@
-//! The General settings page: appearance, text size, language, and the
-//! network proxy.
+//! The General settings page: appearance, text size, language, execution
+//! limits, and the network proxy.
 //!
 //! The interface always paints the operating-system UI font; there is no
 //! typeface picker. The request identity (User-Agent) is fixed by the
@@ -53,6 +53,11 @@ pub(super) fn render_general_section(
         .collect::<Vec<_>>();
     let theme_row = appearance_theme_field(theme_id, cx);
     let font_row = font_size_field(font_size, cx);
+    let request_limit = workspace.vm().settings.as_ref().map_or_else(
+        || mycode::config::RunLimitsSettings::default().max_model_requests,
+        |settings| settings.run_limits.max_model_requests,
+    );
+    let budget_row = model_request_limit_field(request_limit, cx);
     let thinking_row = settings_row(
         "thinking-traces",
         t("Thinking traces", "思考记录"),
@@ -109,6 +114,16 @@ pub(super) fn render_general_section(
             vec![theme_row, font_row, language_row, thinking_row],
         ))
         .child(settings_card(
+            "run-limits",
+            t("Run limits", "回合预算"),
+            Some(t(
+                "Applies to new turns. Reaching the limit keeps your progress so you can continue.",
+                "对新回合生效。达到上限后保留进度，可选择继续任务。",
+            )),
+            theme,
+            vec![budget_row],
+        ))
+        .child(settings_card(
             "network",
             t("Network", "网络"),
             Some(t(
@@ -119,6 +134,39 @@ pub(super) fn render_general_section(
             vec![proxy_row],
         ))
         .into_any_element()
+}
+
+fn model_request_limit_field(current: u32, cx: &mut Context<Workspace>) -> AnyElement {
+    let mut limits = vec![32, 64, 128, 256];
+    if !limits.contains(&current) {
+        limits.push(current);
+        limits.sort_unstable();
+    }
+    let options: Vec<_> = limits
+        .into_iter()
+        .map(|limit| (limit.to_string(), limit.to_string()))
+        .collect();
+    let chips = choice_chips(
+        "model-request-limit",
+        &options,
+        &current.to_string(),
+        |workspace, value, cx| {
+            if let Ok(limit) = value.parse() {
+                workspace.on_select_model_request_limit(limit, cx);
+            }
+        },
+        cx,
+    );
+    settings_row(
+        "model-request-limit",
+        t("Model requests per turn", "每回合模型请求数"),
+        Some(t(
+            "Shared by the main agent and subagents. This is not a token or spending limit.",
+            "主代理与子代理共享，不是 token 或费用上限。",
+        )),
+        chips,
+        cx.theme(),
+    )
 }
 
 /// Mode chip id for one stored proxy value.
