@@ -175,9 +175,10 @@ impl ToolDyn for ToolSearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "tool_search".to_owned(),
-            description: "Search the connected MCP tools by keyword. Returns up to 8 tools with \
-                          their full inputSchema; call one with use_tool. Prefer this over \
-                          search_tool when you do not know the exact tool name."
+            description: "Discover connected MCP tools with focused server/action keywords. \
+                          Returns up to 8 ranked matches with exact names and full `params_schema`, \
+                          ready for use_tool without a second schema lookup. Use search_tool \
+                          for known exact names; reuse current schemas instead of rediscovering."
                 .to_owned(),
             params_schema: json!({
                 "type": "object",

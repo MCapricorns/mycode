@@ -67,12 +67,12 @@ pub fn discover_resources(home: &HomeLayout, workspace_root: &Path) -> Vec<Resou
     files
 }
 
-/// Maximum skills named in one system prompt.
+/// Maximum skills carrying full metadata in one system prompt.
 ///
-/// [`discover_skills`] returns every match in a stable order. Prompt
-/// builders truncate to this cap so the included set does not depend on
-/// directory iteration order.
+/// Later enabled entries keep compact source pointers within the catalog budget.
 pub const MAX_SKILLS: usize = 32;
+/// Maximum characters in the on-demand skill catalog, including omission notices.
+const MAX_SKILL_CATALOG_CHARS: usize = 32 * 1024;
 
 /// One slash-command skill discovered under `.agents`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,7 +111,7 @@ pub fn skill_read_roots(mycode_home: Option<&Path>) -> Vec<PathBuf> {
 /// magpie installs skills as `<name>/SKILL.md` folders under
 /// `<mycode_home>/skills`. Entries are sorted by path before they are read,
 /// duplicate slugs keep the first hit, and the result is sorted by slug.
-/// There is no discovery cap; callers truncate to [`MAX_SKILLS`].
+/// There is no discovery cap; prompt rendering bounds the detailed metadata and total text.
 #[must_use]
 pub fn discover_skills(mycode_home: Option<&Path>) -> Vec<SkillFile> {
     let mut skills = Vec::new();
@@ -220,7 +220,7 @@ fn skill_meta_cache()
 ///   slug as title, no description — and writes nothing, so the next
 ///   discovery retries the file and self-heals.
 /// - A file whose `fs::metadata()` or `modified()` fails has no cache
-///   identity: it takes the full read path and is never written.
+///   identity: it takes the uncached prefix read path and is never written.
 /// - Accepted staleness: an edit that keeps the byte length and lands
 ///   within the filesystem's mtime granularity serves the old summary
 ///   until the next `mtime`/`len` change. Only the catalog line and the
@@ -269,7 +269,22 @@ fn skill_meta(path: &Path, slug: &str) -> (String, String) {
 /// Reads one SKILL.md and lifts its `(title, description)`. `None` when
 /// the read fails; that state is never cached.
 fn read_skill_meta(path: &Path, slug: &str) -> Option<(String, String)> {
-    let text = read_resource(path).ok()?;
+    use std::io::Read as _;
+
+    // Only metadata belongs in discovery. A long skill body must not hide
+    // valid frontmatter, and an incomplete final line is not metadata.
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_RESOURCE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_RESOURCE_BYTES {
+        bytes.truncate(MAX_RESOURCE_BYTES);
+        let end = bytes.iter().rposition(|byte| *byte == b'\n')?;
+        bytes.truncate(end + 1);
+    }
+    let text = String::from_utf8(bytes).ok()?;
     let (name, description) = skill_frontmatter(&text);
     let title = text
         .lines()
@@ -367,28 +382,49 @@ pub(crate) fn read_resource(path: &Path) -> Result<String, ConfigError> {
 
 /// Renders discovered resources into ordered system prompt parts.
 ///
-/// Each contribution carries a header naming its source. Oversized or
-/// unreadable files are skipped; the total stays within the bounded prompt
-/// budget.
+/// Each contribution names its source. Unreadable or omitted bodies leave an
+/// explicit source pointer, so a missing workspace override is not mistaken
+/// for absent instructions. Body text and notices share one prompt budget.
 #[must_use]
 pub fn render_resource_prompt(files: &[ResourceFile]) -> Vec<String> {
+    let sources: Vec<_> = files
+        .iter()
+        .map(|file| {
+            let scope = if file.global { "global" } else { "workspace" };
+            let header = format!(
+                "# {} ({scope})\nSource: {}\n\n",
+                file.name,
+                file.path.display(),
+            );
+            let notice = format!(
+                "{header}Instructions were not included automatically because the source could \
+not be read within the context limits. Read this exact source before work governed by it; \
+if it remains unreadable, report that limitation."
+            );
+            (header, notice)
+        })
+        .collect();
+    let mut reserved = sources
+        .iter()
+        .map(|(_, notice)| notice.chars().count())
+        .sum::<usize>();
+    if reserved > MAX_TOTAL_PROMPT_CHARS {
+        return vec![
+            "Instruction source paths exceed the context budget. Ask for the relevant instruction \
+file paths before work that depends on those rules."
+                .to_owned(),
+        ];
+    }
     let mut parts = Vec::new();
     let mut total = 0usize;
-    for file in files {
-        let Ok(text) = read_resource(&file.path) else {
-            continue;
-        };
-        let scope = if file.global { "global" } else { "workspace" };
-        let rendered = format!(
-            "# {name} ({scope})\nSource: {path}\n\n{text}",
-            name = file.name,
-            path = file.path.display(),
-        );
-        let chars = rendered.chars().count();
-        if total + chars > MAX_TOTAL_PROMPT_CHARS {
-            continue;
-        }
-        total += chars;
+    for (file, (header, notice)) in files.iter().zip(sources) {
+        reserved -= notice.chars().count();
+        let rendered = read_resource(&file.path)
+            .ok()
+            .map(|text| format!("{header}{text}"))
+            .filter(|text| total + text.chars().count() + reserved <= MAX_TOTAL_PROMPT_CHARS)
+            .unwrap_or(notice);
+        total += rendered.chars().count();
         parts.push(rendered);
     }
     parts
@@ -405,26 +441,43 @@ pub fn render_skill_catalog(files: &[SkillFile]) -> Option<String> {
         return None;
     }
     let mut out = String::from(
-        "<skills>\nSkills (on demand). Scan this list before you act. When a \
-task matches one, read the matching SKILL.md by path with the `read` tool when available, \
-or another available tool permitted to read files. Follow the calling convention above. \
-If no available tool can read it, report that limitation instead of inventing a tool. \
-Follow the skill before building or answering. Do not wait for the user to name the skill; a \
-message that starts with `/slug` asks for that skill. Read a skill once per task, and \
-open the files it references only when a step needs them. Do not paste skill bodies \
-into the prompt.",
+        "<skills>\nThis catalog lists enabled skills by purpose and source path; it does not \
+contain their instructions. Before acting, select skills whose stated scope matches the task; \
+a message starting with `/slug` explicitly selects that skill. Read the selected SKILL.md at \
+its exact listed path with `read`, following the tool calling convention above, or another \
+available file reader. Apply the instructions before the work they govern. Resolve relative \
+references from that skill's directory and read them only when needed. Reuse content already \
+read while it remains current; re-read a changed source. The catalog refreshes before model \
+requests, so use the latest enabled entries. Later entries may contain only a source pointer; \
+inspect that file's metadata before selecting it. If a selected skill is unavailable or unreadable, \
+report the specific gap and continue independent work; do not infer its instructions from its \
+title or description.",
     );
-    for skill in files {
-        let _ = write!(
-            out,
-            "\n- /{slug} — {title}",
-            slug = skill.slug,
-            title = skill.title
-        );
-        if !skill.description.is_empty() {
-            let _ = write!(out, ": {}", skill.description);
+    let omission = |count| {
+        format!(
+            "\n{count} more enabled skills exceed the catalog budget. If an explicitly requested \
+skill is missing, use its user-supplied exact path or ask for that path; do not guess a path \
+or scan unrelated or disabled skills."
+        )
+    };
+    let reserved = omission(files.len()).chars().count() + "\n</skills>".len();
+    let mut used = out.chars().count();
+    for (index, skill) in files.iter().enumerate() {
+        let mut entry = format!("\n- /{}", skill.slug);
+        if index < MAX_SKILLS {
+            let _ = write!(entry, " — {}", skill.title);
+            if !skill.description.is_empty() {
+                let _ = write!(entry, ": {}", skill.description);
+            }
         }
-        let _ = write!(out, " (`{}`)", skill.path.display());
+        let _ = write!(entry, " (`{}`)", skill.path.display());
+        let chars = entry.chars().count();
+        if used + chars + reserved > MAX_SKILL_CATALOG_CHARS {
+            out.push_str(&omission(files.len() - index));
+            break;
+        }
+        used += chars;
+        out.push_str(&entry);
     }
     out.push_str("\n</skills>");
     Some(out)
@@ -504,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_budget_preserves_global_rules_and_skips_only_the_part_that_does_not_fit() {
+    fn prompt_budget_preserves_rules_and_identifies_the_body_that_does_not_fit() {
         let root = temp("instruction-budget");
         let home_root = root.0.join("home");
         let workspace = root.0.join("project");
@@ -523,13 +576,27 @@ mod tests {
         fs::write(workspace.join("MYCODE.md"), "small project rule").unwrap();
         let home = crate::config::HomeLayout::from_root(&home_root).unwrap();
         let parts = super::render_resource_prompt(&super::discover_resources(&home, &workspace));
-        assert_eq!(parts.len(), 2);
+        assert_eq!(parts.len(), 3);
         assert!(parts[0].starts_with("# AGENTS.md (global)"));
-        assert!(parts[1].ends_with("small project rule"));
+        assert!(parts[1].contains(&workspace.join("AGENTS.md").display().to_string()));
+        assert!(parts[1].contains("Instructions were not included automatically"));
+        assert!(parts[2].ends_with("small project rule"));
         assert!(
             parts.iter().map(|part| part.chars().count()).sum::<usize>()
                 <= super::MAX_TOTAL_PROMPT_CHARS
         );
+    }
+
+    #[test]
+    fn oversized_instruction_file_keeps_its_source_and_requires_explicit_reading() {
+        let root = temp("large-instructions");
+        let path = root.0.join("AGENTS.md");
+        fs::write(&path, "x".repeat(super::MAX_RESOURCE_BYTES + 1)).unwrap();
+        let home = crate::config::HomeLayout::from_root(&root.0).unwrap();
+        let parts = super::render_resource_prompt(&super::discover_resources(&home, &root.0));
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].contains(&path.display().to_string()));
+        assert!(parts[0].contains("Read this exact source"));
     }
 
     #[test]
@@ -611,6 +678,47 @@ mod tests {
         );
         let catalog = super::render_skill_catalog(&skills).unwrap();
         assert!(catalog.contains("/pdf — pdf-tools: "), "{catalog}");
+    }
+
+    #[test]
+    fn large_skill_keeps_frontmatter_when_the_metadata_prefix_cuts_utf8() {
+        let root = temp("large-metadata");
+        let dir = root.0.join("skills").join("large");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("SKILL.md");
+        let mut body =
+            String::from("---\nname: large-skill\ndescription: Inspect a large project.\n---\n\n");
+        body.push_str(&"x".repeat(super::MAX_RESOURCE_BYTES - body.len() - 1));
+        body.push_str("🦀\nMore instructions.");
+        fs::write(&path, body).unwrap();
+        let skills = discover_skills(Some(&root.0));
+        assert_eq!(skills[0].title, "large-skill");
+        assert_eq!(skills[0].description, "Inspect a large project.");
+        assert!(
+            super::read_resource(&path).is_err(),
+            "full instruction limits stay strict"
+        );
+    }
+
+    #[test]
+    fn skill_catalog_has_a_total_budget_and_reports_omitted_entries() {
+        let skills: Vec<_> = (0..200)
+            .map(|index| super::SkillFile {
+                slug: format!("skill-{index}"),
+                title: "A bounded title".into(),
+                description: "A bounded description".into(),
+                path: PathBuf::from(format!(
+                    "/skills/{}/skill-{index}/SKILL.md",
+                    "x".repeat(200)
+                )),
+                global: true,
+            })
+            .collect();
+        let catalog = super::render_skill_catalog(&skills).unwrap();
+        assert!(catalog.chars().count() <= super::MAX_SKILL_CATALOG_CHARS);
+        assert!(catalog.contains("more enabled skills exceed the catalog budget"));
+        assert!(catalog.contains("/skill-32 (`/skills/"));
+        assert!(catalog.ends_with("\n</skills>"));
     }
 
     /// The metadata cache sits between the directory scan and the prompt:

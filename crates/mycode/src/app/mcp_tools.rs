@@ -922,7 +922,7 @@ impl McpCatalog {
             note.push_str(warning);
             note.push('\n');
         }
-        let ready: Vec<(String, usize, Option<&str>)> = inner
+        let mut ready: Vec<(String, usize, Option<&str>)> = inner
             .servers
             .iter()
             .filter_map(|(server, status)| match status {
@@ -932,6 +932,7 @@ impl McpCatalog {
                 ServerStatus::Failed(_) => None,
             })
             .collect();
+        ready.sort_by(|left, right| left.0.cmp(&right.0));
         if !ready.is_empty() {
             note.push_str("Connected MCP servers:\n");
             for (id, tools, summary) in &ready {
@@ -949,6 +950,21 @@ impl McpCatalog {
             note.push_str(&format!(
                 "MCP servers still connecting: {}.\n",
                 ids.join(", ")
+            ));
+        }
+        let mut failed: Vec<&str> = inner
+            .servers
+            .iter()
+            .filter_map(|(server, status)| {
+                matches!(status, ServerStatus::Failed(_)).then_some(server.id.as_str())
+            })
+            .collect();
+        failed.sort_unstable();
+        if !failed.is_empty() {
+            note.push_str(&format!(
+                "MCP servers failed to connect: {}. They retry in the background; \
+                 `search_tool` with name \"list\" reports the failure details.\n",
+                failed.join(", "),
             ));
         }
         note
@@ -1289,7 +1305,7 @@ impl ToolDyn for SearchTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "search_tool".to_owned(),
-            description: "Find a connected MCP tool and load its schema. Pass `name`: an exact tool name for its inputSchema, keywords (for example \"github issue\") for the matching tools with one line each, or \"list\" for every tool. Pass `names` instead to load several exact names' inputSchemas in one call.".to_owned(),
+            description: "Load connected MCP tool schemas as `inputSchema` by exact `name`, or batch exact names in `names`. A keyword query returns a schema for one match or summaries for multiple matches; `name: \"list\"` lists summaries only. For unfamiliar capabilities, tool_search returns ranked matches with full `params_schema`. Either schema is sufficient for use_tool; reuse it while current instead of loading it again.".to_owned(),
             params_schema: object_schema(
                 serde_json::json!({
                     "name": {"type": "string", "description": "An exact tool name, keywords, or \"list\"."},
@@ -1381,7 +1397,7 @@ impl ToolDyn for UseTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "use_tool".to_owned(),
-            description: "Call a connected MCP tool by the exact `name` search_tool or tool_search returned, with `arguments` matching its schema.".to_owned(),
+            description: "Call a connected MCP tool using its exact, qualified `name` and `arguments` matching a current schema: `inputSchema` from search_tool or `params_schema` from tool_search. Either full schema is sufficient; discovery summaries alone do not describe arguments. Native tools use their own calling convention, not use_tool.".to_owned(),
             params_schema: object_schema(
                 serde_json::json!({
                     "name": {"type": "string", "description": "The exact name search_tool or tool_search returned."},

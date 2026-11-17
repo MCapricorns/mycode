@@ -5,8 +5,8 @@ use std::fmt::Write;
 use crate::tools::ToolRegistry;
 
 const HEADER: &str = "\
-Use only the tools listed below. Support claims with inspected sources or tool results; \
-never claim a command ran without its result.";
+Use the current tool catalog and its calling conventions. Support claims with inspected \
+sources or tool results; never claim a command ran without its result.";
 
 /// Names the one shell tool in `tools`, if the process registered one.
 pub fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
@@ -28,8 +28,18 @@ a `run_code` script, with the schemas listed there; a script cannot call `run_co
 `callAsync(name, args)` and await each dependent step. Writes, shell commands, and other \
 exclusive calls run alone in submission order. Await required work before `complete(value)`, \
 which ends the script and cancels outstanding calls.\n\
+- Inspect each tool result's `is_error` before using it in a dependent step. Return the \
+relevant evidence and artifact paths with `log` or `complete`; a script result is not proof \
+that every nested call succeeded.\n\
 - When `run_code` returns a `cell_id`, collect that cell with `wait_code` until it \
 finishes; never resubmit the script.\n",
+        );
+    }
+    if tools.get("use_tool").is_some() {
+        rules.push_str(
+            "- MCP discovery schemas describe targets for `use_tool`; they do not register new \
+direct tools. Native tools keep their calling convention above and do not go through \
+`search_tool` or `use_tool`.\n",
         );
     }
     let shell = shell_tool_name(tools);

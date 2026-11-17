@@ -185,11 +185,17 @@ pub(crate) fn session_system_prompt(
 }
 
 /// How every prompt with an MCP catalog loads and calls remote tools.
-const MCP_CALL_GUIDANCE: &str = "Load MCP tool schemas with `search_tool` (exact names, \
-keywords, or \"list\") or `tool_search` (keywords), then call `use_tool` with the exact \
-`name` and matching `arguments`. Never guess parameters; reuse loaded schemas and reload one \
-when its tool is missing or changed. A server that is still connecting has not registered its \
-tools yet.";
+const MCP_CALL_GUIDANCE: &str = "This is a discovery catalog, not the tools' input schemas. \
+For an unfamiliar capability, use `tool_search` with focused server/action keywords; its matches \
+include the full schema in `params_schema`. For known names, use `search_tool` with `name` or \
+batch exact names in `names`; its schema field is `inputSchema`. A `search_tool` keyword query \
+can return summaries; `name: \"list\"` returns an inventory, not schemas. Either discovery \
+tool's full schema is sufficient: load an exact name only when no current schema is available, \
+then call `use_tool` with the returned `name` and schema-matching `arguments`. Keep qualified \
+names unchanged so calls reach the selected server. Reuse loaded schemas; discover again only for a \
+new capability or evidence that a tool is missing or changed. The catalog refreshes before model \
+requests; a connecting server has not registered its tools yet. Inspect failures before retrying, \
+and verify the outcome of a mutating call before repeating it.";
 
 pub(crate) fn push_workspace_skills(
     prompt: &mut String,
@@ -206,19 +212,9 @@ pub(crate) fn push_skill_catalog(
     settings: &crate::config::SkillsSettings,
 ) {
     skills.retain(|skill| settings.is_enabled(&skill.slug));
-    let hidden = skills.len().saturating_sub(crate::config::MAX_SKILLS);
-    skills.truncate(crate::config::MAX_SKILLS);
-    let Some(mut catalog) = crate::config::render_skill_catalog(&skills) else {
+    let Some(catalog) = crate::config::render_skill_catalog(&skills) else {
         return;
     };
-    if hidden > 0
-        && let Some(close) = catalog.rfind("\n</skills>")
-    {
-        catalog.insert_str(
-            close,
-            &format!("\n- and {hidden} more; read the matching SKILL.md by path"),
-        );
-    }
     prompt.push_str("\n\n");
     prompt.push_str(&catalog);
 }
@@ -232,6 +228,19 @@ mod tests {
     use crate::tools::ToolRegistry;
 
     use super::session_system_prompt;
+
+    #[test]
+    fn mcp_guidance_accepts_both_discovery_schema_fields() {
+        let mut prompt = String::new();
+        super::push_mcp_section(
+            &mut prompt,
+            "Connected MCP servers:\n- docs (1 tool)",
+            false,
+        );
+        assert!(prompt.contains("schema in `params_schema`"));
+        assert!(prompt.contains("schema field is `inputSchema`"));
+        assert!(prompt.contains("Either discovery tool's full schema is sufficient"));
+    }
 
     #[test]
     fn skill_catalog_drops_skills_switched_off_in_settings() {
@@ -252,6 +261,33 @@ mod tests {
         );
         assert!(prompt.contains("/skills/deploy/SKILL.md"), "{prompt}");
         assert!(!prompt.contains("review"), "{prompt}");
+    }
+
+    #[test]
+    fn compact_skill_overflow_keeps_enabled_paths_without_leaking_disabled_entries() {
+        let mut skills: Vec<_> = (0..crate::config::MAX_SKILLS + 2)
+            .map(|index| crate::config::SkillFile {
+                slug: format!("skill-{index}"),
+                title: format!("Skill {index}"),
+                description: format!("Description {index}"),
+                path: PathBuf::from(format!("/skills/skill-{index}/SKILL.md")),
+                global: true,
+            })
+            .collect();
+        let disabled = skills.last().unwrap().slug.clone();
+        let hidden_path = skills.last().unwrap().path.display().to_string();
+        let mut settings = crate::config::SkillsSettings::default();
+        settings.set_enabled(&disabled, false);
+        let overflow = skills.remove(crate::config::MAX_SKILLS);
+        skills.push(overflow.clone());
+        let mut prompt = String::new();
+        super::push_skill_catalog(&mut prompt, skills, &settings);
+        assert!(
+            prompt.contains(&overflow.path.display().to_string()),
+            "{prompt}"
+        );
+        assert!(!prompt.contains(&overflow.description), "{prompt}");
+        assert!(!prompt.contains(&hidden_path), "{prompt}");
     }
 
     #[tokio::test]
