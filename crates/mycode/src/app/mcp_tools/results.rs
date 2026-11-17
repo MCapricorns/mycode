@@ -9,21 +9,8 @@ const MCP_SNIPPET_CHARS: usize = 160;
 /// description) and which server serves it. The full description stays in
 /// the tool spec.
 pub(super) fn mcp_snippet(server_id: &str, description: Option<&str>) -> String {
-    let summary = description
-        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
-        .map(|text| match text.find(". ") {
-            Some(end) => text[..=end].to_owned(),
-            None => text,
-        })
-        .filter(|text| !text.is_empty());
-    match summary {
-        Some(summary) => {
-            let mut summary: String = summary.chars().take(MCP_SNIPPET_CHARS).collect();
-            if summary.chars().count() == MCP_SNIPPET_CHARS {
-                summary.push('\u{2026}');
-            }
-            format!("{summary} (MCP server '{server_id}')")
-        }
+    match description.and_then(mcp_server_summary) {
+        Some(summary) => format!("{summary} (MCP server '{server_id}')"),
         None => format!("MCP tool on server '{server_id}'."),
     }
 }
@@ -91,20 +78,35 @@ pub(crate) fn bound_mcp_result(dir: &std::path::Path, text: &str) -> String {
 /// `None` when the server sent no usable text. The server is untrusted, so
 /// the line is flattened, bounded, and never spans lines.
 pub(super) fn mcp_server_summary(instructions: &str) -> Option<String> {
-    let text = instructions
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if text.is_empty() {
-        return None;
+    let mut summary = String::with_capacity(MCP_SNIPPET_CHARS);
+    let mut remaining = MCP_SNIPPET_CHARS;
+    let mut separator = false;
+    // Stop as soon as the first sentence or character bound is known. MCP
+    // descriptions can be large; neither a word list nor the flattened full
+    // body needs to be allocated for a short prompt summary.
+    for ch in instructions.chars() {
+        if ch.is_whitespace() {
+            separator = !summary.is_empty();
+            continue;
+        }
+        if separator {
+            if summary.ends_with('.') {
+                break;
+            }
+            if remaining == 0 {
+                summary.push('\u{2026}');
+                break;
+            }
+            summary.push(' ');
+            remaining -= 1;
+            separator = false;
+        }
+        if remaining == 0 {
+            summary.push('\u{2026}');
+            break;
+        }
+        summary.push(ch);
+        remaining -= 1;
     }
-    let sentence = match text.find(". ") {
-        Some(end) => &text[..=end],
-        None => text.as_str(),
-    };
-    let mut summary: String = sentence.chars().take(MCP_SNIPPET_CHARS).collect();
-    if summary.chars().count() == MCP_SNIPPET_CHARS {
-        summary.push('\u{2026}');
-    }
-    Some(summary)
+    (!summary.is_empty()).then_some(summary)
 }

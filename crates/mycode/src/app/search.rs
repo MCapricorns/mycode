@@ -1,11 +1,13 @@
 //! Bounded project-file search backing the composer's `@` mention.
 
+use std::collections::{BinaryHeap, VecDeque};
+
 /// Bounded file index for the composer's `@` mention: a case-insensitive
 /// substring match over the session project, skipping dependency and VCS
 /// directories, shortest paths first.
 pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<String> {
     const MAX_VISIT: usize = 8_192;
-    const MAX_COLLECT: usize = 64;
+    const MAX_MATCHES: usize = 8;
     const SKIP_DIRS: &[&str] = &[
         ".git",
         "node_modules",
@@ -20,11 +22,11 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
         "checkpoints",
     ];
     let needle = query.to_ascii_lowercase();
-    let mut matches: Vec<String> = Vec::new();
-    // Breadth-first, so the bounded collection holds the shallowest matches.
-    // A depth-first walk filled it from whichever subtree came first and
-    // could drop `src/lib.rs` for files nested ten levels down.
-    let mut queue = std::collections::VecDeque::from([root.to_path_buf()]);
+    // Keep only the best results, but inspect the whole bounded walk. Stopping
+    // after the first matching files made filesystem enumeration order hide
+    // shorter paths in later directories.
+    let mut matches: BinaryHeap<(usize, String)> = BinaryHeap::new();
+    let mut queue = VecDeque::from([root.to_path_buf()]);
     let mut visited = 0usize;
     while let Some(dir) = queue.pop_front() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -36,25 +38,27 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
                 return finish_mention_matches(matches);
             }
             let path = entry.path();
-            let Ok(meta) = entry.metadata() else {
+            let Ok(file_type) = entry.file_type() else {
                 continue;
             };
-            if meta.is_dir() {
+            if file_type.is_dir() {
                 if let Some(name) = path.file_name().and_then(|name| name.to_str())
                     && (SKIP_DIRS.contains(&name) || (name.starts_with('.') && name != ".agents"))
                 {
                     continue;
                 }
                 queue.push_back(path);
-            } else if meta.is_file() {
+            } else if file_type.is_file() {
                 let Ok(rel) = path.strip_prefix(root) else {
                     continue;
                 };
                 let spelling = rel.to_string_lossy().replace('\\', "/");
                 if needle.is_empty() || contains_ignore_ascii_case(&spelling, &needle) {
-                    matches.push(spelling);
-                    if matches.len() >= MAX_COLLECT {
-                        return finish_mention_matches(matches);
+                    let candidate = (spelling.len(), spelling);
+                    if matches.len() < MAX_MATCHES {
+                        matches.push(candidate);
+                    } else if matches.peek().is_some_and(|worst| &candidate < worst) {
+                        *matches.peek_mut().expect("the result heap is full") = candidate;
                     }
                 }
             }
@@ -78,16 +82,38 @@ fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     })
 }
 
-/// Shortest-first truncation shared by the walk's exit points.
-fn finish_mention_matches(mut matches: Vec<String>) -> Vec<String> {
-    const MAX_MATCHES: usize = 8;
-    matches.sort_by(|left, right| left.len().cmp(&right.len()).then_with(|| left.cmp(right)));
-    matches.truncate(MAX_MATCHES);
+/// Shortest-first rendering shared by the walk's exit points.
+fn finish_mention_matches(matches: BinaryHeap<(usize, String)>) -> Vec<String> {
     matches
+        .into_sorted_vec()
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shorter_paths_survive_more_than_sixty_four_earlier_matches() {
+        let root =
+            std::env::temp_dir().join(format!("mycode-mention-ranked-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        for index in 0..100 {
+            std::fs::write(
+                root.join(format!("long_library_filename_{index:03}.rs")),
+                "",
+            )
+            .unwrap();
+        }
+        std::fs::write(root.join("src").join("lib.rs"), "").unwrap();
+        let found = super::search_project_files(&root, "LIB");
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(found.len(), 8);
+        assert_eq!(found[0], "src/lib.rs");
+        assert_eq!(found[1], "long_library_filename_000.rs");
+        assert_eq!(found[7], "long_library_filename_006.rs");
+    }
+
     #[test]
     fn shallow_matches_survive_a_crowded_subtree() {
         let root = std::env::temp_dir().join(format!(

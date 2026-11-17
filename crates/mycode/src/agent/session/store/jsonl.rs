@@ -153,8 +153,12 @@ pub(crate) fn message_title(kind: EventKind, payload: &[u8]) -> Option<String> {
     {
         return None;
     }
-    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let title: String = collapsed.chars().take(60).collect();
+    let title: String = text
+        .split_whitespace()
+        .enumerate()
+        .flat_map(|(index, word)| (index > 0).then_some(' ').into_iter().chain(word.chars()))
+        .take(60)
+        .collect();
     if title.is_empty() { None } else { Some(title) }
 }
 
@@ -299,6 +303,16 @@ pub(crate) fn kind_from_label(label: &str) -> Option<EventKind> {
 #[cfg(test)]
 mod title_tests {
     use super::*;
+
+    #[test]
+    fn titles_collapse_whitespace_and_bound_unicode_characters() {
+        let message = format!(" \n{}\u{2003}\t{} ", "界".repeat(30), "字".repeat(100));
+        assert_eq!(
+            message_title(EventKind::Message, message.as_bytes()),
+            Some(format!("{} {}", "界".repeat(30), "字".repeat(29)))
+        );
+        assert_eq!(message_title(EventKind::Message, b" \n\t"), None);
+    }
 
     #[test]
     fn user_envelopes_supply_plain_titles_including_literal_summary_markers() {

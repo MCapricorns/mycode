@@ -93,6 +93,39 @@ fn mcp_snippets_say_what_the_tool_does() {
 }
 
 #[test]
+fn mcp_summaries_share_sentence_whitespace_and_truncation_rules() {
+    for (input, expected) in [
+        (" \n\t\u{2003}", None),
+        (
+            "\n Look\u{2003}up\t a library.\nReturns pages.",
+            Some("Look up a library.".to_owned()),
+        ),
+        (&"界".repeat(160), Some("界".repeat(160))),
+        (
+            &format!("{} \n\t", "界".repeat(160)),
+            Some("界".repeat(160)),
+        ),
+        (
+            &"界".repeat(161),
+            Some(format!("{}\u{2026}", "界".repeat(160))),
+        ),
+        (
+            &format!("{}. More detail.", "x".repeat(159)),
+            Some(format!("{}.", "x".repeat(159))),
+        ),
+    ] {
+        assert_eq!(super::mcp_server_summary(input), expected);
+        assert_eq!(
+            super::mcp_snippet("docs", Some(input)),
+            expected.map_or_else(
+                || "MCP tool on server 'docs'.".to_owned(),
+                |text| format!("{text} (MCP server 'docs')")
+            )
+        );
+    }
+}
+
+#[test]
 fn oversized_results_are_truncated_and_stored() {
     let dir = std::env::temp_dir().join(format!(
         "mycode-mcp-result-{}-{}",
@@ -459,6 +492,23 @@ fn a_connecting_server_is_named_in_the_prompt_note() {
     assert!(!note.contains("Connected MCP servers"), "{note}");
 }
 
+#[test]
+fn prompt_catalog_is_stable_across_handshake_order_and_keeps_failed_servers() {
+    let a = catalog_tool("alpha", "lookup", "Look up alpha.");
+    let z = catalog_tool("zeta", "lookup", "Look up zeta.");
+    let first = catalog_from(vec![a.clone(), z.clone()], None, &native(&[]));
+    let second = catalog_from(vec![z, a], None, &native(&[]));
+    assert_eq!(first.prompt_note(), second.prompt_note());
+
+    let failed = McpCatalog::new(None, native(&[]), ["docs".to_owned()]);
+    failed.mark_failed(Arc::new(McpServerInfo::new("docs", None)), "fixture error");
+    let note = failed.prompt_note();
+    assert!(note.contains("failed to connect: docs"), "{note}");
+    assert!(note.contains("search_tool"), "{note}");
+    assert!(!note.contains("Connected MCP servers"), "{note}");
+    assert!(failed.list_text().contains("fixture error"));
+}
+
 /// A tool whose bare name is already a registry tool keeps its server
 /// prefix, so `use_tool` never reads as the other tool.
 #[test]
@@ -630,6 +680,8 @@ async fn tool_search_returns_ready_schemas() {
         specs[0]["params_schema"].is_object(),
         "the schema is returned: {text}"
     );
+    assert!(specs[0].get("inputSchema").is_none());
+    assert!(search.spec().description.contains("`params_schema`"));
 }
 
 pub(super) fn server_row(id: &str) -> crate::config::McpServerSettings {
