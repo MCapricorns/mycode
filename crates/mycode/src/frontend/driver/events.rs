@@ -34,6 +34,7 @@ impl FrontendDriver {
         | BridgeEvent::ChatFailed { session_id, .. } = &event
         {
             self.submitted_turns.remove(session_id);
+            self.pending_asks.remove(session_id);
         }
         // A held interrupt belongs to one turn and ends with it, on screen
         // or not.
@@ -185,12 +186,15 @@ impl FrontendDriver {
             }
             BridgeEvent::AskRequested {
                 session_id,
+                ask_id,
                 questions,
             } => {
-                if !self.is_open_session(&session_id) {
-                    return;
-                }
-                FrontendAction::AskRequested(questions)
+                self.receive_ask(session_id, ask_id, questions, out);
+                return;
+            }
+            BridgeEvent::AskResolved { session_id, ask_id } => {
+                self.resolve_ask(&session_id, ask_id, out);
+                return;
             }
             BridgeEvent::ToolPreparing {
                 session_id,

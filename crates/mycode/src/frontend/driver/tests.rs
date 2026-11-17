@@ -2,6 +2,7 @@ use super::ReplyScope;
 use crate::app::ActiveConversation;
 use crate::frontend::view_model::{FrontendAction, WorkspaceState, reduce};
 
+mod asks;
 mod catalog;
 mod creation;
 mod recall;

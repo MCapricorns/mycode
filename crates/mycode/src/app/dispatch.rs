@@ -633,10 +633,11 @@ async fn handle(state: &CoreState, command: BridgeCommand) -> BridgeReply {
         }
         BridgeCommand::AskAnswer {
             session_id,
+            ask_id,
             answers,
-        } => BridgeReply::AskAnswered(deliver_ask_answer(&session_id, answers)),
-        BridgeCommand::AskDismiss { session_id } => {
-            BridgeReply::AskAnswered(dismiss_ask(&session_id))
+        } => BridgeReply::AskAnswered(deliver_ask_answer(&session_id, ask_id, answers)),
+        BridgeCommand::AskDismiss { session_id, ask_id } => {
+            BridgeReply::AskAnswered(dismiss_ask(&session_id, ask_id))
         }
         BridgeCommand::GetCatalog => BridgeReply::Catalog(Ok(catalog_info(state))),
         BridgeCommand::LoadUiState => {

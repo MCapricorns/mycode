@@ -36,19 +36,26 @@ impl AskRouter {
             AskSlot {
                 session_id: session_id.to_owned(),
                 generation,
+                events: None,
             },
         )
     }
 
-    fn deliver(&self, session_id: &str, answers: Vec<String>) -> bool {
-        self.pending
-            .lock()
-            .remove(session_id)
+    fn deliver(&self, session_id: &str, generation: u64, answers: Vec<String>) -> bool {
+        self.take(session_id, generation)
             .is_some_and(|ask| ask.answer.send(answers).is_ok())
     }
 
-    fn dismiss(&self, session_id: &str) -> bool {
-        self.pending.lock().remove(session_id).is_some()
+    fn take(&self, session_id: &str, generation: u64) -> Option<PendingAsk> {
+        let mut pending = self.pending.lock();
+        if pending
+            .get(session_id)
+            .is_some_and(|ask| ask.generation == generation)
+        {
+            pending.remove(session_id)
+        } else {
+            None
+        }
     }
 
     /// Removes one registration, but only when it still maps to that slot's
@@ -73,12 +80,19 @@ impl AskRouter {
 pub(crate) struct AskSlot {
     session_id: String,
     generation: u64,
+    events: Option<crate::app::BridgeEventTx>,
 }
 
 impl Drop for AskSlot {
     fn drop(&mut self) {
         if let Some(router) = ASK_ROUTER.get() {
             router.retire(self);
+        }
+        if let Some(events) = &self.events {
+            let _ = events.send(BridgeEvent::AskResolved {
+                session_id: self.session_id.clone(),
+                ask_id: self.generation,
+            });
         }
     }
 }
@@ -96,9 +110,13 @@ pub(crate) fn register_ask(
         .register(session_id)
 }
 
-pub(crate) fn deliver_ask_answer(session_id: &str, answers: Vec<String>) -> Result<(), String> {
+pub(crate) fn deliver_ask_answer(
+    session_id: &str,
+    ask_id: u64,
+    answers: Vec<String>,
+) -> Result<(), String> {
     let router = ASK_ROUTER.get_or_init(AskRouter::default);
-    if router.deliver(session_id, answers) {
+    if router.deliver(session_id, ask_id, answers) {
         Ok(())
     } else {
         Err("no pending question for this session".to_owned())
@@ -107,9 +125,9 @@ pub(crate) fn deliver_ask_answer(session_id: &str, answers: Vec<String>) -> Resu
 
 /// Drops a pending ask without answering. The tool returns a catchable error
 /// and the program keeps running. Stopping the turn is a separate cancel.
-pub(crate) fn dismiss_ask(session_id: &str) -> Result<(), String> {
+pub(crate) fn dismiss_ask(session_id: &str, ask_id: u64) -> Result<(), String> {
     let router = ASK_ROUTER.get_or_init(AskRouter::default);
-    if router.dismiss(session_id) {
+    if router.take(session_id, ask_id).is_some() {
         Ok(())
     } else {
         Err("no pending question for this session".to_owned())
@@ -141,7 +159,8 @@ impl crate::tools::builtin::AskChannel for BridgeAskChannel {
             // its card yet failed at once as dismissed. Registering before
             // the card goes out means an answer can never beat its channel,
             // and the slot retires the entry however this wait ends.
-            let (answer, _slot) = register_ask(&self.session_id);
+            let (answer, mut slot) = register_ask(&self.session_id);
+            slot.events = Some(self.events.clone());
             let rows = questions
                 .iter()
                 .map(|question| crate::app::protocol::AskPrompt {
@@ -151,10 +170,13 @@ impl crate::tools::builtin::AskChannel for BridgeAskChannel {
                     multiple: question.multiple,
                 })
                 .collect();
-            let _ = self.events.send(BridgeEvent::AskRequested {
-                session_id: self.session_id.clone(),
-                questions: rows,
-            });
+            self.events
+                .send(BridgeEvent::AskRequested {
+                    session_id: self.session_id.clone(),
+                    ask_id: slot.generation,
+                    questions: rows,
+                })
+                .map_err(|_| crate::tools::builtin::user_dismissed())?;
             let answers = tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
@@ -184,11 +206,16 @@ mod tests {
     #[test]
     fn a_turns_exit_retires_only_its_own_registration() {
         let (_first_rx, first_slot) = register_ask("ses1-ask-generations");
-        let (_second_rx, _second_slot) = register_ask("ses1-ask-generations");
+        let (_second_rx, second_slot) = register_ask("ses1-ask-generations");
         // The first turn's registry drops; the newer registration must stay.
         drop(first_slot);
         assert!(
-            deliver_ask_answer("ses1-ask-generations", vec!["yes".to_owned()]).is_ok(),
+            deliver_ask_answer(
+                "ses1-ask-generations",
+                second_slot.generation,
+                vec!["yes".to_owned()]
+            )
+            .is_ok(),
             "the successor turn's registration was retired by the old turn"
         );
     }
@@ -212,19 +239,70 @@ mod tests {
         for reply in ["first", "second"] {
             let user = async {
                 let request = requests.recv().await.expect("question card");
-                assert!(matches!(
-                    request,
-                    crate::app::BridgeEvent::AskRequested { .. }
-                ));
-                deliver_ask_answer("ses4-ask-twice", vec![reply.to_owned()])
+                let crate::app::BridgeEvent::AskRequested { ask_id, .. } = request else {
+                    panic!("expected question card");
+                };
+                deliver_ask_answer("ses4-ask-twice", ask_id, vec![reply.to_owned()])
                     .expect("the ask must be waiting for this answer");
             };
             let (answers, ()) = tokio::join!(channel.ask(&questions, &cancel), user);
             let answers = answers.expect("answered ask");
             assert_eq!(answers[0].answer, reply);
+            assert!(matches!(
+                requests.recv().await,
+                Some(crate::app::BridgeEvent::AskResolved { .. })
+            ));
         }
         // An answer with no question on screen is refused, not buffered for
         // the next question.
-        assert!(deliver_ask_answer("ses4-ask-twice", vec!["stale".to_owned()]).is_err());
+        assert!(deliver_ask_answer("ses4-ask-twice", 0, vec!["stale".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn an_old_card_cannot_answer_or_dismiss_its_replacement() {
+        let (_first, first_slot) = register_ask("ask-stale-card");
+        let (mut second, second_slot) = register_ask("ask-stale-card");
+        assert!(deliver_ask_answer("ask-stale-card", first_slot.generation, vec![]).is_err());
+        assert!(super::dismiss_ask("ask-stale-card", first_slot.generation).is_err());
+        deliver_ask_answer(
+            "ask-stale-card",
+            second_slot.generation,
+            vec!["current".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(second.try_recv().unwrap(), vec!["current".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_ask_retires_its_card_and_answer_channel() {
+        use crate::tools::builtin::{AskChannel as _, AskQuestion};
+
+        let (events, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let channel = super::BridgeAskChannel {
+            session_id: "ask-cancel-card".to_owned(),
+            events,
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let questions = [AskQuestion {
+            question: "Continue?".to_owned(),
+            choices: vec![],
+            optional: false,
+            multiple: false,
+        }];
+        let stop = async {
+            let Some(crate::app::BridgeEvent::AskRequested { ask_id, .. }) = requests.recv().await
+            else {
+                panic!("expected question card");
+            };
+            cancel.cancel();
+            ask_id
+        };
+        let (result, id) = tokio::join!(channel.ask(&questions, &cancel), stop);
+        assert!(result.is_err());
+        assert!(matches!(
+            requests.recv().await,
+            Some(crate::app::BridgeEvent::AskResolved { ask_id, .. }) if ask_id == id
+        ));
+        assert!(deliver_ask_answer("ask-cancel-card", id, vec![]).is_err());
     }
 }

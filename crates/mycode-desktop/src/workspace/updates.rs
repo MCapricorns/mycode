@@ -4,6 +4,7 @@
 //! prompts and the per-question text fields only gpui can own.
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{AppContext as _, Context, Entity, Window};
+use mycode::frontend::driver::AskIdentity;
 
 use crate::view_model::nav::{DismissLayer, top_dismiss_layer};
 use crate::view_model::{FrontendAction, MainView};
@@ -39,30 +40,60 @@ impl Workspace {
 
     // ---- ask card inputs (entities stay here; answers live in the driver) ----
 
+    pub(crate) fn ask_identity(&self) -> Option<AskIdentity> {
+        self.driver.open_ask_identity()
+    }
+
     pub(crate) fn ask_input(
         &mut self,
+        identity: &AskIdentity,
         index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<InputState> {
         while self.ask_inputs.len() <= index {
             let input_index = self.ask_inputs.len();
+            let draft = self
+                .driver
+                .ask_texts
+                .get(input_index)
+                .cloned()
+                .unwrap_or_default();
             let input = cx.new(|cx| {
-                InputState::new(window, cx).placeholder(crate::i18n::t(
+                let mut input = InputState::new(window, cx).placeholder(crate::i18n::t(
                     "Type a free-text answer",
                     "输入自由文本回答",
-                ))
+                ));
+                input.set_value(draft, window, cx);
+                input
             });
+            let identity = identity.clone();
             cx.subscribe_in(&input, window, move |workspace, input, event, _, cx| {
+                // The old frame may still hold this entity after AskReset.
+                // Even a refresh of the same ask must not revive an old input.
+                if workspace
+                    .ask_inputs
+                    .get(input_index)
+                    .is_none_or(|current| current.entity_id() != input.entity_id())
+                {
+                    return;
+                }
                 match event {
                     InputEvent::PressEnter { .. } => {
-                        workspace.driver_do(|d, fx| d.ask_next(fx), cx);
+                        workspace.on_ask_next(&identity, cx);
                     }
                     // Typing and a picked choice are mutually exclusive;
                     // the driver clears the pick when fresh text arrives.
                     InputEvent::Change => {
                         let text = input.read(cx).value().to_string();
-                        workspace.driver_do(|d, fx| d.ask_text_typed(input_index, text, fx), cx);
+                        workspace.driver_do(
+                            |d, fx| {
+                                d.with_open_ask(&identity, fx, |d, fx| {
+                                    d.ask_text_typed(input_index, text, fx);
+                                });
+                            },
+                            cx,
+                        );
                     }
                     _ => {}
                 }
@@ -80,27 +111,44 @@ impl Workspace {
 
     pub(crate) fn on_pick_ask_choice(
         &mut self,
+        identity: &AskIdentity,
         index: usize,
         answer: String,
         submit: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.driver_do(|d, fx| d.pick_ask_choice(index, answer, submit, fx), cx);
+        self.driver_do(
+            |d, fx| {
+                d.with_open_ask(identity, fx, |d, fx| {
+                    d.pick_ask_choice(index, answer, submit, fx);
+                });
+            },
+            cx,
+        );
     }
 
     /// Advances the ask card one question; the last question submits.
-    pub(crate) fn on_ask_next(&mut self, cx: &mut Context<Self>) {
-        self.driver_do(|d, fx| d.ask_next(fx), cx);
+    pub(crate) fn on_ask_next(&mut self, identity: &AskIdentity, cx: &mut Context<Self>) {
+        self.driver_do(
+            |d, fx| d.with_open_ask(identity, fx, |d, fx| d.ask_next(fx)),
+            cx,
+        );
     }
 
     /// Steps the ask card back one question; earlier answers stay put.
-    pub(crate) fn on_ask_back(&mut self, cx: &mut Context<Self>) {
-        self.driver_do(|d, fx| d.ask_back(fx), cx);
+    pub(crate) fn on_ask_back(&mut self, identity: &AskIdentity, cx: &mut Context<Self>) {
+        self.driver_do(
+            |d, fx| d.with_open_ask(identity, fx, |d, fx| d.ask_back(fx)),
+            cx,
+        );
     }
 
-    pub(crate) fn on_dismiss_ask(&mut self, cx: &mut Context<Self>) {
-        self.driver_do(|d, fx| d.dismiss_ask(fx), cx);
+    pub(crate) fn on_dismiss_ask(&mut self, identity: &AskIdentity, cx: &mut Context<Self>) {
+        self.driver_do(
+            |d, fx| d.with_open_ask(identity, fx, |d, fx| d.dismiss_ask(fx)),
+            cx,
+        );
     }
 
     // ---- escape ----
@@ -172,8 +220,8 @@ impl Workspace {
             self.apply_action(FrontendAction::ShowMainView(MainView::Chat), cx);
             dismissed = true;
         }
-        if !dismissed && self.vm().pending_ask.is_some() {
-            self.on_dismiss_ask(cx);
+        if !dismissed && let Some(identity) = self.ask_identity() {
+            self.on_dismiss_ask(&identity, cx);
         }
         // Escape never stops a running turn: the Stop button is the only way
         // out, so a stray keypress cannot touch running work.

@@ -242,6 +242,8 @@ pub enum BridgeCommand {
     AskAnswer {
         /// Session identity spelling.
         session_id: String,
+        /// Issuance of the question card being answered.
+        ask_id: u64,
         /// One answer per asked question, in order; empty string skips.
         answers: Vec<String>,
     },
@@ -250,6 +252,8 @@ pub enum BridgeCommand {
     AskDismiss {
         /// Session identity spelling.
         session_id: String,
+        /// Issuance of the question card being dismissed.
+        ask_id: u64,
     },
     /// Resolve the gateway's current model list from memory.
     GetCatalog,
@@ -369,8 +373,17 @@ pub enum BridgeEvent {
     AskRequested {
         /// Session identity spelling.
         session_id: String,
+        /// Monotonic issuance; stale cards cannot answer a replacement ask.
+        ask_id: u64,
         /// Questions the user should answer, including multi-select.
         questions: Vec<crate::app::protocol::AskPrompt>,
+    },
+    /// A question card was answered, dismissed, cancelled, or dropped.
+    AskResolved {
+        /// Session identity spelling.
+        session_id: String,
+        /// Only this issuance may be removed from the frontend.
+        ask_id: u64,
     },
     /// The model is still writing an `agent` call. Sent when the call opens
     /// and again whenever its role or description becomes readable, so each

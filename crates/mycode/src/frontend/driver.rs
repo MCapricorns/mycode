@@ -216,7 +216,7 @@ impl ReplyScope {
             BridgeCommand::CancelChat { session_id }
             | BridgeCommand::ListResources { session_id }
             | BridgeCommand::AskAnswer { session_id, .. }
-            | BridgeCommand::AskDismiss { session_id } => Self::Session {
+            | BridgeCommand::AskDismiss { session_id, .. } => Self::Session {
                 session: session_id.clone(),
                 branch: None,
             },
@@ -327,6 +327,8 @@ enum DriverMsg {
     },
 }
 
+mod asks;
+pub use asks::AskIdentity;
 mod pump;
 use self::pump::block_on;
 
@@ -477,6 +479,8 @@ pub struct FrontendDriver {
     pub ask_texts: Vec<String>,
     /// The question the ask card is showing; answers step one at a time.
     pub ask_index: usize,
+    /// Questions and draft answers survive switching or parking conversations.
+    pending_asks: BTreeMap<String, asks::PendingAsk>,
 }
 
 impl FrontendDriver {
@@ -556,6 +560,7 @@ impl FrontendDriver {
             library_watcher: None,
             ask_texts: Vec::new(),
             ask_index: 0,
+            pending_asks: BTreeMap::new(),
         };
         driver.spawn_update_recheck();
         driver
@@ -837,6 +842,23 @@ impl FrontendDriver {
     /// consequences that follow from the transition (autosave, toasts,
     /// project-change side effects, tail-follow scroll, mention search).
     pub fn act(&mut self, action: FrontendAction, out: &mut Vec<Effect>) {
+        let restore_ask = matches!(action, FrontendAction::ConversationOpened(_));
+        if matches!(
+            action,
+            FrontendAction::ConversationOpened(_)
+                | FrontendAction::SessionCreated(_)
+                | FrontendAction::ConversationParked
+        ) {
+            self.park_open_ask();
+        } else if matches!(
+            action,
+            FrontendAction::SessionDeleted
+                | FrontendAction::ChatDone { .. }
+                | FrontendAction::ChatFailed { .. }
+        ) && let Some(session) = self.open_session_id()
+        {
+            self.pending_asks.remove(&session);
+        }
         let changed_conversation = match &action {
             FrontendAction::ConversationOpened(next) => {
                 self.vm.active.as_ref().is_none_or(|active| {
@@ -887,6 +909,7 @@ impl FrontendDriver {
             || matches!(
                 action,
                 FrontendAction::AskRequested(_)
+                    | FrontendAction::AskAnswered
                     | FrontendAction::ChatDone { .. }
                     | FrontendAction::ChatFailed { .. }
             )
@@ -927,6 +950,9 @@ impl FrontendDriver {
             self.reload_mcp_library(out);
         }
         reduce(&mut self.vm, action);
+        if restore_ask {
+            self.restore_open_ask();
+        }
         if let Some(previous_project) = previous_project
             && self.vm.project_dir != previous_project
         {

@@ -215,25 +215,22 @@ impl FrontendDriver {
     /// Dismisses the pending ask without answering. The tool sees a
     /// catchable error; this does not cancel the turn.
     pub fn dismiss_ask(&mut self, out: &mut Vec<Effect>) {
-        let Some(session_id) = self.open_session_id() else {
+        let Some((session_id, ask_id)) = self.take_open_ask() else {
             return;
         };
-        self.ask_texts.clear();
-        self.ask_index = 0;
         self.act(FrontendAction::AskAnswered, out);
-        self.dispatch(BridgeCommand::AskDismiss { session_id });
+        self.dispatch(BridgeCommand::AskDismiss { session_id, ask_id });
     }
 
     fn answer_ask(&mut self, answers: Vec<String>, out: &mut Vec<Effect>) {
-        let Some(session_id) = self.open_session_id() else {
+        let Some((session_id, ask_id)) = self.take_open_ask() else {
             return;
         };
         // Each question owns its text; the next request starts with empty fields.
-        self.ask_texts.clear();
-        self.ask_index = 0;
         self.act(FrontendAction::AskAnswered, out);
         self.dispatch(BridgeCommand::AskAnswer {
             session_id,
+            ask_id,
             answers,
         });
     }

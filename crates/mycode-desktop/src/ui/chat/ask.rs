@@ -26,6 +26,9 @@ pub(crate) fn render_ask_card(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> gpui_kit::AnyElement {
+    let Some(identity) = workspace.ask_identity() else {
+        return div().into_any_element();
+    };
     let rows = workspace.vm().pending_ask.clone().unwrap_or_default();
     let picks = workspace.vm().ask_answers.clone();
     let total = rows.len();
@@ -34,7 +37,7 @@ pub(crate) fn render_ask_card(
     // `ask_input` needs `&mut cx`, so it is fetched before `theme` borrows.
     let input = rows
         .get(index)
-        .map(|_| workspace.ask_input(index, window, cx));
+        .map(|_| workspace.ask_input(&identity, index, window, cx));
     let theme = cx.theme();
     let desk = Desk::of(theme);
     let muted = theme.muted_foreground;
@@ -128,6 +131,7 @@ pub(crate) fn render_ask_card(
                                 .enumerate()
                                 .map(|(choice_index, choice)| {
                                     let answer = choice.clone();
+                                    let identity = identity.clone();
                                     let multiple = row.multiple;
                                     let selected = mycode::tools::builtin::ask_choice_selected(
                                         &picked, choice,
@@ -142,6 +146,7 @@ pub(crate) fn render_ask_card(
                                     .on_click(cx.listener(
                                         move |workspace, _, window, cx| {
                                             workspace.on_pick_ask_choice(
+                                                &identity,
                                                 index,
                                                 answer.clone(),
                                                 false,
@@ -157,7 +162,7 @@ pub(crate) fn render_ask_card(
                                                 .get(index)
                                                 .is_some_and(|answer| !answer.is_empty());
                                             if !multiple && picked {
-                                                workspace.on_ask_next(cx);
+                                                workspace.on_ask_next(&identity, cx);
                                             }
                                         },
                                     ))
@@ -187,22 +192,24 @@ pub(crate) fn render_ask_card(
             .border_t_1()
             .border_color(theme.border)
             .child(
-                ask_text_button("ask-decline", t("Decline", "拒绝"), theme).on_click(cx.listener(
-                    |workspace, _, _, cx| {
-                        workspace.on_dismiss_ask(cx);
-                    },
-                )),
+                ask_text_button("ask-decline", t("Decline", "拒绝"), theme).on_click({
+                    let identity = identity.clone();
+                    cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_dismiss_ask(&identity, cx);
+                    })
+                }),
             )
             .child(div().flex_1().min_w_0())
             .when(index > 0, |this| {
+                let identity = identity.clone();
                 this.child(
                     skin::glass_button("ask-back", false, theme)
                         .h(px(28.))
                         .text_xs()
                         .child(Icon::new(IconName::ArrowLeft).xsmall())
                         .child(t("Back", "上一题"))
-                        .on_click(cx.listener(|workspace, _, _, cx| {
-                            workspace.on_ask_back(cx);
+                        .on_click(cx.listener(move |workspace, _, _, cx| {
+                            workspace.on_ask_back(&identity, cx);
                         })),
                 )
             })
@@ -224,8 +231,8 @@ pub(crate) fn render_ask_card(
                         })
                         .xsmall(),
                     )
-                    .on_click(cx.listener(|workspace, _, _, cx| {
-                        workspace.on_ask_next(cx);
+                    .on_click(cx.listener(move |workspace, _, _, cx| {
+                        workspace.on_ask_next(&identity, cx);
                     })),
             ),
     )
