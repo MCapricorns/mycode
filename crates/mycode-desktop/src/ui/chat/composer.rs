@@ -55,6 +55,7 @@ pub(super) const COMPOSER_MAX_PX: f32 = 760.;
 /// scrolls once the draft is longer.
 pub(super) fn render_composer(
     workspace: &mut Workspace,
+    welcome: bool,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
@@ -214,6 +215,9 @@ pub(super) fn render_composer(
             div()
                 .id("composer-column")
                 .w_full()
+                .when(welcome, |this| {
+                    this.max_w(px(super::welcome::CONTENT_WIDTH))
+                })
                 .min_w_0()
                 .flex()
                 .flex_col()

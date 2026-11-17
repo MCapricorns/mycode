@@ -329,15 +329,19 @@ pub(super) fn render_chat(
             preparing_element,
         )
     };
-    let scroll_handle = workspace.conversation_scroll_handle().clone();
+    let scroll_handle = if show_welcome {
+        welcome::scroll_handle(window)
+    } else {
+        workspace.conversation_scroll_handle().clone()
+    };
     let appearance = workspace
         .take_appearance_scroll()
         .map(|(pinned, offset_y)| scroll_hold::AppearanceHold { pinned, offset_y });
     let anchor = scroll_hold::ScrollAnchor::new(
         scroll_handle.clone(),
-        workspace.take_scroll_anchor(),
-        appearance,
-        workspace.conversation_follows_tail(),
+        workspace.take_scroll_anchor().filter(|_| !show_welcome),
+        appearance.filter(|_| !show_welcome),
+        !show_welcome && workspace.conversation_follows_tail(),
     );
     let probe = anchor.probe();
     let theme = cx.theme();
@@ -360,7 +364,9 @@ pub(super) fn render_chat(
         .flex_col()
         .bg(super::skin::ambient(theme))
         .when(details_reserve > 0., |this| this.pr(px(details_reserve)))
-        .child(super::workbench::render_page_band(workspace, window, cx))
+        .when(!show_welcome, |this| {
+            this.child(super::workbench::render_page_band(workspace, window, cx))
+        })
         .child(
             div()
                 .id("conversation-frame")
@@ -379,13 +385,17 @@ pub(super) fn render_chat(
                             .overflow_x_hidden()
                             .overflow_y_scroll()
                             .track_scroll(&scroll_handle)
-                            .on_scroll(cx.listener(|workspace, _, _, cx| {
-                                workspace.on_conversation_scrolled(cx);
+                            .on_scroll(cx.listener(move |workspace, _, _, cx| {
+                                if !show_welcome {
+                                    workspace.on_conversation_scrolled(cx);
+                                }
                             }))
                             .on_mouse_up(
                                 gpui_kit::MouseButton::Left,
-                                cx.listener(|workspace, _, _, cx| {
-                                    workspace.on_conversation_scrolled(cx);
+                                cx.listener(move |workspace, _, _, cx| {
+                                    if !show_welcome {
+                                        workspace.on_conversation_scrolled(cx);
+                                    }
                                 }),
                             )
                             .flex()
@@ -393,6 +403,9 @@ pub(super) fn render_chat(
                             .child(
                                 probe.child(
                                     transcript::transcript_stack()
+                                        .when(show_welcome, |this| {
+                                            this.min_h_full().justify_center()
+                                        })
                                         // Keep the newest row close to the composer
                                         // with one spacing step between the surfaces.
                                         .pb(super::skin::space(3))
@@ -435,7 +448,12 @@ pub(super) fn render_chat(
             !show_welcome && !workspace.conversation_follows_tail(),
             |this| this.child(render_jump_to_latest(cx)),
         )
-        .child(composer::render_composer(workspace, window, cx))
+        .child(composer::render_composer(
+            workspace,
+            show_welcome,
+            window,
+            cx,
+        ))
         .into_any_element()
 }
 
