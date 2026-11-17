@@ -146,8 +146,8 @@ pub struct AgentArgs {
     /// Role to invoke: one of the enabled roles the system prompt's
     /// `<dispatch>` section lists.
     pub agent: String,
-    /// Complete, self-contained instructions for the subagent. Include the
-    /// goal, relevant paths, and the expected form of the answer.
+    /// Self-contained brief: outcome, acceptance criteria, relevant paths and
+    /// evidence, write boundaries, checks, return conditions, and expected output.
     pub prompt: String,
     /// One-line label shown while the subagent runs.
     #[serde(default)]
@@ -176,7 +176,9 @@ impl Tool for AgentTool {
     fn description(&self) -> &str {
         "Delegate one self-contained task to an enabled role from <dispatch> and wait for its \
          answer. The child cannot see this conversation or ask the user, so the brief must state \
-         the goal, paths, constraints, supplied evidence, and done condition."
+         the goal, paths, constraints, supplied evidence, and done condition. Check existing \
+         runs before assigning overlapping work; use their run id to inspect or steer them. \
+         A completed result is a review handoff, not final acceptance."
     }
 
     async fn execute(
@@ -232,27 +234,38 @@ impl Tool for AgentTool {
                 ctx,
             )
             .await?;
-        let result = if run.status == AgentRunStatus::Completed {
-            ToolResult::text(run.result.clone().unwrap_or_default())
-        } else {
-            ToolResult::error(
-                run.error
-                    .clone()
-                    .unwrap_or_else(|| "subagent failed".into()),
-            )
-        };
-        Ok(result.with_details(serde_json::json!({"agent_states": [AgentStateEvent::Run(run)]})))
+        Ok(run_result(run))
     }
+}
+
+fn run_result(run: AgentRunSnapshot) -> ToolResult {
+    let completed = run.status == AgentRunStatus::Completed;
+    let answer = if completed {
+        run.result.as_deref().unwrap_or_default()
+    } else {
+        run.error.as_deref().unwrap_or("subagent failed")
+    };
+    let handoff = if completed {
+        "\nReview handoff: inspect the actual changes and verification evidence before acceptance."
+    } else {
+        ""
+    };
+    let text = format!(
+        "Run: {}\nFull result artifact: {}{handoff}\n\n{answer}",
+        run.id,
+        run.artifact_path.as_deref().unwrap_or("unavailable"),
+    );
+    let result = if completed {
+        ToolResult::text(text)
+    } else {
+        ToolResult::error(text)
+    };
+    result.with_details(serde_json::json!({"agent_states": [AgentStateEvent::Run(run)]}))
 }
 
 fn brief_label(prompt: &str) -> String {
     let first = prompt.lines().next().unwrap_or("").trim();
-    let chars: Vec<char> = first.chars().collect();
-    if chars.len() <= 60 {
-        first.to_owned()
-    } else {
-        chars[..60].iter().collect()
-    }
+    first.chars().take(60).collect()
 }
 
 #[cfg(test)]

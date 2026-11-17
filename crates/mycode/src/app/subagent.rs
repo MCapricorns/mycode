@@ -245,10 +245,19 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
     format!(
         "\n\n<dispatch>\nRoles:\n{catalog_lines}\n\nProactively delegate substantial independent \
          work (investigation, bounded implementation, or review) to these roles; keep small edits \
-         and single lookups local. `agent` calls run one at a time and return the child's \
-         answer.{writers} `agent_status` reports results and artifact paths, `agent_stop` cancels \
-         a run, and `agent_message` steers a running child or continues a finished one from a \
-         summary.\n</dispatch>"
+         and single lookups local. You own the plan, integration, review, and final acceptance; \
+         a child's completed result is a review handoff. Honor requests to work without \
+         delegation, and keep questions or review-only requests read-only. Each child sees only \
+         its brief: include the outcome, acceptance criteria, relevant paths and known evidence, \
+         write boundaries, checks, return conditions, and compact expected output. Keep a change \
+         and its regression tests with one owner; do not repeat completed research or checks. \
+         `agent` calls run one at a time and return the child's answer and stable run id.{writers} \
+         Inspect the actual diff, callers, and check evidence before accepting work. When \
+         assumptions fail or repeated fixes do not resolve a failure, repair the plan or take \
+         over instead of re-dispatching the same brief. `agent_status` reports results and \
+         artifact paths, `agent_stop` cancels a run, and `agent_message` steers a running child \
+         or continues a finished one from a summary. Reuse a retained result when it is still \
+         valid; read its full artifact when the summary is truncated.\n</dispatch>"
     )
 }
 

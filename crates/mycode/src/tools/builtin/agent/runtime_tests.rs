@@ -209,7 +209,11 @@ async fn stopping_writer_holds_scope_until_settled_and_stopped_run_cannot_resume
         .await;
     assert!(overlap.is_err());
     f.host.settle.notify_one();
-    assert!(task.await.unwrap().unwrap().is_error);
+    let cancelled = task.await.unwrap().unwrap();
+    assert!(cancelled.is_error);
+    assert!(text(&cancelled).contains(&id));
+    assert!(text(&cancelled).contains("cancelled"));
+    assert!(!text(&cancelled).contains("Review handoff"));
     assert_eq!(f.runs()[0].status, AgentRunStatus::Cancelled);
     let messages = AgentMessageTool::new(f.host.clone(), f.runtime.clone());
     assert!(
@@ -258,8 +262,12 @@ async fn active_steering_and_summary_continuation_use_real_identity_and_a_new_ru
         )
         .await
         .unwrap();
-    assert!(text(&task.await.unwrap().unwrap()).contains("caller too"));
-    messages
+    let first = text(&task.await.unwrap().unwrap());
+    assert!(first.contains("caller too"));
+    assert!(first.contains(&id));
+    assert!(first.contains("Review handoff"));
+    assert!(first.contains(f.runs()[0].artifact_path.as_deref().unwrap()));
+    let continuation = messages
         .execute_dyn(
             json!({"id":id,"message":"answer the follow-up"}),
             &f.ctx("continuation-host"),
@@ -268,6 +276,9 @@ async fn active_steering_and_summary_continuation_use_real_identity_and_a_new_ru
         .await
         .unwrap();
     assert_eq!(f.runs().len(), 2);
+    let continuation_id = f.runs().into_iter().find(|run| run.id != id).unwrap().id;
+    assert!(text(&continuation).contains(&continuation_id));
+    assert!(text(&continuation).contains("Review handoff"));
 }
 
 #[tokio::test]

@@ -185,16 +185,6 @@ impl Tool for AgentMessageTool {
                 ctx,
             )
             .await?;
-        let mut result = if run.status == AgentRunStatus::Completed {
-            ToolResult::text(run.result.clone().unwrap_or_default())
-        } else {
-            ToolResult::error(
-                run.error
-                    .clone()
-                    .unwrap_or_else(|| "continuation failed".into()),
-            )
-        };
-        result.details = Some(serde_json::json!({"agent_states":[AgentStateEvent::Run(run)]}));
-        Ok(result)
+        Ok(super::run_result(run))
     }
 }
