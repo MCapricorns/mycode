@@ -82,7 +82,7 @@ MYCode 由核心运行时 `mycode` 与原生桌面壳 `mycode-desktop` 构成。
 
 ### 项目、会话与检查视图
 
-- **欢迎页与默认空间**：未绑定目录时发言会存入「默认聊天」，可随时切换到本地项目；移除项目入口不会删除磁盘代码或历史会话。
+- **欢迎页与默认空间**：居中的项目入口支持打开文件夹、继续最近项目或直接聊天；未绑定目录时发言会存入「默认聊天」。移除项目入口不会删除磁盘代码或历史会话。
 - **Paper-Pixel 工作台**：支持亮色/深色两套纸感主题与 `S / M / L / XL` 四档界面字号（详见 [DESIGN.md](DESIGN.md)）；窗口大小调整不会静默覆盖字号设置。
 - **Details 检查面板**：按「子代理任务」「文件改动」「模型与用量」清晰分组，支持右侧固定停靠或浮层展开，点击变更文件即可查看高亮 Git diff。
 - **会话状态隔离**：模型与思考强度按会话独立保存，模型徽章保留网关返回的来源标识（不同来源的同名模型分别列出），思考档位仅展示模型声明的支持级别。
@@ -119,6 +119,8 @@ MYCode 由核心运行时 `mycode` 与原生桌面壳 `mycode-desktop` 构成。
 - Magpie Library 会同步全局规则、Skills 与 MCP 配置；项目级规则按 `AGENTS.md` → `MYCODE.md` → `.mycode/agents.md` → `.agents/AGENTS.md` 顺序加载，后者覆盖前者冲突项，用户显式指令具有最高优先级。
 - Library 中的 MCP、Skills、角色与设置变动会自动刷新桌面状态；运行中的主代理与子代理在下一次模型请求前读取最新规则与目录（Skills 默认仅注入名称、描述与路径，正文按需读取）。
 - MCP 工具通过 `search_tool` / `tool_search` 发现 schema 后经 `use_tool` 执行；收到 `notifications/tools/list_changed` 后重新同步目录。
+- Skills 目录前 32 项包含用途摘要，后续启用项保留名称和真实路径；目录有总预算，正文按需读取。超过规则注入预算的文件会保留来源提示。
+- stdio MCP 在空闲期间也接收工具目录变更通知；HTTP 通知当前仍随 POST 响应流读取。
 
 ### CodeMode（QuickJS 脚本执行）
 
@@ -149,6 +151,7 @@ const [hits, cargo] = await Promise.all([
 | `sentinel` | 独立审查实现、diff 与假设反例 | 只读，禁用 shell |
 
 - 可在全局 `~/.mycode/agents/` 或项目 `.mycode/agents/` 自定义或覆盖角色，并在设置中随时启停；内置只读角色不会因提示词覆盖而获得写入能力。
+- 子代理返回稳定 run ID、完整结果路径与检查证据，由主代理审查和验收；continuation 沿用同一交付格式。
 - 写入类调用默认严格分离工作路径与变更目标，子代理不会自动执行 git commit、merge 或 push。
 - 通过 `agent_status`、`agent_stop` 与 `agent_message` 跟踪任务进度、中断运行或复用已有工作树延续后续任务。
 

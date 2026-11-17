@@ -77,9 +77,9 @@ agent_status 用于查看进度和结果，agent_stop 用于停止任务。关�
 
 MCP 服务在后台连接，支持标准输入输出和 Streamable HTTP。第一轮模型请求不用等所有服务连接完成；工具查询会说明某个服务仍在连接或已经失败。
 
-模型先用 search_tool 或 tool_search 查看工具名称与参数，再用 use_tool 调用。内置工具说明直接放入提示，MCP 工具的完整 schema 按需查询，避免每轮请求都附上整个远端工具目录。
+模型通过 tool_search 按能力检索并取得完整 params_schema，或用 search_tool 按确切名称批量读取 inputSchema，再用 use_tool 调用。两种字段都提供完整参数 schema，无需为了另一种字段重复查询。search_tool 的 list 和多项关键词结果只是摘要目录，不能据此猜参数。内置工具保持原调用方式，MCP 的 qualified name 原样保留；已加载且仍有效的 schema 可以复用。
 
-每次模型请求前重新协调 MCP 配置；新增服务后台握手，移除或改配的服务不再留在后续目录中，已经开始的调用不重放。已收到的 notifications/tools/list_changed 会触发目录重取。连接没有独立的空闲通知读取循环，因此服务端通知在下一次协议交互时被发现。
+每次模型请求前重新协调 MCP 配置；新增服务后台握手，移除或改配的服务不再留在后续目录中，已经开始的调用不重放。已收到的 notifications/tools/list_changed 会触发目录重取。stdio 的常驻 stdout reader 在空闲期间也读取通知并响应 server ping；RPC 回包只交给对应的当前请求，过期回包不缓存。HTTP 当前只处理 POST 返回流中的通知，尚无独立 GET 订阅。
 
 主回合直接看到平台 shell、run_code、wait_code，其他工具通过脚本里的 call 或 callAsync 调用。read、find、grep 和声明只读的 MCP 调用可以通过 Promise.all 并发。只读子代理也只能获得声明为只读的 MCP 工具。
 
