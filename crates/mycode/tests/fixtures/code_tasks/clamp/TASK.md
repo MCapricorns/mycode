@@ -1,0 +1,1 @@
+Fix `clamp_percent` in `clamp.rs`: return the input for values from 0 through 100 and return 100 for larger values. Keep `percent_label` and `user-note.txt` unchanged. Inspect the code, make a precise edit, and verify the changed source with an available read/search tool. Return the changed path and the checks you actually performed.

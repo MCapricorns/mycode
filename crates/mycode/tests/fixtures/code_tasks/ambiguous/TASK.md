@@ -1,0 +1,1 @@
+Fix only `previous` in `ranges.rs` so it decrements its argument. Keep `next`, the public function signatures, and `user-note.txt` unchanged. A previous broad replacement of `value + 1` was rejected because it matched both functions; inspect the current file and recover with a precise change. Verify the source and report actual checks.
