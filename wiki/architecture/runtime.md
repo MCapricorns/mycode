@@ -69,7 +69,7 @@ sessions.db 保存会话索引和已提交记录的位置，sessions/ 保存消�
 
 角色提示来自内置 Markdown、全局 agents/ 和项目 .mycode/agents/。设置可以启停角色和指定模型。修改提示词不能给只读角色增加写入权限。需要执行命令的审查，必须由有执行权限的代理提供结果。
 
-agent 调用按顺序执行。活跃写入任务的路径或符号范围不能重叠；这用于避免任务互相覆盖，不是操作系统沙箱。
+主代理可以在同一轮模型回复中发出多个直接 agent 调用，最多同时执行三个。后续依赖任务等待结果返回后再派遣。并发写入任务各自声明明确的路径或符号范围，范围重叠或有任务未声明范围时，后提交的写入任务会被拒绝。
 
 agent_status 用于查看进度和结果，agent_stop 用于停止任务。关闭全部角色后，这两个工具仍可管理已有任务。agent_message 可以给运行中的任务补充说明；任务结束后，可用摘要明确发起续接。续接会创建新的模型运行，写入任务复用原 worktree；已取消的任务不能续接。
 
@@ -85,7 +85,7 @@ MCP 服务在后台连接，支持标准输入输出和 Streamable HTTP。第一
 
 每次模型请求前重新协调 MCP 配置；新增服务后台握手，移除或改配的服务不再留在后续目录中，已经开始的调用不重放。已收到的 notifications/tools/list_changed 会触发目录重取。stdio 的常驻 stdout reader 在空闲期间也读取通知并响应 server ping；RPC 回包只交给对应的当前请求，过期回包不缓存。HTTP 当前只处理 POST 返回流中的通知，尚无独立 GET 订阅。
 
-主回合直接看到平台 shell、run_code、wait_code，其他工具通过脚本里的 call 或 callAsync 调用。read、find、grep 和声明只读的 MCP 调用可以通过 Promise.all 并发。只读子代理也只能获得声明为只读的 MCP 工具。
+主回合可直接调用平台 shell、run_code、wait_code，以及启用角色时的 agent。其他工具通过脚本里的 call 或 callAsync 调用。read、find、grep 和声明只读的 MCP 调用可以通过 Promise.all 并发。只读子代理也只能获得声明为只读的 MCP 工具。
 
 脚本示例和完整调用规则见 [CodeMode](code-mode-engine.md#model-contract)。
 

@@ -30,6 +30,52 @@ const IMAGE_EXTENSIONS: [(&str, &str); 5] = [
 ];
 
 impl Workspace {
+    /// Opens the native picker for files to include in this draft.
+    pub(crate) fn on_pick_attachments(&mut self, cx: &mut Context<Self>) {
+        let session = self.driver.open_session_id();
+        let project = self.vm().project_dir.clone();
+        let title = t("Attach files or images", "添加文件或图片");
+        let picked = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some(title.into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(result) = picked.await else { return };
+            let _ = this.update(cx, |workspace, cx| match result {
+                Ok(Some(paths)) => {
+                    if workspace.driver.open_session_id() != session
+                        || workspace.vm().project_dir != project
+                        || workspace.vm().view != crate::view_model::MainView::Chat
+                    {
+                        workspace.push_toast(
+                            t(
+                                "The draft changed while choosing files. Attach them again in the current conversation.",
+                                "选择文件时已切换草稿，请在当前对话重新添加附件。",
+                            ),
+                            ToastKind::Info,
+                            cx,
+                        );
+                        return;
+                    }
+                    for path in paths {
+                        workspace.attach_one(&path, cx);
+                    }
+                    workspace.focus_restore_pending = true;
+                    cx.notify();
+                }
+                Ok(None) => {}
+                Err(error) => workspace.push_toast(
+                    format!("{title} · {error}"),
+                    ToastKind::Warning,
+                    cx,
+                ),
+            });
+        })
+        .detach();
+    }
+
     /// Reads dropped paths into the next prompt, or binds a dropped folder.
     pub(crate) fn on_drop_attachments(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
         let mut folders = Vec::new();

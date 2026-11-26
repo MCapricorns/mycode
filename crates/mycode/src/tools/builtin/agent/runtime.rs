@@ -72,23 +72,19 @@ impl AgentRuntime {
         };
         publish(stream, AgentStateEvent::Run(snapshot));
     }
-    pub(super) fn stop(
-        &self,
-        id: &str,
-        stream: &ToolStream,
-    ) -> Result<Vec<AgentStateEvent>, ToolError> {
-        {
-            let mut state = self.state.lock();
-            let run_id = resolve_run_id(&state, id)?;
-            let run = state.runs.get_mut(&run_id).expect("resolved run retained");
-            if !run.snapshot.status.is_terminal() {
-                run.cancel.cancel();
-                run.snapshot.status = AgentRunStatus::Settling;
-                run.snapshot.step = "Stopping; waiting for child and worktree handoff".into();
+    pub(crate) fn stop(&self, id: &str, stream: Option<&ToolStream>) -> Result<(), ToolError> {
+        let mut state = self.state.lock();
+        let run_id = resolve_run_id(&state, id)?;
+        let run = state.runs.get_mut(&run_id).expect("resolved run retained");
+        if !run.snapshot.status.is_terminal() && !run.cancel.is_cancelled() {
+            run.cancel.cancel();
+            run.snapshot.status = AgentRunStatus::Settling;
+            run.snapshot.step = "Stopping; waiting for child and worktree handoff".into();
+            if let Some(stream) = stream {
                 publish(stream, AgentStateEvent::Run(run.snapshot.clone()));
             }
         }
-        self.snapshots(Some(id))
+        Ok(())
     }
     pub(super) async fn run(
         self: &Arc<Self>,
@@ -210,7 +206,7 @@ impl AgentRuntime {
                     && overlaps(options.scope.as_ref(), run.options.scope.as_ref())
                 {
                     return Err(error(
-                        "scope overlaps an active writer (including queued/settling runs)",
+                        "concurrent writers need disjoint scopes, including queued and settling runs",
                     ));
                 }
             }
@@ -267,8 +263,10 @@ impl AgentRuntime {
             let mut stopping = false;
             let mut panicked = false;
             runtime.update_run(&run_id, &progress, |r| {
-                r.status = AgentRunStatus::Running;
-                r.step = "starting".into();
+                if r.status == AgentRunStatus::Queued {
+                    r.status = AgentRunStatus::Running;
+                    r.step = "starting".into();
+                }
             });
             let result = loop {
                 tokio::select! {
@@ -301,10 +299,10 @@ impl AgentRuntime {
                 Err(err) => (sanitize_output(host.as_ref(), &err.to_string()), true),
             };
             let artifact = runtime.write_artifact(&run_id, &answer).await;
-            let cancelled = child_cancel.is_cancelled() || host_cancelled;
             let snapshot = {
                 let mut state = runtime.state.lock();
                 let r = state.runs.get_mut(&run_id).expect("active run retained");
+                let cancelled = child_cancel.is_cancelled() || host_cancelled;
                 r.snapshot.status = if cancelled {
                     AgentRunStatus::Cancelled
                 } else if failed || artifact.is_err() {
@@ -365,7 +363,9 @@ impl AgentRuntime {
             let detail = parts.next().unwrap_or("");
             self.update_run(id, progress, |r| match phase {
                 "path" => r.path = detail.into(),
-                "tool" | "step" => r.step = clip(detail, 1000),
+                "tool" | "step" if r.status != AgentRunStatus::Settling => {
+                    r.step = clip(detail, 1000);
+                }
                 "settling" => {
                     r.status = AgentRunStatus::Settling;
                     r.step = clip(detail, 1000);
@@ -413,7 +413,8 @@ pub(super) fn resolve_run_id(state: &RuntimeState, id: &str) -> Result<String, T
 pub(super) fn overlaps(a: Option<&AgentScope>, b: Option<&AgentScope>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => a.overlaps(b),
-        _ => false,
+        // An unscoped writer may touch any path another writer claims.
+        _ => true,
     }
 }
 fn sanitize_output(host: &dyn AgentHost, text: &str) -> String {

@@ -19,11 +19,11 @@ fn run(status: AgentRunStatus) -> AgentRunSnapshot {
 }
 
 #[test]
-fn stop_is_available_only_for_active_children_and_uses_the_child_identity() {
+fn stop_is_available_only_for_active_children_and_uses_the_stable_run_id() {
     for status in [AgentRunStatus::Queued, AgentRunStatus::Running] {
         assert_eq!(
             run_row(&run(status)).cancel_id.as_deref(),
-            Some("actual-child.3")
+            Some("display-run-id")
         );
     }
     for status in [

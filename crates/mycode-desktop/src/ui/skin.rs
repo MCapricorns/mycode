@@ -35,7 +35,7 @@ pub(super) fn glass(theme: &Theme) -> Hsla {
 }
 
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
-    theme.sidebar.opacity(0.78)
+    theme.sidebar.opacity(0.94)
 }
 
 /// Semibold resolves to a real Segoe UI and CJK face on Windows.

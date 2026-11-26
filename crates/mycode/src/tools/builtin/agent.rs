@@ -160,7 +160,8 @@ pub struct AgentArgs {
     /// Stable coordination phase. Duplicate retained phases are rejected.
     #[serde(default)]
     pub phase_id: Option<String>,
-    /// Exact path/symbol ownership claims; coordination only, not a sandbox.
+    /// Exact paths or symbols claimed by a writer. Concurrent writers need
+    /// disjoint scopes. These claims coordinate work without sandboxing it.
     #[serde(default)]
     pub scope: Option<AgentScope>,
 }
@@ -174,11 +175,9 @@ impl Tool for AgentTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate one self-contained task to an enabled role from <dispatch> and wait for its \
-         answer. The child cannot see this conversation or ask the user, so the brief must state \
-         the goal, paths, constraints, supplied evidence, and done condition. Check existing \
-         runs before assigning overlapping work; use their run id to inspect or steer them. \
-         A completed result is a review handoff, not final acceptance."
+        "Delegate a self-contained task to an enabled role from <dispatch>. Returns a run ID and \
+         handoff. Include the goal, paths, evidence, boundaries, and verification in the brief. \
+         Independent direct calls can run together. Inspect the handoff before accepting it."
     }
 
     async fn execute(

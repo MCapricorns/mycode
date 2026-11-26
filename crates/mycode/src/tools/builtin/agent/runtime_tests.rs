@@ -197,7 +197,7 @@ async fn stopping_writer_holds_scope_until_settled_and_stopped_run_cannot_resume
     });
     wait_for(|| f.host.calls.lock().len() == 1).await;
     let id = f.runs()[0].id.clone();
-    f.runtime.stop(&id, &ToolStream::closed()).unwrap();
+    f.runtime.stop(&id, None).unwrap();
     assert_eq!(f.runs()[0].status, AgentRunStatus::Settling);
     let overlap = f
         .agent()
@@ -208,13 +208,35 @@ async fn stopping_writer_holds_scope_until_settled_and_stopped_run_cannot_resume
         )
         .await;
     assert!(overlap.is_err());
+    let unscoped = f
+        .agent()
+        .execute_dyn(
+            json!({"agent":"artisan","prompt":"without a scope"}),
+            &f.ctx("unscoped-host"),
+            &mut ToolStream::closed(),
+        )
+        .await;
+    assert!(unscoped.is_err());
+    let independent = f
+        .agent()
+        .execute_dyn(
+            json!({"agent":"artisan","prompt":"a separate task","scope":{"paths":["docs"]}}),
+            &f.ctx("independent-host"),
+            &mut ToolStream::closed(),
+        )
+        .await
+        .unwrap();
+    assert!(!independent.is_error);
     f.host.settle.notify_one();
     let cancelled = task.await.unwrap().unwrap();
     assert!(cancelled.is_error);
     assert!(text(&cancelled).contains(&id));
     assert!(text(&cancelled).contains("cancelled"));
     assert!(!text(&cancelled).contains("Review handoff"));
-    assert_eq!(f.runs()[0].status, AgentRunStatus::Cancelled);
+    assert_eq!(
+        f.runs().iter().find(|run| run.id == id).unwrap().status,
+        AgentRunStatus::Cancelled
+    );
     let messages = AgentMessageTool::new(f.host.clone(), f.runtime.clone());
     assert!(
         messages

@@ -155,15 +155,15 @@ pub(crate) fn run_core(
                     session_id,
                     call_id,
                 } => {
-                    // A short synchronous map edit, like `Steer`; no task needed.
-                    let key = format!("{session_id}:{call_id}");
-                    let token = state.subagent_cancels.lock().remove(&key);
-                    let outcome = match token {
-                        Some(token) => {
-                            token.cancel();
-                            Ok(())
-                        }
-                        None => Err("that subagent is not running".to_owned()),
+                    // The runtime owns the token from admission through handoff.
+                    // The host token exists only while the child body is active.
+                    let runtime = state.agent_runtimes.lock().get(&session_id).cloned();
+                    let outcome = if let Some(runtime) = runtime {
+                        runtime
+                            .stop(&call_id, None)
+                            .map_err(|error| error.to_string())
+                    } else {
+                        Err("that subagent is not running".to_owned())
                     };
                     let _ = with_reply
                         .reply

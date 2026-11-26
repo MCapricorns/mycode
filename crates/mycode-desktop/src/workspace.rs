@@ -138,8 +138,8 @@ pub struct Workspace {
     /// no input holds focus.
     focus_handle: gpui_kit::FocusHandle,
     composer: Entity<TextareaState>,
-    /// Whether the composer placeholder is the in-turn queue hint.
-    pub(crate) composer_busy: bool,
+    /// Localized placeholder currently stored by the text widget.
+    pub(crate) composer_hint: &'static str,
     /// Whether the busy-turn send choice (steer or interrupt & send) is
     /// open above the composer. Enter on a running turn opens it instead
     /// of steering at once; it closes on a pick, on Escape, or when the
@@ -226,13 +226,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
+        let composer_hint = crate::ui::composer_placeholder(false, false);
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder(crate::ui::composer_placeholder(false))
+                .placeholder(composer_hint)
                 .soft_wrap(true)
-                // Three fixed rows: pasting a wall of text scrolls inside
-                // the field instead of growing the composer card.
-                .auto_grow(3, 3)
+                .auto_grow(2, 6)
                 .submit_on_enter(true)
         });
         let focus_handle = cx.focus_handle();
@@ -243,7 +242,7 @@ impl Workspace {
             attachments: mycode::core::Attachments::default(),
             focus_handle,
             composer,
-            composer_busy: false,
+            composer_hint,
             send_choice_open: false,
             proxy_input: None,
             proxy_sync_pending: false,
@@ -526,9 +525,9 @@ impl Workspace {
                 if self.accept_open_mention(window, cx) {
                     return;
                 }
-                let sending = self.vm().sending || self.vm().compacting;
                 let action = composer_send::enter_action(
-                    sending,
+                    self.vm().sending,
+                    self.vm().compacting,
                     self.send_choice_open,
                     &draft,
                     !self.attachments.is_empty(),

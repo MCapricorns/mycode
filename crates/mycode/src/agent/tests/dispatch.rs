@@ -41,6 +41,7 @@ async fn steer_between_steps_is_in_the_next_request() {
 
 struct BatchProvider {
     steps: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    calls: &'static [(&'static str, &'static str)],
 }
 
 impl Provider for BatchProvider {
@@ -59,12 +60,7 @@ impl Provider for BatchProvider {
             };
             let message = if step == 0 {
                 crate::core::AssistantMessage {
-                    blocks: vec![
-                        call("r1", "probe_read"),
-                        call("r2", "probe_read"),
-                        call("w", "probe_write"),
-                        call("r3", "probe_read"),
-                    ],
+                    blocks: self.calls.iter().map(|(id, name)| call(id, name)).collect(),
                     usage: None,
                     stop_reason: StopReason::ToolUse,
                 }
@@ -136,6 +132,12 @@ async fn adjacent_reads_overlap_and_a_write_runs_alone() {
     }
     let provider = BatchProvider {
         steps: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        calls: &[
+            ("r1", "probe_read"),
+            ("r2", "probe_read"),
+            ("w", "probe_write"),
+            ("r3", "probe_read"),
+        ],
     };
     let hooks = HookRunner::new();
     let env = TurnEnv::new(&provider, &tools, &hooks);
@@ -169,6 +171,60 @@ async fn adjacent_reads_overlap_and_a_write_runs_alone() {
         })
         .collect();
     assert_eq!(results, ["r1", "r2", "w", "r3"]);
+}
+
+#[tokio::test]
+async fn direct_delegation_overlaps_with_a_bounded_batch_and_keeps_call_order() {
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let tools = std::sync::Arc::new(ToolRegistry::new());
+    tools.register(std::sync::Arc::new(ProbeTool {
+        name: "agent",
+        parallel: false,
+        log: log.clone(),
+    }));
+    crate::tools::enable_code_mode(
+        &tools,
+        &std::sync::Arc::new(crate::tools::CodeCells::new()),
+        "test",
+    );
+    assert!(tools.specs().iter().any(|spec| spec.name == "agent"));
+    let provider = BatchProvider {
+        steps: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        calls: &[
+            ("a", "agent"),
+            ("b", "agent"),
+            ("c", "agent"),
+            ("d", "agent"),
+        ],
+    };
+    let hooks = HookRunner::new();
+    let env = TurnEnv::new(&provider, &tools, &hooks);
+    let mut agent = Agent::new(AgentConfig::new());
+    agent
+        .prompt(Message::User(UserMessage::text("go")), &env)
+        .await
+        .expect("completed turn");
+    let mut active = 0;
+    let mut peak = 0;
+    for event in log.lock().expect("log").iter() {
+        if event.starts_with("start ") {
+            active += 1;
+            peak = peak.max(active);
+        } else {
+            active -= 1;
+        }
+    }
+    assert_eq!(peak, 3);
+    let results: Vec<_> = agent
+        .state()
+        .messages()
+        .iter()
+        .filter_map(|message| match message.as_ref() {
+            Message::ToolResult(result) => Some(result.tool_call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, ["a", "b", "c", "d"]);
 }
 
 struct SlowProvider;

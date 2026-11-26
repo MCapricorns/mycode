@@ -8,15 +8,15 @@ MYCode uses layered paper and pixel geometry. The application, native icon, READ
 
 | Role | Light | Dark |
 | --- | --- | --- |
-| Canvas | #F8F3EA | #1B1B22 |
-| Navigation | #EFE6D9 | #22222B |
-| Sheet | #FFFBF4 | #2A2A34 |
-| Primary text | #26232D | #F7F1E8 |
-| Secondary text | #625B64 | #C2BBB2 |
-| Fine edge | #DDD1C2 | #40404A |
-| Accent | #C8373D | #F2786D |
+| Canvas | #F6F1E8 | #191C1F |
+| Navigation | #ECE3D7 | #22262A |
+| Sheet | #FFFCF7 | #2B3034 |
+| Primary text | #26232D | #F8F2E9 |
+| Secondary text | #625B64 | #C6BFB5 |
+| Fine edge | #DACDBD | #434B51 |
+| Accent | #AD3B30 | #FF927D |
 
-Status colors remain semantic: green for completion, amber for waiting or warnings, red for failures. Workflow completion comes from the independent acceptance state; returned worktrees and integration handoffs are not successful completion.
+Blue marks running tasks, amber marks waiting and cleanup, green marks a finished child, and red marks failures. Pair color with the state label.
 
 ## Material and geometry
 
@@ -28,8 +28,8 @@ The native window requests background blur. Chrome uses translucent fills; the r
 
 - Conversation navigation stays on the left. The transcript, thinking traces, code and composer use the available central width. Window width does not silently change the user's selected font size.
 - Welcome centers the MYCode pixel wordmark above a row of equal 192 x 40px icon-and-text actions. There is no greeting, description, or repeated project path. Actions reuse the shared Paper button treatment: a coral primary action, a quiet secondary fill, fine borders, and matching semibold labels. The controls wrap without changing their size in narrow panes. Opening a project is primary before a folder is selected; describing a task is primary afterward. Recent projects form a compact list below the actions. Welcome content and composer share a 640px maximum width. Welcome scrolls from the top independently of transcript tail-follow. The conversation header appears only after work starts. The wordmark palette stays stable for the application lifetime, and direct chat remains available without selecting a project.
-- Details orders delegated work, file changes, then model and usage. Workflows are parent rows; their children are inspected through the node list. Individual tasks keep their stop and result actions.
-- Agent details expand with the window, preserve composer clearance, and expose the workflow type, node state, dependencies, independent acceptance and previous results.
+- The prompt field grows from two to six lines and then scrolls. The focused border highlights the editor. The bar below it groups the file picker, workspace, model, and thinking settings with the context meter and labeled send, steer, and stop controls. Controls wrap as the pane narrows.
+- Details orders delegated work, file changes, then model and usage. Active runs appear above saved results. Each row shows the task, role, state, and elapsed time. The detail card opens above the inspector backdrop with the brief, activity, working path, and result.
 - Settings use a dedicated navigation column, section title and grouped control rows. Menus, pickers, confirmation prompts and settings sheets share the same material and corner scale.
 - Wiki navigation, graph, node details and source viewer keep their deep links. Narrow screens use the list and a separate detail view. Documentation and source stay available offline.
 

@@ -35,7 +35,7 @@ pub use progress::{CODE_MODE_PROGRESS_PREFIX, CodeModeProgress, InnerCallPhase};
 use self::dispatch::DispatchContext;
 
 /// Registers `run_code` and `wait_code` on `registry` for the cells of
-/// `scope`, then exposes only them and the platform shell to the model.
+/// `scope`, then exposes them, the shell, and delegation (if registered).
 /// Every other registered tool stays reachable through a script's
 /// `call(name, args)`.
 pub fn enable_code_mode(registry: &Arc<ToolRegistry>, cells: &Arc<CodeCells>, scope: &str) {
@@ -54,7 +54,7 @@ pub fn enable_code_mode(registry: &Arc<ToolRegistry>, cells: &Arc<CodeCells>, sc
         names
             .iter()
             .map(String::as_str)
-            .filter(|name| crate::tools::ShellKind::is_tool_name(name)),
+            .filter(|name| *name == "agent" || crate::tools::ShellKind::is_tool_name(name)),
     );
     registry.expose_only(&exposed);
 }

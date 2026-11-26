@@ -363,8 +363,9 @@ async fn agent_loop(
     Ok(TurnOutcome::Completed)
 }
 
-/// `agent` calls from one assistant message share a batch. The host
-/// semaphore still caps how many children actually run.
+const MAX_CONCURRENT_DELEGATIONS: usize = 3;
+
+/// `agent` calls from one assistant message share a bounded batch.
 fn is_agent_call(call: &ToolCall) -> bool {
     call.name == "agent"
 }
@@ -378,7 +379,7 @@ fn is_parallel_safe(env: &TurnEnv<'_>, call: &ToolCall) -> bool {
 
 /// Runs one response's tool calls.
 ///
-/// Every `agent` call starts immediately. The other calls run beside them, so
+/// Up to three `agent` calls run at once. The other calls run beside them, so
 /// an MCP lookup is not stuck behind a child. Among those, each run of
 /// adjacent parallel-safe calls (reads, searches, web lookups) is one batch;
 /// a call that can change something waits for the batch before it and runs
@@ -419,18 +420,21 @@ async fn dispatch_response_calls(
     let other_ids = other_indexes.clone();
     let agents = async move {
         let futures = agent_ids
-            .iter()
+            .into_iter()
             .enumerate()
             .map(|(slot, index)| async move {
                 agent_polled.lock()[slot] = true;
-                let message = turn::run_tool_call(env, token, calls[*index]).await;
+                let message = turn::run_tool_call(env, token, calls[index]).await;
                 results.lock()[slot] = Some(message);
                 // Yield so a ToolCompleted subscriber can commit the result
                 // before the next call in this response is dispatched.
                 tokio::task::yield_now().await;
-            })
-            .collect::<Vec<_>>();
-        futures_util::future::join_all(futures).await;
+            });
+        use futures_util::StreamExt as _;
+        futures_util::stream::iter(futures)
+            .buffer_unordered(MAX_CONCURRENT_DELEGATIONS)
+            .for_each(|()| async {})
+            .await;
     };
     let other_done = &other_results;
     let other_polled = &other_started;

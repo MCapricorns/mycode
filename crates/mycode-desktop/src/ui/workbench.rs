@@ -29,13 +29,10 @@ pub(super) fn render_page_band(
         .map(|summary| summary.title.clone())
         .filter(|title| !title.is_empty())
         .unwrap_or_else(|| t("New conversation", "新对话").to_owned());
-    let scope = vm.project_dir.clone().unwrap_or_else(|| {
-        t(
-            "Default workspace · Choose a project anytime",
-            "默认空间 · 可随时选择项目",
-        )
-        .to_owned()
-    });
+    let scope = vm
+        .project_dir
+        .clone()
+        .unwrap_or_else(|| t("Default workspace", "默认工作区").to_owned());
     let git = workspace.git();
     let changes = if git.note.is_some() {
         t("Review changes", "查看改动").to_owned()
@@ -53,10 +50,11 @@ pub(super) fn render_page_band(
         .w_full()
         .min_h(px(HEADER_HEIGHT))
         .flex_shrink_0()
-        .px_4()
+        .px_5()
         .py_3()
         .border_b_1()
         .border_color(theme.border)
+        .bg(theme.title_bar.opacity(0.44))
         .flex()
         .flex_row()
         .items_center()
@@ -70,17 +68,21 @@ pub(super) fn render_page_band(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(15.))
+                        .text_sm()
                         .font_weight(skin::WEIGHT_STRONG)
                         .truncate()
                         .child(title),
                 )
                 .child(
                     div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .min_w_0()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .truncate()
-                        .child(scope),
+                        .child(Icon::new(IconName::Folder).xsmall().flex_shrink_0())
+                        .child(div().min_w_0().truncate().child(scope)),
                 ),
         )
         .when(wide && !git.branch.is_empty(), |this| {

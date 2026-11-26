@@ -575,7 +575,8 @@ impl FrontendDriver {
         }
         // Keep the row until cancellation is acknowledged or the child ends.
         // The core may not have registered its token when Started first arrives.
-        // Rows use the ledger id; cancellation uses the exact provider id.
+        // Typed rows pass a stable run ID. Legacy transcript rows map their
+        // ledger ID to the provider call ID.
         let cancel_id = self
             .vm
             .live_jobs
@@ -651,6 +652,8 @@ impl FrontendDriver {
         }
         self.welcome_send_session = None;
         let attachments = std::mem::take(&mut self.welcome_attachments);
+        let clear_composer = self.vm.composer_draft == text
+            || (self.welcome_send_is_note && self.vm.composer_draft.trim().is_empty());
         let text = if self.welcome_send_is_note {
             String::new()
         } else {
@@ -658,9 +661,7 @@ impl FrontendDriver {
         };
         self.welcome_send_is_note = false;
         self.act(FrontendAction::WelcomeSendConsumed, out);
-        self.act(FrontendAction::ComposerChanged(String::new()), out);
-        self.pending_composer_prefill = Some(String::new());
-        let _ = self.send_text(text, true, attachments, out);
+        let _ = self.send_text(text, clear_composer, attachments, out);
     }
 
     fn send_text(

@@ -159,6 +159,10 @@ pub fn render_root(
         .when(workspace.vm().project_menu_open, |this| {
             this.child(sidebar::render_project_menu_layer(workspace, cx))
         })
+        .when(inspector_overlay, |this| {
+            this.child(context::render_inspector_drawer(workspace, cx))
+        })
+        // The run detail must receive input above the inspector's backdrop.
         .when(
             workspace.vm().subagent_window.is_some()
                 && crate::view_model::task_surface_visible(workspace.vm()),
@@ -171,9 +175,6 @@ pub fn render_root(
                 ))
             },
         )
-        .when(inspector_overlay, |this| {
-            this.child(context::render_inspector_drawer(workspace, cx))
-        })
         // Drawer and diff are painted after the Details overlay. Its backdrop
         // is a full-window click target; if these panels were underneath,
         // the first click on a file would dismiss Details instead of opening

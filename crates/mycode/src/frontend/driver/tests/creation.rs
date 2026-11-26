@@ -102,3 +102,52 @@ fn a_create_reply_cannot_replace_an_explicitly_opened_conversation() {
     driver.shutdown();
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn first_prompt_sends_its_attachments_and_preserves_edits_made_while_opening() {
+    let (mut driver, root) = scratch_driver("welcome-first-prompt");
+    let created = summary();
+    let mut out = Vec::new();
+    let text = "Review my editor".to_owned();
+    driver.pending_create = Some(1);
+    driver.welcome_create = Some(1);
+    driver.act(
+        crate::frontend::view_model::FrontendAction::WelcomeSendHeld(text.clone()),
+        &mut out,
+    );
+    driver.vm.composer_draft = "A follow-up draft".into();
+
+    driver.on_reply(
+        ReplyScope::Create {
+            request: 1,
+            project: None,
+            welcome: Some(super::super::sends::FailedSendDraft {
+                text: text.clone(),
+                attachments: super::code_attachment(),
+            }),
+        },
+        BridgeReply::Created(Ok(created.clone())),
+        &mut out,
+    );
+    assert_eq!(
+        driver.vm.pending_welcome_send.as_deref(),
+        Some(text.as_str())
+    );
+    driver.on_reply(
+        ReplyScope::Open {
+            session: created.session_id.clone(),
+            generation: driver.open_generation,
+        },
+        BridgeReply::Conversation(Ok(conversation(
+            &created.session_id,
+            &created.root_branch_id,
+        ))),
+        &mut out,
+    );
+    assert!(driver.submitted_turns.contains_key(&created.session_id));
+    assert!(!driver.pending_send_attachments[&created.session_id].is_empty());
+    assert!(driver.vm.pending_welcome_send.is_none());
+    assert_eq!(driver.vm.composer_draft, "A follow-up draft");
+    driver.shutdown();
+    let _ = std::fs::remove_dir_all(root);
+}

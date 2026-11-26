@@ -142,7 +142,6 @@ impl FrontendDriver {
                     self.persist_ui_state();
                 }
                 if current {
-                    self.act(FrontendAction::SessionCreated(summary), out);
                     if let Some(draft) = welcome {
                         self.welcome_send_is_note =
                             draft.text.trim().is_empty() && !draft.attachments.is_empty();
@@ -155,6 +154,9 @@ impl FrontendDriver {
                         self.act(FrontendAction::WelcomeSendHeld(text), out);
                         self.welcome_send_session = Some(session_id.clone());
                     }
+                    // Hold the first prompt while the welcome desk still
+                    // has no active session. SessionCreated opens the chat.
+                    self.act(FrontendAction::SessionCreated(summary), out);
                     self.request_open_session(&session_id);
                 } else if let Some(draft) = welcome {
                     // Keep an accepted first message with its original chat.

@@ -101,7 +101,7 @@ impl Tool for AgentStopTool {
         _ctx: &ToolCtx,
         out: &mut ToolStream,
     ) -> Result<ToolResult, ToolError> {
-        self.runtime.stop(&args.id, out)?;
+        self.runtime.stop(&args.id, Some(out))?;
         snapshot_result(&self.runtime, Some(&args.id), out)
     }
 }

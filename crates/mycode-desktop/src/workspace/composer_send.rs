@@ -20,12 +20,13 @@ pub(super) enum EnterAction {
 
 pub(super) fn enter_action(
     sending: bool,
+    compacting: bool,
     choice_open: bool,
     draft: &str,
     has_attachments: bool,
     secondary: bool,
 ) -> EnterAction {
-    if secondary && sending {
+    if secondary && (sending || compacting) {
         EnterAction::Interrupt
     } else if crate::ui::busy_enter_opens_choice(sending, draft, has_attachments) {
         if choice_open {
@@ -159,12 +160,12 @@ mod tests {
     #[test]
     fn attachments_added_to_an_open_choice_use_the_normal_send_path() {
         assert_eq!(
-            enter_action(true, true, "read this file", true, false),
+            enter_action(true, false, true, "read this file", true, false),
             EnterAction::Submit
         );
         // The explicit interrupt shortcut still works and warns that attachments wait.
         assert_eq!(
-            enter_action(true, true, "read this file", true, true),
+            enter_action(true, false, true, "read this file", true, true),
             EnterAction::Interrupt
         );
     }
@@ -172,20 +173,32 @@ mod tests {
     #[test]
     fn busy_text_enter_opens_then_confirms_the_choice() {
         assert_eq!(
-            enter_action(true, false, "continue here", false, false),
+            enter_action(true, false, false, "continue here", false, false),
             EnterAction::OpenChoice
         );
         assert_eq!(
-            enter_action(true, true, "continue here", false, false),
+            enter_action(true, false, true, "continue here", false, false),
             EnterAction::Steer
         );
         assert_eq!(
-            enter_action(true, true, "continue here", false, true),
+            enter_action(true, false, true, "continue here", false, true),
             EnterAction::Interrupt
         );
         assert_eq!(
-            enter_action(true, true, "  ", false, false),
+            enter_action(true, false, true, "  ", false, false),
             EnterAction::Submit
+        );
+    }
+
+    #[test]
+    fn manual_compaction_keeps_the_draft_and_allows_interrupt() {
+        assert_eq!(
+            enter_action(false, true, true, "continue here", false, false),
+            EnterAction::Submit
+        );
+        assert_eq!(
+            enter_action(false, true, true, "continue here", false, true),
+            EnterAction::Interrupt
         );
     }
 }

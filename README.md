@@ -91,7 +91,7 @@ MYCode 由核心运行时 `mycode` 与原生桌面壳 `mycode-desktop` 构成。
 
 ### 附件与输入限制
 
-使用 `@` 模糊搜索项目文件，或直接向输入框拖入文本、粘贴图片：
+使用 `@` 搜索项目文件。点击输入区的回形针可选择文本文件或图片，也可以拖入文件或粘贴图片。
 
 | 类别 | 单条消息上限 | 体积限制 |
 | --- | --- | --- |
@@ -132,7 +132,7 @@ MYCode 由核心运行时 `mycode` 与原生桌面壳 `mycode-desktop` 构成。
 // 并发执行只读检索；写入类与 shell 工具自动保持严格串行
 const [hits, cargo] = await Promise.all([
   callAsync("grep", { pattern: "spawn" }),
-  callAsync("read_file", { path: "Cargo.toml" }),
+  callAsync("read", { path: "Cargo.toml" }),
 ]);
 ```
 
@@ -153,6 +153,7 @@ const [hits, cargo] = await Promise.all([
 | `sentinel` | 独立审查实现、diff 与假设反例 | 只读，禁用 shell |
 
 - 可在全局 `~/.mycode/agents/` 或项目 `.mycode/agents/` 自定义或覆盖角色，并在设置中随时启停；内置只读角色不会因提示词覆盖而获得写入能力。
+- 独立任务可在同一次回复中派遣，最多同时运行三个。写入任务需要明确且互不重叠的范围才能并发执行。
 - 子代理返回稳定 run ID、完整结果路径与检查证据，由主代理审查和验收；continuation 沿用同一交付格式。
 - 写入类调用默认严格分离工作路径与变更目标，子代理不会自动执行 git commit、merge 或 push。
 - 通过 `agent_status`、`agent_stop` 与 `agent_message` 跟踪任务进度、中断运行或复用已有工作树延续后续任务。

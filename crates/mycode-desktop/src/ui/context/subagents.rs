@@ -3,7 +3,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::theme::Theme;
-use gpui_kit::component::{ActiveTheme as _, Selectable as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Div, InteractiveElement, IntoElement, ParentElement,
@@ -23,32 +23,15 @@ mod controls_tests;
 #[cfg(all(test, feature = "test-support"))]
 mod layout_tests;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StatusTone {
-    Neutral,
-    Active,
-    Success,
-    Warning,
-    Error,
-}
-
-fn run_tone(status: AgentRunStatus) -> StatusTone {
+fn status_color(status: AgentRunStatus, theme: &Theme) -> gpui_kit::Hsla {
     match status {
-        AgentRunStatus::Queued | AgentRunStatus::Cancelled => StatusTone::Neutral,
-        AgentRunStatus::Running | AgentRunStatus::Settling => StatusTone::Active,
-        AgentRunStatus::Completed => StatusTone::Success,
-        AgentRunStatus::Failed => StatusTone::Error,
-        AgentRunStatus::Blocked => StatusTone::Warning,
-    }
-}
-
-fn tone_color(tone: StatusTone, theme: &Theme) -> gpui_kit::Hsla {
-    match tone {
-        StatusTone::Neutral => theme.muted_foreground,
-        StatusTone::Active => theme.foreground,
-        StatusTone::Success => crate::ui::desk::Desk::of(theme).green,
-        StatusTone::Warning => theme.warning,
-        StatusTone::Error => theme.danger,
+        AgentRunStatus::Cancelled => theme.muted_foreground,
+        AgentRunStatus::Running => theme.info,
+        AgentRunStatus::Completed => theme.success,
+        AgentRunStatus::Failed => theme.danger,
+        AgentRunStatus::Queued | AgentRunStatus::Settling | AgentRunStatus::Blocked => {
+            theme.warning
+        }
     }
 }
 
@@ -57,8 +40,7 @@ struct AgentRow {
     id: String,
     title: String,
     role: String,
-    status: String,
-    tone: StatusTone,
+    status: AgentRunStatus,
     elapsed: String,
     activity: String,
     cancel_id: Option<String>,
@@ -69,28 +51,37 @@ fn can_stop(run: &AgentRunSnapshot) -> bool {
         && !run.call_id.is_empty()
 }
 
+fn run_title(run: &AgentRunSnapshot) -> &str {
+    if run.description.is_empty() {
+        &run.role
+    } else {
+        &run.description
+    }
+}
+
 fn run_row(run: &AgentRunSnapshot) -> AgentRow {
     AgentRow {
         id: run.id.clone(),
-        title: if run.description.is_empty() {
-            run.role.clone()
-        } else {
-            run.description.clone()
-        },
+        title: run_title(run).to_owned(),
         role: run.role.clone(),
-        status: agent_run_status_label(run.status).to_owned(),
-        tone: run_tone(run.status),
+        status: run.status,
         elapsed: elapsed_label(agent_run_elapsed_ms(run)),
         activity: run
             .error
             .as_deref()
             .or(run.result.as_deref())
-            .unwrap_or(&run.step)
+            .unwrap_or_else(|| {
+                if run.status.is_terminal() {
+                    ""
+                } else {
+                    &run.step
+                }
+            })
             .lines()
             .next()
             .unwrap_or_default()
             .to_owned(),
-        cancel_id: can_stop(run).then(|| run.call_id.clone()),
+        cancel_id: can_stop(run).then(|| run.id.clone()),
     }
 }
 
@@ -122,18 +113,34 @@ fn rows(state: &WorkspaceState) -> Vec<AgentRow> {
                 },
                 role: job.role.clone(),
                 status: if job.step == "queued" {
-                    t("Queued", "排队中")
+                    AgentRunStatus::Queued
                 } else {
-                    t("Running", "运行中")
-                }
-                .to_owned(),
-                tone: StatusTone::Active,
+                    AgentRunStatus::Running
+                },
                 elapsed: elapsed_label(job.elapsed_ms()),
                 activity: job.step_label(),
                 cancel_id: (!job.call_id.is_empty()).then(|| job.call_id.clone()),
             }),
     );
+    rows.sort_by_key(|row| row.status.is_terminal());
     rows
+}
+
+fn status_badge(status: AgentRunStatus, theme: &Theme) -> Div {
+    let ink = status_color(status, theme);
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py_0p5()
+        .rounded(crate::ui::skin::radius_xs())
+        .bg(ink.opacity(0.10))
+        .text_color(ink)
+        .text_xs()
+        .child(crate::ui::lamp(ink))
+        .child(agent_run_status_label(status))
 }
 
 fn row_content(row: &AgentRow, theme: &Theme) -> Div {
@@ -142,7 +149,7 @@ fn row_content(row: &AgentRow, theme: &Theme) -> Div {
         .min_w_0()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap_1()
         .child(
             div()
                 .w_full()
@@ -181,13 +188,7 @@ fn row_content(row: &AgentRow, theme: &Theme) -> Div {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(crate::ui::lamp(tone_color(row.tone, theme)))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(tone_color(row.tone, theme))
-                        .child(row.status.clone()),
-                )
+                .child(status_badge(row.status, theme))
                 .child(
                     div()
                         .flex_1()
@@ -214,7 +215,10 @@ fn row_content(row: &AgentRow, theme: &Theme) -> Div {
 pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
     let rows = rows(workspace.vm());
-    let count = rows.len();
+    let active = rows
+        .iter()
+        .take_while(|row| !row.status.is_terminal())
+        .count();
     let selected = workspace.vm().subagent_window.as_deref().map(|id| {
         workspace
             .vm()
@@ -238,28 +242,23 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                         .font_weight(crate::ui::skin::WEIGHT_STRONG)
                         .child(t("Subagents", "子代理")),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(count.to_string()),
-                ),
+                .when(active > 0, |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.info)
+                            .child(format!("{} {active}", t("Active", "进行中"))),
+                    )
+                }),
         )
-        .child(
-            div()
-                .text_xs()
-                .whitespace_normal()
-                .text_color(theme.muted_foreground)
-                .child(t(
-                    "Tasks, progress and retained results",
-                    "任务进度与保留结果",
-                )),
-        )
-        .when(count == 0, |this| {
+        .when(rows.is_empty(), |this| {
             this.child(
                 div()
-                    .py_3()
-                    .text_sm()
+                    .px_3()
+                    .py_2()
+                    .rounded(crate::ui::skin::radius_sm())
+                    .bg(theme.status_bar)
+                    .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(t(
                         "Delegated tasks will appear here.",
@@ -276,7 +275,7 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                 .flex()
                 .flex_col()
                 .gap_2()
-                .children(rows.into_iter().enumerate().map(|(index, row)| {
+                .children(rows.into_iter().map(|row| {
                     let id = row.id.clone();
                     let is_selected = selected == Some(id.as_str());
                     div()
@@ -286,22 +285,26 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                         .min_w_0()
                         .flex_shrink_0()
                         .gap_1()
+                        .rounded(crate::ui::skin::radius_sm())
+                        .border_1()
+                        .border_color(if is_selected {
+                            theme.primary.opacity(0.65)
+                        } else {
+                            theme.border
+                        })
+                        .bg(if is_selected {
+                            theme.accent
+                        } else {
+                            theme.status_bar
+                        })
                         .child(
-                            Button::new(format!("subagent-open-{index}"))
+                            Button::new(format!("subagent-open-{id}"))
                                 .ghost()
                                 .h_auto()
                                 .flex_1()
                                 .min_w_0()
-                                .px_3()
-                                .py_3()
+                                .p_2()
                                 .rounded(crate::ui::skin::radius_sm())
-                                .border_1()
-                                .border_color(if is_selected {
-                                    theme.primary.opacity(0.55)
-                                } else {
-                                    theme.border
-                                })
-                                .selected(is_selected)
                                 .accessibility_label(format!(
                                     "{}: {}",
                                     t("Open details", "打开详情"),
@@ -315,10 +318,17 @@ pub(super) fn render_subagents(workspace: &Workspace, cx: &Context<Workspace>) -
                         )
                         .when_some(row.cancel_id, |this, cancel_id| {
                             this.child(
-                                Button::new(format!("subagent-stop-{index}"))
-                                    .label(t("Stop", "停止"))
+                                Button::new(format!("subagent-stop-{cancel_id}"))
+                                    .icon(IconName::Square)
+                                    .accessibility_label(t(
+                                        "Stop this child run",
+                                        "停止此子代理运行",
+                                    ))
                                     .small()
-                                    .ghost()
+                                    .danger()
+                                    .outline()
+                                    .mt_2()
+                                    .mr_2()
                                     .tooltip(t("Stop this child run", "停止此子代理运行"))
                                     .on_click(cx.listener(move |workspace, _, _, cx| {
                                         workspace.on_cancel_subagent(&cancel_id, cx);
@@ -476,12 +486,7 @@ fn run_detail(
                 .flex_wrap()
                 .items_center()
                 .gap_2()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(tone_color(row.tone, theme))
-                        .child(row.status),
-                )
+                .child(status_badge(row.status, theme))
                 .child(
                     div()
                         .text_xs()
@@ -614,7 +619,7 @@ pub(crate) fn render_subagent_window(
         .iter()
         .find(|job| job.call_id == selected);
     let title = run
-        .map(|run| run.description.clone())
+        .map(|run| run_title(run).to_owned())
         .or_else(|| legacy.map(|job| job.title()))
         .unwrap_or_else(|| t("Subagent", "子代理").to_owned());
     let content = if let Some(run) = run {
@@ -630,7 +635,11 @@ pub(crate) fn render_subagent_window(
             role: job.role.clone(),
             description: job.label.clone(),
             prompt: job.prompt.clone(),
-            status: AgentRunStatus::Running,
+            status: if job.step == "queued" {
+                AgentRunStatus::Queued
+            } else {
+                AgentRunStatus::Running
+            },
             step: job.step_label(),
             path: job.path.clone(),
             started_ms: job.started_ms,
@@ -680,6 +689,7 @@ pub(crate) fn render_subagent_window(
         .overflow_hidden()
         .child(
             div()
+                .flex_shrink_0()
                 .px_4()
                 .py_3()
                 .flex()
@@ -687,6 +697,7 @@ pub(crate) fn render_subagent_window(
                 .gap_3()
                 .border_b_1()
                 .border_color(theme.border)
+                .bg(theme.title_bar)
                 .child(Icon::new(IconName::Bot).small().text_color(theme.primary))
                 .child(
                     div()

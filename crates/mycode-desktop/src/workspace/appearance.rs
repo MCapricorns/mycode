@@ -70,10 +70,6 @@ impl Workspace {
             return;
         }
         self.applied_language = lang;
-        let composer_placeholder = crate::ui::composer_placeholder(self.vm().sending);
-        self.composer.update(cx, |state, cx| {
-            state.set_placeholder(composer_placeholder, window, cx);
-        });
         let pairs: [(&Option<Entity<InputState>>, &str); 3] = [
             (
                 &self.session_filter_input,

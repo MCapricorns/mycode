@@ -1,14 +1,13 @@
 //! The command dock: an anchored work surface below the current session page.
 //!
-//! Folder, model, and reasoning chips and a `⌘K` hint sit inside the bar;
-//! `@` references a project file. The round action sends, or stops the running
-//! turn and every subagent it started. Enter on a busy turn opens the
-//! steer-or-interrupt choice instead of sending at once.
+//! The prompt field expands above the context and action bar. Enter on a
+//! running turn offers steering or interrupting.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Textarea;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, Focusable as _, InteractiveElement, IntoElement, ParentElement, SharedString,
@@ -22,20 +21,24 @@ use crate::view_model::WorkspaceState;
 use crate::view_model::{selected_model_supports_reasoning, selected_reasoning_level};
 use crate::workspace::Workspace;
 
-const COMPOSER_PLACEHOLDER: (&str, &str) = ("Ask the agent", "向代理提问");
-const STEER_PLACEHOLDER: (&str, &str) = (
-    "Enter chooses: steer or interrupt and send",
-    "回车选择：引导或打断并发送",
-);
-
 #[must_use]
-pub(crate) fn composer_placeholder(sending: bool) -> &'static str {
-    let (english, chinese) = if sending {
-        STEER_PLACEHOLDER
+pub(crate) fn composer_placeholder(sending: bool, compacting: bool) -> &'static str {
+    if compacting {
+        t(
+            "Write a draft while context compacts",
+            "上下文压缩中，可继续编辑草稿",
+        )
+    } else if sending {
+        t(
+            "Add guidance or prepare a new prompt",
+            "补充本轮指示，或准备新提示词",
+        )
     } else {
-        COMPOSER_PLACEHOLDER
-    };
-    t(english, chinese)
+        t(
+            "Describe a task · @ files · / commands",
+            "描述任务 · @ 引用文件 · / 打开命令",
+        )
+    }
 }
 
 /// Whether a plain Enter on the composer opens the steer-or-interrupt
@@ -50,9 +53,7 @@ pub(crate) fn busy_enter_opens_choice(sending: bool, draft: &str, has_attachment
 /// Maximum reading measure for the mention menu. The command dock fills the page.
 pub(super) const COMPOSER_MAX_PX: f32 = 760.;
 
-/// Bottom composer: a floating rounded card with soft elevation, pill chips for
-/// folder, model, and thinking, and a circular send/stop action. The field soft-wraps inside a fixed three-row box and
-/// scrolls once the draft is longer.
+/// The prompt and its attachments sit above a wrapping row of session controls.
 pub(super) fn render_composer(
     workspace: &mut Workspace,
     welcome: bool,
@@ -70,9 +71,10 @@ pub(super) fn render_composer(
     let model_label: SharedString = model_button_label(workspace.vm()).into();
     let thinking_label: SharedString = thinking_button_label(workspace.vm()).into();
     let show_thinking = selected_model_supports_reasoning(workspace.vm());
-    // A manual compact is not a turn, but it locks the composer the same
-    // way: Enter waits, Ctrl+Enter stops it and sends the draft.
-    let sending = workspace.vm().sending || workspace.vm().compacting;
+    let sending = workspace.vm().sending;
+    let compacting = workspace.vm().compacting;
+    let busy = sending || compacting;
+    let focused = composer.read(cx).focus_handle(cx).is_focused(window);
     let has_draft = !workspace.vm().composer_draft.trim().is_empty();
     let has_attachments = !workspace.attachments.is_empty();
     let can_send = has_draft || has_attachments;
@@ -85,11 +87,10 @@ pub(super) fn render_composer(
     let send_choice = workspace
         .send_choice_open
         .then(|| render_send_choice(cx).into_any_element());
-    let compacting = workspace.vm().compacting;
     let has_pending_ask = workspace.vm().pending_ask.is_some();
-    if workspace.composer_busy != sending {
-        workspace.composer_busy = sending;
-        let placeholder = composer_placeholder(sending);
+    let placeholder = composer_placeholder(sending, compacting);
+    if workspace.composer_hint != placeholder {
+        workspace.composer_hint = placeholder;
         composer.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx);
         });
@@ -104,11 +105,11 @@ pub(super) fn render_composer(
             .child(composer_pill_chip(
                 ComposerChip {
                     id: "thinking",
-                    icon: None,
+                    icon: Some(IconName::Brain),
                     label: thinking_label.clone(),
                     tooltip: None,
                     open: workspace.vm().reasoning_menu_open,
-                    max_w: px(116.),
+                    max_w: px(144.),
                 },
                 |workspace, _window, cx| {
                     let open = !workspace.vm().reasoning_menu_open;
@@ -119,8 +120,6 @@ pub(super) fn render_composer(
             .children(menu)
             .into_any_element()
     });
-    // A long model label keeps its start visible; the picker carries the full
-    // name, and a hover tooltip would cover the chips beside it.
     let model_chip = {
         let menu = workspace
             .vm()
@@ -131,11 +130,11 @@ pub(super) fn render_composer(
             .child(composer_pill_chip(
                 ComposerChip {
                     id: "model",
-                    icon: None,
+                    icon: Some(IconName::Cpu),
+                    tooltip: Some(model_label.clone()),
                     label: model_label,
-                    tooltip: None,
                     open: workspace.vm().model_menu_open,
-                    max_w: px(240.),
+                    max_w: px(200.),
                 },
                 |workspace, window, cx| {
                     let open = !workspace.vm().model_menu_open;
@@ -166,9 +165,7 @@ pub(super) fn render_composer(
         .into();
     // The chip shows the folder's basename; the tooltip carries the full path.
     let project_tooltip: Option<SharedString> = session_project.as_deref().map(SharedString::from);
-    // The ask card docks right above the input like Devin's: a frosted
-    // panel, one question at a time. It is built here — before `theme`
-    // borrows `cx` — so the builder chain below stays borrow-free.
+    // Build the interactive ask card before borrowing the theme.
     let ask_card = if has_pending_ask {
         Some(super::ask::render_ask_card(workspace, window, cx))
     } else {
@@ -210,7 +207,8 @@ pub(super) fn render_composer(
         .w_full()
         .flex_shrink_0()
         .px_4()
-        .py_3()
+        .pt_2()
+        .pb_4()
         .child(
             div()
                 .id("composer-column")
@@ -231,16 +229,14 @@ pub(super) fn render_composer(
                         .id("composer-card")
                         .flex()
                         .flex_col()
-                        .justify_between()
-                        .gap(skin::space(2))
-                        .px(skin::space(3))
-                        .py(skin::space(2))
+                        .gap_2()
+                        .p_2()
                         .w_full()
                         .min_h(px(56.))
                         .rounded(skin::radius_card())
                         .border_1()
-                        .border_color(theme.input.opacity(0.8))
-                        .bg(skin::panel_fill(theme))
+                        .border_color(if focused { theme.ring } else { theme.border })
+                        .bg(theme.popover)
                         .shadow(skin::elevation_shadow(theme))
                         // Dropping a picture or a code file attaches it to
                         // the next prompt; folders still bind the project.
@@ -260,6 +256,8 @@ pub(super) fn render_composer(
                                 .flex_col()
                                 .w_full()
                                 .min_w_0()
+                                .px_1()
+                                .pt_1()
                                 .text_sm()
                                 .child(
                                     Textarea::new(&composer)
@@ -283,12 +281,26 @@ pub(super) fn render_composer(
                                 .flex_row()
                                 .flex_wrap()
                                 .items_center()
-                                .gap(px(6.))
-                                .pt_1p5()
-                                .border_t_1()
-                                .border_color(theme.border.opacity(0.5))
+                                .gap_1()
+                                .p_1()
+                                .rounded(skin::radius_control())
+                                .bg(theme.status_bar)
                                 .w_full()
                                 .min_w_0()
+                                .child(
+                                    Button::new("composer-attach")
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::Paperclip)
+                                        .tooltip(t("Attach files or images", "添加文件或图片"))
+                                        .accessibility_label(t(
+                                            "Attach files or images",
+                                            "添加文件或图片",
+                                        ))
+                                        .on_click(cx.listener(|workspace, _, _, cx| {
+                                            workspace.on_pick_attachments(cx);
+                                        })),
+                                )
                                 .child(composer_pill_chip(
                                     ComposerChip {
                                         id: "project",
@@ -296,7 +308,7 @@ pub(super) fn render_composer(
                                         label: project_chip_label,
                                         tooltip: project_tooltip,
                                         open: false,
-                                        max_w: px(148.),
+                                        max_w: px(160.),
                                     },
                                     |workspace, _window, cx| {
                                         workspace.on_open_chat_folder_picker(cx);
@@ -318,135 +330,56 @@ pub(super) fn render_composer(
                                         })
                                         // Keep the shortcut, meter and actions together when
                                         // the toolbar wraps in a narrow chat pane.
-                                        .when(sending && has_draft, |this| {
+                                        .when(sending && has_draft && !has_attachments, |this| {
                                             this.child(composer_steer_button(cx))
                                         })
-                                        .child(composer_round_button(sending, can_send, cx)),
+                                        .child(composer_submit_button(busy, can_send, cx)),
                                 ),
                         ),
                 ),
         )
 }
 
-/// Send arrow while idle, labeled stop control while a turn runs.
-fn composer_round_button(
-    sending: bool,
-    can_send: bool,
-    cx: &Context<Workspace>,
-) -> impl IntoElement {
-    let theme = cx.theme();
-    let active = sending || can_send;
-    // The sendable draft is the primary action; stop stays a distinct square.
-    let send_fill = theme.primary;
-    div()
-        .id(if sending {
-            "composer-stop"
-        } else {
-            "composer-send"
-        })
-        .h(px(30.))
-        .min_w(px(30.))
-        .flex_shrink_0()
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(if !sending && can_send {
-            theme.primary_foreground
-        } else if sending {
-            theme.danger
-        } else if active {
-            theme.foreground
-        } else {
-            theme.muted_foreground
-        })
-        .when(!sending && can_send, |this| {
-            this.bg(send_fill)
-                .border_1()
-                .border_color(crate::ui::desk::deepen(send_fill))
-                .cursor_pointer()
-                .hover(|style| style.bg(crate::ui::desk::deepen(send_fill)))
-        })
-        .when(sending, |this| {
-            this.px_2p5()
-                .gap_1p5()
-                .border_1()
-                .border_color(theme.danger.opacity(0.35))
-                .bg(theme.danger.opacity(0.12))
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.danger.opacity(0.2)))
-        })
-        .on_click(cx.listener(move |workspace, _, window, cx| {
-            if sending {
-                workspace.on_cancel_chat(cx);
-            } else if can_send {
-                workspace.on_send(window, cx);
-            }
-        }))
-        // The visible label distinguishes stop from the steering arrow;
-        // the tooltip explains that stopping also cancels the children.
-        .when(sending, |this| {
-            this.tooltip(|window, cx| {
-                Tooltip::new(t(
-                    "Stop this turn and every subagent",
-                    "停止本轮和所有子代理",
-                ))
-                .build(window, cx)
-            })
-        })
-        .when(sending, |this| {
-            this.child(div().size(px(8.)).rounded(px(2.)).bg(theme.danger))
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(skin::WEIGHT_STRONG)
-                        .child(t("Stop", "停止")),
-                )
-        })
-        .when(!sending, |this| {
-            this.child(Icon::new(IconName::ArrowUp).small())
-        })
+fn composer_submit_button(busy: bool, can_send: bool, cx: &Context<Workspace>) -> Button {
+    if busy {
+        Button::new("composer-stop")
+            .danger()
+            .outline()
+            .small()
+            .icon(IconName::Square)
+            .label(t("Stop", "停止"))
+            .tooltip(t("Stop the current operation", "停止当前操作"))
+            .on_click(cx.listener(|workspace, _, _, cx| workspace.on_cancel_chat(cx)))
+    } else {
+        Button::new("composer-send")
+            .primary()
+            .small()
+            .disabled(!can_send)
+            .icon(IconName::ArrowUp)
+            .label(t("Send", "发送"))
+            .tooltip(t("Send prompt (Enter)", "发送提示词（回车）"))
+            .on_click(cx.listener(|workspace, _, window, cx| workspace.on_send(window, cx)))
+    }
 }
 
-/// The steer arrow shown next to the stop square while a turn runs: click
-/// hands the draft to the running turn, same as the steer shortcut.
-fn composer_steer_button(cx: &Context<Workspace>) -> impl IntoElement {
-    let theme = cx.theme();
-    div()
-        .id("composer-steer-running")
-        .size(px(30.))
-        .flex_shrink_0()
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        // The accent tint tells the steering arrow from the neutral stop
-        // beside it before the tooltip can.
-        .bg(theme.accent)
-        .border_1()
-        .border_color(theme.accent_foreground.opacity(0.3))
-        .text_color(theme.accent_foreground)
-        .cursor_pointer()
-        .hover(|style| style.bg(crate::ui::desk::deepen(theme.accent)))
+fn composer_steer_button(cx: &Context<Workspace>) -> Button {
+    let keys = if cfg!(target_os = "macos") {
+        "⌘G"
+    } else {
+        "Ctrl+G"
+    };
+    Button::new("composer-steer-running")
+        .secondary()
+        .small()
+        .icon(IconName::CornerUpRight)
+        .label(t("Steer", "引导"))
+        .tooltip(format!(
+            "{} ({keys})",
+            t("Guide the running turn", "补充本轮指示")
+        ))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_steer_send(cx);
         }))
-        .tooltip(|window, cx| {
-            let keys = if cfg!(target_os = "macos") {
-                "⌘G"
-            } else {
-                "Ctrl+G"
-            };
-            Tooltip::new(format!(
-                "{} ({keys})",
-                t(
-                    "Steer this turn without stopping it",
-                    "引导本轮任务，不打断"
-                )
-            ))
-            .build(window, cx)
-        })
-        .child(Icon::new(IconName::ArrowUp).small())
 }
 
 /// One pill chip in the composer row (folder, model, thinking). The label
@@ -479,13 +412,23 @@ fn composer_pill_chip(
         .flex_row()
         .items_center()
         .flex_shrink_1()
-        .gap(px(5.))
+        .gap_1()
         .min_w_0()
         .max_w(chip.max_w)
         .px(px(8.))
-        .h(px(24.))
-        .rounded(px(6.))
-        .when(chip.open, |this| this.bg(theme.secondary_hover))
+        .h(px(28.))
+        .rounded(skin::radius_control())
+        .border_1()
+        .border_color(if chip.open {
+            theme.primary.opacity(0.5)
+        } else {
+            theme.border
+        })
+        .bg(if chip.open {
+            theme.accent
+        } else {
+            theme.popover
+        })
         .text_xs()
         .cursor_pointer()
         .text_color(ink)
@@ -503,26 +446,17 @@ fn composer_pill_chip(
         .child(Icon::new(IconName::ChevronDown).xsmall().flex_shrink_0())
 }
 
-/// Quiet shortcut badge that opens the command palette (`⌘K` / `Ctrl+K`).
-fn composer_palette_hint(cx: &Context<Workspace>) -> impl IntoElement {
-    let theme = cx.theme();
-    div()
-        .id("composer-palette-hint")
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .px(px(7.))
-        .h(px(24.))
-        .rounded(px(6.))
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary_hover).text_color(theme.foreground))
+fn composer_palette_hint(cx: &Context<Workspace>) -> Button {
+    let label = t("Command palette", "命令面板");
+    Button::new("composer-palette-hint")
+        .ghost()
+        .small()
+        .icon(IconName::Search)
+        .accessibility_label(label)
+        .tooltip(format!("{label} ({})", shortcut_label()))
         .on_click(cx.listener(|workspace, _, window, cx| {
             workspace.toggle_command_palette(window, cx);
         }))
-        .child(shortcut_label())
 }
 
 /// The choice Enter opens on a busy turn: steer the draft in, or stop the

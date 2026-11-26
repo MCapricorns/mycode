@@ -260,8 +260,12 @@ pub(in crate::frontend::view_model::reduce) fn cancelled(
         .session_mut(&session_id)
         .runs
         .iter_mut()
-        .find(|run| run.call_id == call_id || provider_id.as_deref() == Some(run.call_id.as_str()))
-        && !run.status.is_terminal()
+        .find(|run| {
+            !run.status.is_terminal()
+                && (run.id == call_id
+                    || run.call_id == call_id
+                    || provider_id.as_deref() == Some(run.call_id.as_str()))
+        })
     {
         run.status = AgentRunStatus::Settling;
         run.step = t("Waiting for cancellation to settle", "等待停止操作完成收尾").to_owned();
