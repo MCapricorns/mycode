@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+# Reuse dependencies in the local target directory. Preserve a configured
+# CARGO_TARGET_DIR even when it was relative to this checkout.
+check_target=${CARGO_TARGET_DIR:-"$repo_root/target"}
+case "$check_target" in
+    /*|?:*) ;;
+    *) check_target="$repo_root/$check_target" ;;
+esac
+
+staged_tree=$(mktemp -d "${TMPDIR:-/tmp}/mycode-index.XXXXXX")
+trap 'rm -rf -- "$staged_tree"' EXIT
+trap 'exit 1' HUP INT TERM
+git checkout-index --all --ignore-skip-worktree-bits --prefix="$staged_tree/"
+
+(
+    cd "$staged_tree"
+    CARGO_TARGET_DIR="$check_target" sh scripts/check-unused.sh
+)

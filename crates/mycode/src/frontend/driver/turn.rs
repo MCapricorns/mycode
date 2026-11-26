@@ -696,6 +696,11 @@ impl FrontendDriver {
                 first_message,
                 restore_text_on_failure: true,
                 cancelled: false,
+                usage_started: self
+                    .vm
+                    .selected_model
+                    .clone()
+                    .map(|model| (model, std::time::Instant::now())),
             },
         );
         if !attachments.is_empty() {

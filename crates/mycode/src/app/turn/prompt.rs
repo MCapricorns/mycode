@@ -101,6 +101,10 @@ write against the versions the project pins.
 - Get explicit approval before destructive or external actions (deleting user files, hard resets, \
 force-push, history rewrites, commits, pushes, or PRs). Reuse authorization already given for that \
 scope. Never expose secrets or `.env` values.
+- When the user requests a push, review the diff first. Remove dead or unused code within the \
+user's change scope after checking callers, features, and platforms. Run the repository's \
+pre-commit and relevant regression checks after cleanup. Commit authorized fixes and push once \
+the checks pass. Honor requests to push a specific commit as-is.
 - Stopping cancels running work but keeps partial edits, and editing or recalling a chat message \
 does not restore files. On continuation or steering, inspect the current workspace and available \
 results, then finish the remaining work. Inspect tool errors before retrying; do not rerun \

@@ -65,6 +65,7 @@ impl LedgerPump {
                     // prompt without TurnStarted or TurnEnded. The desktop
                     // still needs one terminal to leave the sending state.
                     let message = if self.cancel.is_cancelled() {
+                        self.send_usage(&turn_usage, false);
                         CHAT_CANCELLED
                     } else {
                         "the turn ended before it started"
@@ -184,7 +185,7 @@ impl LedgerPump {
                         // alone would bill a ten-step turn as one.
                         if let Some(usage) = assistant.usage.as_ref() {
                             turn_usage.fold(usage);
-                            self.send_usage(&turn_usage);
+                            self.send_usage(&turn_usage, true);
                         }
                         // A step that requests tools is not the end of the
                         // turn. Commit it now so the ledger and the transcript
@@ -236,6 +237,7 @@ impl LedgerPump {
                     // A checkpoint written mid-turn is already what the next
                     // request sends; its card must not vanish with the turn.
                     self.publish_deferred().await;
+                    self.send_usage(&turn_usage, false);
                     return self.fail(message).await;
                 }
                 AgentEvent::TurnEnded(_) => {
@@ -333,13 +335,20 @@ impl LedgerPump {
             .await;
     }
 
-    fn send_usage(&self, usage: &TurnUsage) {
+    fn send_usage(&self, usage: &TurnUsage, refresh_context: bool) {
+        // A stop updates the duration and totals. It does not introduce a
+        // new prompt for the context meter or the cache-hit watch.
+        let (context, context_cache) = if refresh_context {
+            (usage.latest_input, usage.latest_cache)
+        } else {
+            (0, 0)
+        };
         self.send(BridgeEvent::UsageSnapshot {
             session_id: self.session_id.to_string(),
             model: self.usage_model.clone(),
             input: usage.input,
-            context: usage.latest_input,
-            context_cache: usage.latest_cache,
+            context,
+            context_cache,
             output: usage.output,
             cache: usage.cache,
             requests: usage.requests,
@@ -891,14 +900,30 @@ mod tests {
         assert_eq!(assistant.stop_reason, StopReason::Error);
         assert!(assistant.blocks.iter().any(|block| matches!(block, ContentBlock::Thinking(ThinkingBlock { text, .. }) if text == "kept thinking")));
         let mut persisted = 0;
+        let mut final_usage = 0;
         while let Ok(event) = frontend.try_recv() {
-            if let BridgeEvent::AssistantStep { entry, .. } = event {
-                persisted += 1;
-                assert!(entry.text.contains("kept partial"));
-                assert_eq!(entry.thinking, "kept thinking");
+            match event {
+                BridgeEvent::AssistantStep { entry, .. } => {
+                    persisted += 1;
+                    assert!(entry.text.contains("kept partial"));
+                    assert_eq!(entry.thinking, "kept thinking");
+                }
+                BridgeEvent::UsageSnapshot {
+                    requests,
+                    context,
+                    cache,
+                    ..
+                } => {
+                    final_usage += 1;
+                    assert_eq!(requests, 0, "the interrupted model reported no token usage");
+                    assert_eq!(context, 0, "finalization leaves the context meter alone");
+                    assert_eq!(cache, None);
+                }
+                _ => {}
             }
         }
         assert_eq!(persisted, 1);
+        assert_eq!(final_usage, usize::from(cancelled));
         drop(final_head);
         service.shutdown().await;
         for _ in 0..100 {

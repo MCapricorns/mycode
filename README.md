@@ -106,10 +106,12 @@ MYCode 由核心运行时 `mycode` 与原生桌面壳 `mycode-desktop` 构成。
 | 输入框换行 | `Shift-Enter` | `Shift-Enter` |
 | 运行中补充引导 | `Ctrl-G` | `Cmd-G` |
 | 打断当前输出并发送 | `Ctrl-Enter` | `Cmd-Enter` |
+| 关闭浮层或停止当前操作 | `Esc` | `Esc` |
 | 粘贴剪贴板图片 | `Ctrl-V` | `Cmd-V` |
 
 - 支持 `/new`（新建会话）、`/compact`（手动压缩上下文）与 `/settings`（打开设置）。
 - 回合运行期间按 `Enter` 可选择追加引导或打断重发，未读取的引导支持撤回；点击「停止」会立即取消当前回合、工具及子代理，同时保留已接收的内容和已完成的文件写入。
+- 工作台没有浮层时，按 `Esc` 可停止当前操作。用量面板保留已收到的本轮统计。模型尚未报告用量时，面板显示耗时和用量状态。
 - 历史消息支持「撤回并编辑」以回退对话状态，**该操作不会回滚已修改的工作区文件**。
 
 ---
@@ -154,6 +156,7 @@ const [hits, cargo] = await Promise.all([
 
 - 可在全局 `~/.mycode/agents/` 或项目 `.mycode/agents/` 自定义或覆盖角色，并在设置中随时启停；内置只读角色不会因提示词覆盖而获得写入能力。
 - 独立任务可在同一次回复中派遣，最多同时运行三个。写入任务需要明确且互不重叠的范围才能并发执行。
+- 用户请求推送时，主代理先清理改动中的死代码和未使用项。启用审查角色时，主代理会安排独立复核，并在检查通过后推送。
 - 子代理返回稳定 run ID、完整结果路径与检查证据，由主代理审查和验收；continuation 沿用同一交付格式。
 - 写入类调用默认严格分离工作路径与变更目标，子代理不会自动执行 git commit、merge 或 push。
 - 通过 `agent_status`、`agent_stop` 与 `agent_message` 跟踪任务进度、中断运行或复用已有工作树延续后续任务。
@@ -199,16 +202,20 @@ const [hits, cargo] = await Promise.all([
 ```sh
 git clone https://github.com/MCapricorns/mycode.git
 cd mycode
+git config --local core.hooksPath .githooks
 
 # 开发运行与发行构建（Debug 构建跳过自安装；Release 测试可设置 MYCODE_NO_INSTALL=1）
 cargo run -p mycode-desktop --locked
 cargo build --release -p mycode-desktop --locked
 ```
 
+每个克隆只需启用一次提交前钩子。它用暂存区的内容检查完整 Rust 工作区，发现死代码、未使用的导入或变量会阻止提交。已有自定义 Git 钩子时，可在现有的 pre-commit 中调用 `sh .githooks/pre-commit`。CI 在 PR 和推送到 `main` 时自动运行同一项检查。
+
 Windows 本机使用 PowerShell 执行以下检查，只编译当前 native target；其他平台和架构由 GitHub Actions 验证，无需在本机添加 target。`--all-targets` 指当前平台的各类 Cargo 构建目标。
 
 ```powershell
 cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 $previousRustdocFlags = $env:RUSTDOCFLAGS
 $env:RUSTDOCFLAGS = "-D warnings"

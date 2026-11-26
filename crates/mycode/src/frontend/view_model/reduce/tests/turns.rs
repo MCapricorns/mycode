@@ -42,43 +42,40 @@ fn queued_tool_events_do_not_duplicate_a_reopened_snapshot() {
 }
 
 #[test]
-fn a_finished_turn_promotes_its_live_meter_to_last_turn() {
-    let mut state = open(Vec::new(), None);
-    reduce(&mut state, FrontendAction::TurnArmed);
-    reduce(
-        &mut state,
-        FrontendAction::UsageSnapshot {
-            model: "glm-5.3".to_owned(),
-            input: 100,
-            context: 12_000,
-            context_cache: 11_800,
-            output: 20,
-            cache: Some(11_800),
-            requests: 1,
-            elapsed_ms: 40,
-        },
-    );
-    assert!(state.live_turn.is_some());
-    assert!(state.last_turn.is_none());
-    assert_eq!(state.context_used, 12_000);
-    assert_eq!(state.context_cache, 11_800);
-
-    reduce(
-        &mut state,
+fn a_finished_or_stopped_turn_promotes_its_live_meter_to_last_turn() {
+    for terminal in [
         FrontendAction::ChatDone {
             head: "evt-2".to_owned(),
             entry: user("evt-2", "reply"),
         },
-    );
-    let turn = state.last_turn.as_ref().expect("promoted stats");
-    assert_eq!(turn.model, "glm-5.3");
-    assert_eq!(turn.input, 100);
-    assert_eq!(turn.output, 20);
-    assert_eq!(turn.cache, Some(11_800));
-    assert!(state.live_turn.is_none());
-    // The meter is the latest prompt; the finished turn keeps it.
-    assert_eq!(state.context_used, 12_000);
-    assert_eq!(state.context_cache, 11_800);
+        FrontendAction::ChatFailed {
+            message: crate::app::CHAT_CANCELLED.to_owned(),
+            head: "evt-2".to_owned(),
+        },
+    ] {
+        let mut state = open(Vec::new(), None);
+        reduce(&mut state, FrontendAction::TurnArmed);
+        reduce(
+            &mut state,
+            FrontendAction::UsageSnapshot {
+                model: "glm-5.3".to_owned(),
+                input: 100,
+                context: 12_000,
+                context_cache: 11_800,
+                output: 20,
+                cache: Some(11_800),
+                requests: 1,
+                elapsed_ms: 40,
+            },
+        );
+        let live = state.live_turn.clone().expect("live usage");
+        assert!(state.last_turn.is_none());
+        reduce(&mut state, terminal);
+        assert_eq!(state.last_turn, Some(live));
+        assert!(state.live_turn.is_none());
+        assert_eq!(state.context_used, 12_000);
+        assert_eq!(state.context_cache, 11_800);
+    }
 }
 
 #[test]

@@ -107,6 +107,15 @@ jobs:
         with:
           components: clippy
 
+      - name: Dead and unused Rust code
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CARGO_NET_RETRY: "10"
+          CARGO_HTTP_TIMEOUT: "60"
+          RUSTFLAGS: "-Dwarnings"
+        run: sh scripts/check-unused.sh
+
       - name: cargo test --workspace
         shell: bash
         env:

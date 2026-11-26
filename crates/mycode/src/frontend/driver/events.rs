@@ -30,12 +30,14 @@ impl FrontendDriver {
             // event was consumed, even when another chat is still visible.
             self.request_open_session(session_id);
         }
-        if let BridgeEvent::ChatDone { session_id, .. }
+        let submitted = if let BridgeEvent::ChatDone { session_id, .. }
         | BridgeEvent::ChatFailed { session_id, .. } = &event
         {
-            self.submitted_turns.remove(session_id);
             self.pending_asks.remove(session_id);
-        }
+            self.submitted_turns.remove(session_id)
+        } else {
+            None
+        };
         // A held interrupt belongs to one turn and ends with it, on screen
         // or not.
         let held = self.take_held_interrupt(&event);
@@ -87,6 +89,26 @@ impl FrontendDriver {
                 if !self.is_open_session(&session_id) {
                     self.park_held_interrupt(held, &session_id, out);
                     return;
+                }
+                if cancelled
+                    && self.vm.live_turn.is_none()
+                    && let Some((model, started)) = submitted.and_then(|turn| turn.usage_started)
+                {
+                    // A stop during persistence or model setup never reached
+                    // the ledger pump. Only the elapsed time is known here.
+                    self.act(
+                        FrontendAction::UsageSnapshot {
+                            model,
+                            input: 0,
+                            context: 0,
+                            context_cache: 0,
+                            output: 0,
+                            cache: None,
+                            requests: 0,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                        },
+                        out,
+                    );
                 }
                 self.act(FrontendAction::ChatFailed { message, head }, out);
                 self.resync_after_turn(&session_id);

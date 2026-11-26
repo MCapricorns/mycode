@@ -5,6 +5,8 @@ members = ["crates/mycode", "crates/mycode-desktop"]
 # mod.rs is legacy module layout; modern foo.rs + foo/ is enforced.
 [workspace.lints]
 clippy.mod_module_files = "deny"
+# Rust's unused lint group includes dead_code.
+rust.unused = "deny"
 
 [workspace.package]
 version = "0.12.48"

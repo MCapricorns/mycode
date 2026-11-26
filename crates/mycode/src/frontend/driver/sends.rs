@@ -14,6 +14,8 @@ pub(super) struct SubmittedTurn {
     pub(super) restore_text_on_failure: bool,
     /// Stop during persistence waits for the commit but must not start a model.
     pub(super) cancelled: bool,
+    /// Fallback elapsed time for a stop before the core emits its first snapshot.
+    pub(super) usage_started: Option<(String, std::time::Instant)>,
 }
 
 #[derive(Debug)]

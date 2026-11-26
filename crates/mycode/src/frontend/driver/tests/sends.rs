@@ -285,6 +285,17 @@ fn stopping_during_commit_does_not_start_the_saved_turn() {
     );
     assert!(!driver.submitted_turns.contains_key(&session));
     assert!(!driver.vm.sending);
+    let stats = driver
+        .vm
+        .last_turn
+        .as_ref()
+        .expect("stopped turn statistics");
+    assert_eq!(
+        Some(stats.model.as_str()),
+        driver.vm.selected_model.as_deref()
+    );
+    assert_eq!(stats.requests, 0);
+    assert_eq!(stats.cache, None);
     assert!(
         driver
             .vm

@@ -194,7 +194,7 @@ pub(super) fn render_composer(
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(format!("{} {}", interrupt_shortcut(), t("cancels", "取消"))),
+                    .child(t("Esc stops", "Esc 停止")),
             )
             .into_any_element()
     });
@@ -348,7 +348,7 @@ fn composer_submit_button(busy: bool, can_send: bool, cx: &Context<Workspace>) -
             .small()
             .icon(IconName::Square)
             .label(t("Stop", "停止"))
-            .tooltip(t("Stop the current operation", "停止当前操作"))
+            .tooltip(t("Stop the current operation (Esc)", "停止当前操作（Esc）"))
             .on_click(cx.listener(|workspace, _, _, cx| workspace.on_cancel_chat(cx)))
     } else {
         Button::new("composer-send")
@@ -799,13 +799,7 @@ fn context_meter(workspace: &Workspace) -> Option<ComposerMeter> {
         detail.push(parts.cache.clone());
     }
     if let Some((label, _, turn)) = crate::ui::active_turn_summary(vm) {
-        detail.push(format!(
-            "{label} {} {} · {} {}",
-            crate::ui::compact_count(turn.input),
-            t("in", "入"),
-            crate::ui::compact_count(turn.output),
-            t("out", "出")
-        ));
+        detail.push(format!("{label} · {}", crate::ui::turn_stats_label(turn)));
     }
     let meter = ComposerMeter {
         detail: detail.join(" · "),

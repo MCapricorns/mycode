@@ -13,6 +13,8 @@ pub enum DismissLayer {
     Diff,
     /// The working-tree changes drawer.
     Changes,
+    /// The selected subagent's run details.
+    Subagent,
     /// The unpinned Details overlay.
     Inspector,
 }
@@ -22,6 +24,7 @@ pub fn top_dismiss_layer(
     picker: bool,
     diff: bool,
     changes: bool,
+    subagent: bool,
     inspector_overlay: bool,
 ) -> Option<DismissLayer> {
     if picker {
@@ -30,6 +33,8 @@ pub fn top_dismiss_layer(
         Some(DismissLayer::Diff)
     } else if changes {
         Some(DismissLayer::Changes)
+    } else if subagent {
+        Some(DismissLayer::Subagent)
     } else if inspector_overlay {
         Some(DismissLayer::Inspector)
     } else {
@@ -61,22 +66,26 @@ mod tests {
     #[test]
     fn escape_closes_one_layer_topmost_first() {
         assert_eq!(
-            top_dismiss_layer(false, true, true, true),
+            top_dismiss_layer(false, true, true, true, true),
             Some(DismissLayer::Diff)
         );
         assert_eq!(
-            top_dismiss_layer(false, false, true, true),
+            top_dismiss_layer(false, false, true, true, true),
             Some(DismissLayer::Changes)
         );
         assert_eq!(
-            top_dismiss_layer(false, false, false, true),
+            top_dismiss_layer(false, false, false, true, true),
+            Some(DismissLayer::Subagent)
+        );
+        assert_eq!(
+            top_dismiss_layer(false, false, false, false, true),
             Some(DismissLayer::Inspector)
         );
         assert_eq!(
-            top_dismiss_layer(true, true, true, true),
+            top_dismiss_layer(true, true, true, true, true),
             Some(DismissLayer::Picker)
         );
-        assert_eq!(top_dismiss_layer(false, false, false, false), None);
+        assert_eq!(top_dismiss_layer(false, false, false, false, false), None);
     }
 
     #[test]

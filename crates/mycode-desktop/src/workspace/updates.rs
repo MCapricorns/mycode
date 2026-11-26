@@ -153,43 +153,34 @@ impl Workspace {
 
     // ---- escape ----
 
-    /// Escape dismisses the topmost layer: the command palette, then the
-    /// folder picker, then other floating UI. In settings it steps back one
-    /// page, matching that page's back button, and leaves for the desk only
-    /// from a top-level section. Two things never answer it: the update
-    /// prompt (it waits for an explicit button) and a running turn (Stop is
-    /// the only cancel).
+    /// Escape closes the foremost panel. On the unobstructed desk it stops
+    /// the current turn or compaction and keeps its counters and draft.
     pub(crate) fn on_escape(&mut self, window: &mut gpui_kit::Window, cx: &mut Context<Self>) {
         if self.vm().command_palette_open {
             self.set_command_palette(false, window, cx);
             return;
         }
-        // The send choice floats above the composer and is the newest
-        // layer there: Escape closes it and nothing else.
-        if self.send_choice_open {
-            self.send_choice_open = false;
-            cx.notify();
-            return;
-        }
-        // One keypress closes one layer. Diff is painted above the drawer
-        // and Details, so it goes first; the drawer next; then an unpinned
-        // Details overlay. A pinned Details column is part of the desk, not
-        // a floating layer.
-        if let Some(layer) = top_dismiss_layer(
+        let on_desk = self.vm().view == MainView::Chat;
+        let layer = top_dismiss_layer(
             self.project_picker.is_some(),
             self.driver.git_diff_open(),
             self.vm().changes_panel_open,
-            // The Details overlay is painted only on the desk. A leftover
-            // unpinned inspector must not consume Escape while Settings is up.
-            self.vm().inspector_open
-                && !self.vm().inspector_pinned
-                && self.vm().view == MainView::Chat,
-        ) {
+            on_desk && self.vm().subagent_window.is_some(),
+            on_desk && self.vm().inspector_open && !self.vm().inspector_pinned,
+        );
+        // The folder picker can open above the update dialog.
+        if self.vm().update_dialog_open && layer != Some(DismissLayer::Picker) {
+            return;
+        }
+        if let Some(layer) = layer {
             match layer {
                 DismissLayer::Picker => self.on_picker_cancel(cx),
                 DismissLayer::Diff => self.on_close_git_diff_panel(cx),
                 DismissLayer::Changes => {
                     self.apply_action(FrontendAction::ChangesPanelToggled(false), cx);
+                }
+                DismissLayer::Subagent => {
+                    self.apply_action(FrontendAction::SubagentWindowChanged(None), cx);
                 }
                 DismissLayer::Inspector => {
                     self.apply_action(
@@ -203,28 +194,18 @@ impl Workspace {
             }
             return;
         }
-        // The install prompt ignores Escape: a stray keypress must neither
-        // drop the staged update nor reach the turn running behind it.
-        if self.vm().update_dialog_open {
-            return;
-        }
-        if self.vm().subagent_window.is_some() {
-            self.apply_action(FrontendAction::SubagentWindowChanged(None), cx);
-            return;
-        }
-        let mut dismissed = self.driver.dismiss_floating();
-        if dismissed {
+        if self.send_choice_open {
+            self.send_choice_open = false;
             cx.notify();
-        }
-        if !dismissed && self.vm().view == MainView::Settings {
+        } else if self.driver.dismiss_floating() {
+            cx.notify();
+        } else if !on_desk {
             self.apply_action(FrontendAction::ShowMainView(MainView::Chat), cx);
-            dismissed = true;
-        }
-        if !dismissed && let Some(identity) = self.ask_identity() {
+        } else if let Some(identity) = self.ask_identity() {
             self.on_dismiss_ask(&identity, cx);
+        } else if self.vm().sending || self.vm().compacting {
+            self.on_cancel_chat(cx);
         }
-        // Escape never stops a running turn: the Stop button is the only way
-        // out, so a stray keypress cannot touch running work.
     }
 
     /// Probes one MCP server for its tool list.

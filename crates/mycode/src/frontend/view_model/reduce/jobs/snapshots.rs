@@ -131,6 +131,13 @@ pub(in crate::frontend::view_model::reduce) fn consume_result(
     };
     let session_id = session_id(state);
     let failed = entry.text.starts_with("failed: ");
+    let status = if !failed {
+        AgentRunStatus::Completed
+    } else if text == crate::tools::tool::ABORTED_TOOL_RESULT {
+        AgentRunStatus::Cancelled
+    } else {
+        AgentRunStatus::Failed
+    };
     let session = state.subagents.session_mut(&session_id);
     if let Some(run) = session
         .runs
@@ -138,11 +145,7 @@ pub(in crate::frontend::view_model::reduce) fn consume_result(
         .find(|run| run.id == format!("legacy:{call_id}"))
     {
         if run.status != AgentRunStatus::Cancelled {
-            run.status = if failed {
-                AgentRunStatus::Failed
-            } else {
-                AgentRunStatus::Completed
-            };
+            run.status = status;
         }
         if failed {
             run.error = Some(text.to_owned());
@@ -151,33 +154,32 @@ pub(in crate::frontend::view_model::reduce) fn consume_result(
         }
         return;
     }
+    // Cancellation can close the transcript call before the child can
+    // send its terminal snapshot. Keep its status and clock in sync.
+    complete_call(state, call_id, status);
     if let Some(job) = state
         .live_jobs
         .iter()
         .find(|job| job.call_id == call_id)
         .cloned()
     {
-        archive_legacy(
-            state,
-            &job,
-            if failed {
-                AgentRunStatus::Failed
-            } else {
-                AgentRunStatus::Completed
-            },
-            Some(text.to_owned()),
-        );
+        archive_legacy(state, &job, status, Some(text.to_owned()));
     }
 }
 
 pub(super) fn complete_call(state: &mut WorkspaceState, call_id: &str, status: AgentRunStatus) {
     let session_id = session_id(state);
-    if let Some(run) = state
-        .subagents
-        .session_mut(&session_id)
+    let session = state.subagents.session_mut(&session_id);
+    let mapped = session
+        .call_ids
+        .iter()
+        .find(|(id, _)| id == call_id)
+        .map(|(_, run_id)| run_id.as_str());
+    if let Some(run) = session
         .runs
         .iter_mut()
-        .find(|run| run.call_id == call_id)
+        .rev()
+        .find(|run| mapped.map_or(run.call_id == call_id, |id| run.id == id))
         && !run.status.is_terminal()
     {
         run.status = status;

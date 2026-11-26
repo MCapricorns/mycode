@@ -77,6 +77,9 @@ impl ToolResult {
 pub const INTERRUPTED_NOTE: &str =
     "; interrupted by user — completed tool calls were applied and are not rolled back";
 
+/// Ledger text for a call the dispatcher stopped before its result arrived.
+pub(crate) const ABORTED_TOOL_RESULT: &str = "tool call was aborted and its result was discarded";
+
 /// Failure modes of a tool invocation. The dispatcher (agent loop)
 /// converts these into `is_error` tool results for the model rather than
 /// crashing the loop. See `wiki/index.html`.

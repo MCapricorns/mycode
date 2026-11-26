@@ -138,10 +138,10 @@ pub fn shortcuts() -> Vec<Shortcut> {
         ),
         navigate(
             "Esc".to_owned(),
-            t("Close the topmost panel", "关闭最上层面板"),
+            t("Close panel or stop", "关闭面板或停止"),
             Some(t(
-                "With nothing open, leaves a running task alone; a held queue returns to the input",
-                "没有打开的面板时，不打断运行中的任务；暂停的队列退回输入框",
+                "Closes the topmost panel. With the desk clear, stops the current operation.",
+                "关闭最上层面板。没有浮层时，停止当前操作。",
             )),
         ),
     ]);

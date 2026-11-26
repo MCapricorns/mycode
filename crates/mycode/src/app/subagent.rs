@@ -265,6 +265,9 @@ pub(crate) fn delegation_directive(catalog: &RoleCatalog, settings: &SubagentSet
          - Each child sees only its brief. Include the goal, relevant paths and evidence, \
          boundaries, verification, and the expected handoff. Keep an implementation and its \
          regression checks with the same owner.{writers}\n\
+         - Before a requested push, use an enabled review role if available and delegation is \
+         allowed. Ask it to check the diff for dead code, unused additions, and regressions. \
+         Verify its findings, make the cleanup, and rerun checks before pushing.\n\
          - Reuse the returned run ID and inspect the files, diff, and verification before accepting \
          a handoff. Use `agent_status`, `agent_stop`, or `agent_message` through `run_code` to \
          inspect, cancel, steer, or continue a run. Read the artifact if the result is truncated. \

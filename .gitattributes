@@ -2,6 +2,8 @@
 
 *.jsonl   text eol=lf
 *.wit     text eol=lf
+.githooks/*             text eol=lf
+scripts/check-unused.sh text eol=lf
 
 *.bat     text eol=crlf
 *.cmd     text eol=crlf

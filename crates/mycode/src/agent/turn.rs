@@ -474,7 +474,7 @@ pub(crate) fn discard_running_call(env: &TurnEnv<'_>, call: &ToolCall) -> Shared
         env,
         &call_id,
         call,
-        "tool call was aborted and its result was discarded".into(),
+        crate::tools::tool::ABORTED_TOOL_RESULT.into(),
     )
 }
 

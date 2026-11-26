@@ -109,6 +109,38 @@ fn typed_terminal_results_and_selection_survive_turn_end_and_stale_packets() {
 }
 
 #[test]
+fn an_aborted_direct_call_closes_its_typed_run_by_ledger_identity() {
+    let mut state = state();
+    reduce(
+        &mut state,
+        FrontendAction::ToolStarted {
+            call_id: "outer-ledger".into(),
+            provider_call_id: "outer-provider".into(),
+            name: "agent".into(),
+            target: "scout".into(),
+        },
+    );
+    let mut running = run(AgentRunStatus::Running);
+    running.call_id = "outer-provider".into();
+    progress(&mut state, packet(AgentStateEvent::Run(running)));
+    reduce(
+        &mut state,
+        FrontendAction::ToolResultAppended(ConversationEntry {
+            event_id: "discarded".into(),
+            kind: EntryKind::ToolResult,
+            agent_states: None,
+            text: format!("failed: {}", crate::tools::tool::ABORTED_TOOL_RESULT).into(),
+            call_id: Some("outer-ledger".into()),
+            thinking: String::new(),
+        }),
+    );
+    let closed = state.subagent_session().unwrap().run("run-stable").unwrap();
+    assert_eq!(closed.status, AgentRunStatus::Cancelled);
+    assert!(closed.finished_ms.is_some());
+    assert!(state.live_jobs.is_empty());
+}
+
+#[test]
 fn nested_typed_runs_keep_the_actual_child_cancel_identity() {
     let mut state = state();
     progress(

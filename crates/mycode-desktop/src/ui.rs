@@ -121,20 +121,26 @@ pub fn render_root(
                 cx.stop_propagation();
                 workspace.on_steer_send(cx);
             } else if event.keystroke.key == "escape"
+                && !event.keystroke.modifiers.modified()
                 && (workspace.vm().command_palette_open
-                    || workspace.vm().view == MainView::Settings)
+                    || workspace.vm().view == MainView::Settings
+                    || workspace.vm().sending
+                    || workspace.vm().compacting)
             {
-                // Capture, not bubble: a focused settings field declines Escape
-                // before the root's bubble listener runs. The palette is the
-                // top layer and is closed first inside `on_escape`.
+                // A focused input can consume Escape before it bubbles.
+                // Repeats must not drill through panels and stop the turn.
                 cx.stop_propagation();
-                workspace.on_escape(window, cx);
+                if !event.is_held {
+                    workspace.on_escape(window, cx);
+                }
             }
         }))
         .on_key_down(cx.listener(|workspace, event: &KeyDownEvent, window, cx| {
-            if event.keystroke.key == "escape" {
+            if event.keystroke.key == "escape" && !event.keystroke.modifiers.modified() {
                 cx.stop_propagation();
-                workspace.on_escape(window, cx);
+                if !event.is_held {
+                    workspace.on_escape(window, cx);
+                }
             }
         }))
         .font_family(ui_font)
@@ -351,9 +357,27 @@ fn render_toasts(
         }))
 }
 
-/// Compact token-count spelling: 12.3k / 1.2M. Shared by the inspector.
-pub(super) fn compact_count(count: u64) -> String {
-    crate::view_model::compact_count(count)
+pub(super) fn turn_stats_label(turn: &TurnStats) -> String {
+    use crate::view_model::compact_count;
+
+    let elapsed = crate::view_model::elapsed_label(turn.elapsed_ms);
+    if turn.requests == 0 {
+        return format!("{elapsed} · {}", t("Usage unavailable", "模型未返回用量"));
+    }
+    let reports = if turn.requests == 1 {
+        t("usage report", "次用量上报")
+    } else {
+        t("usage reports", "次用量上报")
+    };
+    format!(
+        "{elapsed} · {} {} · {} {} · {} {}",
+        turn.requests,
+        reports,
+        compact_count(turn.input),
+        t("in", "入"),
+        compact_count(turn.output),
+        t("out", "出")
+    )
 }
 
 /// Active turn totals matching the selected model, preferring the live turn.

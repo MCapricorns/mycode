@@ -562,7 +562,9 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
                 state.error = Some(message);
             }
             end_turn(state);
-            state.live_turn = None;
+            if let Some(stats) = state.live_turn.take() {
+                state.last_turn = Some(stats);
+            }
         }
         FrontendAction::CacheBreakArmed(cause) => arm_cache_watch(state, cause),
         FrontendAction::ContextCompacting(active) => {

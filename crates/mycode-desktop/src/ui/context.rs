@@ -491,15 +491,7 @@ fn render_model_usage(workspace: &Workspace, cx: &Context<Workspace>) -> impl In
             let hit = crate::view_model::turn_cache_hit(turn);
             this.child(stat_line(
                 label,
-                &format!(
-                    "{} {} · {} {} · {} {}",
-                    turn.requests,
-                    t("requests", "次请求"),
-                    super::compact_count(turn.input),
-                    t("in", "入"),
-                    super::compact_count(turn.output),
-                    t("out", "出")
-                ),
+                &super::turn_stats_label(turn),
                 theme.foreground,
                 theme,
             ))
