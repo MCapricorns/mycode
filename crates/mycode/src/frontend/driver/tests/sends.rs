@@ -64,10 +64,7 @@ fn continuing_a_reopened_failure_appends_a_request_and_preserves_the_draft() {
     active.head = interrupted_entry().event_id;
     driver.vm.composer_draft = "my next edit".into();
     assert!(driver.vm.turn_alert.is_none(), "failure survives reopening");
-    assert_eq!(
-        driver.turn_failure_message().as_deref(),
-        Some("connection reset")
-    );
+    assert_eq!(driver.turn_failure_message(), Some("connection reset"));
     let target = driver
         .recovery_target()
         .expect("saved failure can continue");

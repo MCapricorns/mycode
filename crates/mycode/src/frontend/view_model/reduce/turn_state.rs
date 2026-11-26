@@ -18,9 +18,9 @@ pub(super) fn summary_waits_for_the_reply(state: &WorkspaceState) -> bool {
 
 /// Cuts a composer text to [`crate::frontend::view_model::MAX_COMPOSER_CHARS`] in place.
 pub(super) fn bounded_draft(mut text: String) -> String {
-    if let Some((cut, _)) = text
-        .char_indices()
-        .nth(crate::frontend::view_model::MAX_COMPOSER_CHARS)
+    let limit = crate::frontend::view_model::MAX_COMPOSER_CHARS;
+    if text.len() > limit
+        && let Some((cut, _)) = text.char_indices().nth(limit)
     {
         text.truncate(cut);
     }

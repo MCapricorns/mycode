@@ -44,13 +44,13 @@ pub(super) fn selected_route(
 
 impl FrontendDriver {
     /// The current failure, including one recovered from the saved transcript.
-    pub fn turn_failure_message(&self) -> Option<String> {
+    pub fn turn_failure_message(&self) -> Option<&str> {
         let active = self.vm.active.as_ref()?;
         if self.vm.sending || self.vm.compacting || active.running || active.compacting {
             return None;
         }
-        if let Some(message) = &self.vm.turn_alert {
-            return Some(message.clone());
+        if let Some(message) = self.vm.turn_alert.as_deref() {
+            return Some(message);
         }
         let last_message = active.entries.iter().rev().find(|entry| {
             matches!(
@@ -64,9 +64,9 @@ impl FrontendDriver {
         last_message
             .text
             .lines()
-            .last()?
+            .next_back()?
             .strip_prefix(crate::core::INTERRUPTED_RESPONSE_PREFIX)
-            .map(|detail| detail.trim().to_owned())
+            .map(str::trim)
     }
 
     /// Capture the saved head, so an old button cannot continue another turn.

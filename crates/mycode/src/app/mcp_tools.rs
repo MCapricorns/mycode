@@ -218,12 +218,7 @@ impl ToolDyn for DynamicMcpTool {
             };
             let result = tokio::select! {
                 biased;
-                () = ctx.cancel.cancelled() => {
-                    // Dropping an in-flight stdio exchange can leave a partial
-                    // JSON-RPC line. Do not let queued calls reuse that stream.
-                    self.broken.store(true, Ordering::Relaxed);
-                    return Err(cancelled());
-                }
+                () = ctx.cancel.cancelled() => return Err(cancelled()),
                 result = client.call_tool(&self.tool_name, args) => result,
             };
             exchange.complete = true;

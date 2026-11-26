@@ -5,6 +5,36 @@ use crate::frontend::view_model::{
 };
 
 #[test]
+fn editing_before_a_file_mention_keeps_its_search_results() {
+    let mut state = WorkspaceState::default();
+    reduce(
+        &mut state,
+        FrontendAction::ComposerChanged("read @lib".into()),
+    );
+    reduce(
+        &mut state,
+        FrontendAction::MentionFiles(vec!["src/lib.rs".into()]),
+    );
+    reduce(
+        &mut state,
+        FrontendAction::ComposerChanged("review @lib".into()),
+    );
+    let mention = state.mention.as_ref().unwrap();
+    assert_eq!(
+        mention.items.first().map(|item| item.insert.as_str()),
+        Some("src/lib.rs")
+    );
+
+    reduce(
+        &mut state,
+        FrontendAction::ComposerChanged("review @main".into()),
+    );
+    let mention = state.mention.as_ref().unwrap();
+    assert_eq!(mention.fragment, "main");
+    assert!(mention.items.is_empty());
+}
+
+#[test]
 fn a_proxy_edit_drops_the_previous_test_result() {
     let mut state = WorkspaceState {
         settings: Some(crate::frontend::view_model::SettingsState::from_settings(

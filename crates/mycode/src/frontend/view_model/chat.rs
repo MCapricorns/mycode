@@ -204,15 +204,9 @@ impl SessionTitleFilter {
     }
 }
 
-/// Whether `title` matches a case-insensitive sidebar search query.
-#[must_use]
-pub fn session_title_matches(title: &str, filter: &str) -> bool {
-    SessionTitleFilter::new(filter).matches(title)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{SessionTitleFilter, session_title_matches};
+    use super::SessionTitleFilter;
 
     #[test]
     fn a_live_job_title_names_the_role() {
@@ -291,11 +285,12 @@ mod tests {
 
     #[test]
     fn title_filter_is_case_insensitive_and_blank_matches_all() {
-        assert!(session_title_matches("Hello Title", ""));
-        assert!(session_title_matches("Hello Title", "  hello  "));
-        assert!(!session_title_matches("Hello Title", "other"));
-        assert!(session_title_matches("", ""));
-        assert!(!session_title_matches("", "x"));
+        let blank = SessionTitleFilter::new("");
+        assert!(blank.matches("Hello Title"));
+        assert!(blank.matches(""));
+        assert!(SessionTitleFilter::new("  hello  ").matches("Hello Title"));
+        assert!(!SessionTitleFilter::new("other").matches("Hello Title"));
+        assert!(!SessionTitleFilter::new("x").matches(""));
     }
 
     #[test]

@@ -21,7 +21,7 @@ impl DeleteConfirmation {
 }
 
 impl Workspace {
-    pub(crate) fn turn_failure_message(&self) -> Option<String> {
+    pub(crate) fn turn_failure_message(&self) -> Option<&str> {
         self.driver.turn_failure_message()
     }
 

@@ -285,10 +285,6 @@ impl StdioChannel {
         };
         format!("{status}{}", self.stderr_context())
     }
-
-    async fn write_line(&self, line: &[u8]) -> Result<(), McpError> {
-        write_line(&self.stdin, line).await
-    }
 }
 
 impl Drop for StdioChannel {
@@ -332,7 +328,7 @@ impl JsonRpcChannel for StdioChannel {
                     }
                     Err(ReaderFailure::Error(error)) => return Err(error),
                 };
-                self.write_line(&line).await?;
+                write_line(&self.stdin, &line).await?;
                 match reply.await {
                     Ok(Ok(mut value)) => {
                         if let Some(error) = value.get("error").filter(|error| error.is_object()) {
@@ -364,7 +360,7 @@ impl JsonRpcChannel for StdioChannel {
             "method": method,
             }))
             .map_err(|error| McpError::protocol(error.to_string()))?;
-            tokio::time::timeout(self.timeout, self.write_line(&line))
+            tokio::time::timeout(self.timeout, write_line(&self.stdin, &line))
                 .await
                 .map_err(|_| McpError::Timeout)?
         })
@@ -382,8 +378,10 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut guard = stdin.lock().await;
-    let stdin = guard
-        .as_mut()
+    // Keep the pipe out of the shared slot until a complete frame is written.
+    // An error or cancellation drops it before another writer can append bytes.
+    let mut stdin = guard
+        .take()
         .ok_or_else(|| McpError::transport("server stdin is closed"))?;
     let write = async {
         stdin.write_all(line).await?;
@@ -392,7 +390,9 @@ where
     };
     write
         .await
-        .map_err(|error| McpError::transport(format!("write to server failed: {error}")))
+        .map_err(|error| McpError::transport(format!("write to server failed: {error}")))?;
+    *guard = Some(stdin);
+    Ok(())
 }
 
 /// Continuously consumes stdout, including notifications between RPCs.
@@ -523,7 +523,7 @@ where
                 LineRead::Line
             });
         }
-        let newline = available.iter().position(|byte| *byte == b'\n');
+        let newline = memchr::memchr(b'\n', available);
         let used = newline.map_or(available.len(), |index| index + 1);
         if !oversized {
             if line.len() + used > limit {
@@ -774,6 +774,25 @@ mod tests {
         replies.deliver(serde_json::json!({"id": 1, "result": "cancelled"}));
         replies.deliver(serde_json::json!({"id": 2, "result": "current"}));
         assert_eq!(second.await.unwrap().unwrap()["result"], "current");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_frame_write_closes_stdin() {
+        use tokio::io::AsyncReadExt as _;
+
+        let (client, mut server) = tokio::io::duplex(4);
+        let stdin = tokio::sync::Mutex::new(Some(client));
+        tokio::select! {
+            biased;
+            result = super::write_line(&stdin, b"first frame") => {
+                panic!("write should block on a full pipe: {result:?}");
+            }
+            () = std::future::ready(()) => {}
+        }
+        assert!(stdin.try_lock().unwrap().is_none());
+        let mut received = Vec::new();
+        server.read_to_end(&mut received).await.unwrap();
+        assert_eq!(received, b"firs");
     }
 
     #[tokio::test]

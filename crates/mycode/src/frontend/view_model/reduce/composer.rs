@@ -2,9 +2,7 @@
 //! command autocomplete. A leading `/` lists built-in commands, discovered
 //! skills, and enabled MCP servers without waiting for a longer prefix.
 
-use super::super::chat::{
-    COMPOSER_COMMANDS, ComposerMention, MentionGroup, MentionItem, MentionKind,
-};
+use super::super::chat::{COMPOSER_COMMANDS, MentionGroup, MentionItem, MentionKind};
 use super::super::settings::SkillEntry;
 use super::super::state::WorkspaceState;
 
@@ -40,28 +38,20 @@ const MAX_SLASH_ROWS: usize = 40;
 /// `@fragment` token selects files; a leading `/name` (still the whole
 /// draft) selects commands, skills, and MCP. Command rows are filled by
 /// [`slash_items`] so they can see the loaded catalog.
-pub(super) fn parse_mention(text: &str) -> Option<ComposerMention> {
+pub(super) fn parse_mention(text: &str) -> Option<(MentionKind, &str)> {
     if text.ends_with(char::is_whitespace) || text.is_empty() {
         return None;
     }
-    let token = text.split_whitespace().last().unwrap_or_default();
+    let token = text.split_whitespace().next_back().unwrap_or_default();
     if let Some(fragment) = token.strip_prefix('@')
         && !fragment.contains('@')
     {
-        return Some(ComposerMention {
-            kind: MentionKind::File,
-            fragment: fragment.to_owned(),
-            items: Vec::new(),
-        });
+        return Some((MentionKind::File, fragment));
     }
     if let Some(fragment) = text.strip_prefix('/')
         && !fragment.contains(char::is_whitespace)
     {
-        return Some(ComposerMention {
-            kind: MentionKind::Command,
-            fragment: fragment.to_owned(),
-            items: Vec::new(),
-        });
+        return Some((MentionKind::Command, fragment));
     }
     None
 }

@@ -13,6 +13,7 @@ mod usage;
 
 use crate::app::CHAT_CANCELLED;
 
+use super::chat::ComposerMention;
 use super::{
     ActiveConversation, FrontendAction, MentionKind, ProxyTestState, TurnStats, UpdateState,
     WorkspaceState,
@@ -245,7 +246,17 @@ pub fn reduce(state: &mut WorkspaceState, action: FrontendAction) {
         }
         FrontendAction::ComposerChanged(text) => {
             let bounded = bounded_draft(text);
-            state.mention = parse_mention(&bounded);
+            state.mention = parse_mention(&bounded).map(|(kind, fragment)| {
+                state
+                    .mention
+                    .take()
+                    .filter(|mention| mention.kind == kind && mention.fragment == fragment)
+                    .unwrap_or_else(|| ComposerMention {
+                        kind,
+                        fragment: fragment.to_owned(),
+                        items: Vec::new(),
+                    })
+            });
             state.composer_draft = bounded;
         }
         FrontendAction::WelcomeSendHeld(text) => {

@@ -422,7 +422,7 @@ pub(super) fn render_chat(
                                         .when_some(
                                             workspace.turn_failure_message(),
                                             |this, alert| {
-                                                this.child(render_turn_alert(&alert, workspace, cx))
+                                                this.child(render_turn_alert(alert, workspace, cx))
                                             },
                                         ),
                                 ),
