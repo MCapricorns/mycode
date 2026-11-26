@@ -7,7 +7,7 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    Window, div, px, relative,
+    Window, div, px,
 };
 
 use crate::i18n::t;
@@ -624,15 +624,7 @@ fn bar_row(
                         }),
                 ),
         )
-        .child(
-            div()
-                .h(px(4.))
-                .w_full()
-                .rounded_full()
-                .bg(theme.border)
-                .overflow_hidden()
-                .child(div().h_full().w(relative(fill)).rounded_full().bg(color)),
-        )
+        .child(super::skin::progress_track(fill, color, theme).w_full())
 }
 
 #[cfg(test)]

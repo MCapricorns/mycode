@@ -34,7 +34,7 @@ const CAPTION_ICON_PX: f32 = 12.;
 /// The native Windows close-hover red and the white glyph it carries.
 const CLOSE_HOVER_BG: u32 = 0xe81123;
 const CLOSE_HOVER_FG: u32 = 0xffffff;
-const TITLE_INSET: f32 = 12.;
+const TITLE_INSET: f32 = 16.;
 /// Leading space reserved on macOS for native traffic-light window controls.
 const MACOS_TRAFFIC_LIGHT_INSET: f32 = 76.;
 
@@ -93,16 +93,14 @@ pub(super) fn render_title_bar(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let subtitle: SharedString = match workspace.vm().view {
+    let subtitle: Option<SharedString> = match workspace.vm().view {
         MainView::Chat => workspace
             .vm()
             .project_dir
             .as_deref()
             .map(super::project_label)
-            .map(|project| format!("{} / {project}", t("Workbench", "工作台")))
-            .unwrap_or_else(|| t("Local workbench", "本地代码工作台").to_owned())
-            .into(),
-        MainView::Settings => t("Settings", "设置").into(),
+            .map(Into::into),
+        MainView::Settings => Some(t("Settings", "设置").into()),
     };
     // A small dot tracks the self-update pipeline. Its click opens the dialog.
     let update_dot = update_dot_color(&workspace.vm().update, theme);
@@ -115,6 +113,8 @@ pub(super) fn render_title_bar(
         .w_full()
         .flex_shrink_0()
         .bg(skin::glass(theme))
+        .border_b_1()
+        .border_color(theme.title_bar_border)
         .child(drag_region(subtitle, window, cx))
         .child(title_controls(
             update_dot,
@@ -126,7 +126,7 @@ pub(super) fn render_title_bar(
 }
 
 fn drag_region(
-    subtitle: SharedString,
+    subtitle: Option<SharedString>,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
@@ -173,28 +173,33 @@ fn drag_region(
         })
         .child(
             div()
-                .flex_shrink_0()
                 .flex()
-                .flex_row()
                 .items_center()
                 .gap_2()
-                .child(img("brand/icon.ico").size(px(22.)))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(crate::ui::skin::WEIGHT_STRONG)
-                        .text_color(theme.foreground)
-                        .child("MYCode"),
-                ),
+                .flex_shrink_0()
+                .text_sm()
+                .font_weight(skin::WEIGHT_STRONG)
+                .text_color(theme.foreground)
+                .child(img("brand/icon.ico").size(px(18.)).flex_shrink_0())
+                .child("MYCode"),
         )
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(subtitle),
-        )
+        .when_some(subtitle, |this, subtitle| {
+            this.child(
+                div()
+                    .flex_shrink_0()
+                    .w(px(1.))
+                    .h(px(12.))
+                    .bg(theme.title_bar_border),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(subtitle),
+            )
+        })
 }
 
 struct TitleDrag {
@@ -241,7 +246,7 @@ fn title_controls(
         .items_center()
         .h_full()
         .flex_shrink_0()
-        .gap_2()
+        .gap_1()
         // Caption buttons sit flush on the window's right edge; native
         // decorations keep the usual inset on this strip.
         .when(!show_captions, |this| this.pr(px(TITLE_INSET)))
@@ -269,7 +274,7 @@ fn title_controls(
                 div()
                     .id("title-update")
                     .occlude()
-                    .size(px(16.))
+                    .size(px(28.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -282,7 +287,7 @@ fn title_controls(
                             cx,
                         );
                     }))
-                    .child(div().size(skin::space(2)).rounded_full().bg(color)),
+                    .child(div().size(px(6.)).rounded_full().bg(color)),
             )
         })
         .when(show_captions, |this| {

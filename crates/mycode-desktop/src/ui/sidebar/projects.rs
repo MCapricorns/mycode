@@ -12,6 +12,9 @@ use crate::i18n::t;
 use crate::ui::{element_id, project_label, skin};
 use crate::workspace::Workspace;
 
+const PROJECT_ROW_H: f32 = 32.;
+const PROJECT_ROW_GAP: f32 = 2.;
+
 pub(super) fn render_projects(
     workspace: &Workspace,
     window: &Window,
@@ -25,10 +28,11 @@ pub(super) fn render_projects(
         .any(|(_, project)| project.is_none());
     // A long project list scrolls independently and leaves conversations visible.
     // Whole rows keep the last visible project label clear of the scroll clip.
-    let visible_rows = (f32::from(window.viewport_size().height) * 0.24 / 40.)
+    let row_pitch = PROJECT_ROW_H + PROJECT_ROW_GAP;
+    let visible_rows = (f32::from(window.viewport_size().height) * 0.24 / row_pitch)
         .floor()
         .clamp(3., 5.);
-    let list_height = visible_rows * 40. - 4.;
+    let list_height = visible_rows * row_pitch - PROJECT_ROW_GAP;
     div()
         .id("sidebar-projects")
         .flex_shrink_0()
@@ -72,18 +76,8 @@ pub(super) fn render_projects(
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap(px(PROJECT_ROW_GAP))
                 .px_2()
-                .when(roots.is_empty(), |this| {
-                    this.child(
-                        div()
-                            .px_2()
-                            .py_2()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(t("Add a project folder", "添加一个项目目录")),
-                    )
-                })
                 .children(roots.iter().map(|root| project_row(root, cwd, cx)))
                 .when(has_unassigned, |list| {
                     list.child(unassigned_row(cwd.is_none(), cx))
@@ -93,29 +87,11 @@ pub(super) fn render_projects(
 
 fn unassigned_row(selected: bool, cx: &Context<Workspace>) -> impl IntoElement {
     let theme = cx.theme();
-    div()
-        .id("workspace-unassigned")
-        .w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .px_2()
-        .h(px(36.))
-        .rounded(skin::radius_control())
-        .border_1()
-        .border_color(if selected {
-            theme.border
-        } else {
-            theme.transparent
-        })
-        .when(selected, |this| this.bg(theme.secondary_hover))
-        .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary_hover))
+    super::navigation_row("workspace-unassigned", selected, theme)
+        .h(px(PROJECT_ROW_H))
         .on_click(cx.listener(move |workspace, _, _, cx| {
             workspace.on_open_unassigned_conversations(cx);
         }))
-        .flex()
-        .items_center()
-        .gap_2()
         .child(
             Icon::new(IconName::MessageSquare)
                 .xsmall()
@@ -128,7 +104,7 @@ fn unassigned_row(selected: bool, cx: &Context<Workspace>) -> impl IntoElement {
         )
         .child(
             div()
-                .text_sm()
+                .min_w_0()
                 .truncate()
                 .child(t("Default chat", "默认聊天")),
         )
@@ -140,60 +116,41 @@ fn project_row(root: &str, cwd: Option<&str>, cx: &Context<Workspace>) -> impl I
     let path = root.to_owned();
     let remove = path.clone();
     let tooltip_path = path.clone();
-    div()
-        .id(format!("workspace-root-{}", element_id(root)))
-        .group("workspace-root")
-        .w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .px_2()
-        .h(px(36.))
-        .rounded(skin::radius_control())
-        .border_1()
-        .border_color(if selected {
-            theme.border
+    super::navigation_row(
+        format!("workspace-root-{}", element_id(root)),
+        selected,
+        theme,
+    )
+    .group("workspace-root")
+    .h(px(PROJECT_ROW_H))
+    .tooltip(move |window, cx| Tooltip::new(tooltip_path.clone()).build(window, cx))
+    .on_click(cx.listener(move |workspace, _, _, cx| {
+        workspace.on_open_workspace_folder(&path, cx);
+    }))
+    .child(
+        Icon::new(if selected {
+            IconName::FolderOpen
         } else {
-            theme.transparent
+            IconName::Folder
         })
-        .when(selected, |this| this.bg(theme.secondary_hover))
-        .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary_hover))
-        .tooltip(move |window, cx| Tooltip::new(tooltip_path.clone()).build(window, cx))
-        .on_click(cx.listener(move |workspace, _, _, cx| {
-            workspace.on_open_workspace_folder(&path, cx);
-        }))
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(
-            Icon::new(if selected {
-                IconName::FolderOpen
-            } else {
-                IconName::Folder
-            })
-            .xsmall()
-            .flex_shrink_0()
-            .text_color(theme.muted_foreground),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_sm()
-                .truncate()
-                .child(project_label(root)),
-        )
-        .map(|row| {
-            let id = format!("workspace-root-remove-{}", element_id(root));
-            let on_remove = cx.listener(move |workspace, _, _, cx| {
-                workspace.on_remove_workspace_root(&remove, cx);
-            });
-            row.child(crate::ui::hover_delete_button(
-                id,
-                IconName::X,
-                "workspace-root",
-                on_remove,
-                cx,
-            ))
-        })
+        .xsmall()
+        .flex_shrink_0()
+        .text_color(theme.muted_foreground),
+    )
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .child(project_label(root)),
+    )
+    .child(crate::ui::hover_delete_button(
+        format!("workspace-root-remove-{}", element_id(root)),
+        IconName::X,
+        "workspace-root",
+        cx.listener(move |workspace, _, _, cx| {
+            workspace.on_remove_workspace_root(&remove, cx);
+        }),
+        cx,
+    ))
 }

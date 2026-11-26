@@ -1,6 +1,4 @@
-//! Separate vertical project and conversation navigation.
-//! At 1440 px: 248 px sidebar + 1184 px conversation + 8 px inset.
-//! At the 960 px minimum: 216 px sidebar + 420 px conversation + 316 px inspector + 8 px inset.
+//! Project and conversation navigation beside the workbench.
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::input::{Input, InputState};
@@ -8,8 +6,8 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    Context, Div, ElementId, InteractiveElement, IntoElement, ParentElement, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::{project_label, skin};
@@ -25,10 +23,10 @@ use self::time::{DateGroup, classify_session_group, format_session_relative_time
 
 /// Navigation keeps enough room for titles without squeezing the conversation.
 pub(super) const WIDTH_PX: f32 = 248.;
-const NEW_TASK_H: f32 = 36.;
+const NEW_TASK_H: f32 = 34.;
 const SEARCH_H: f32 = 32.;
-const ACTION_PAD_Y: f32 = 12.;
-const SECTION_HEAD_H: f32 = 36.;
+const ACTION_PAD_Y: f32 = 8.;
+const SECTION_HEAD_H: f32 = 32.;
 
 pub(super) fn width(window: &Window) -> f32 {
     if f32::from(window.viewport_size().width) < 1100. {
@@ -49,7 +47,6 @@ pub(super) fn render_sidebar(
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
     let cwd = workspace.vm().project_dir.as_deref();
-    let view = workspace.vm().view;
     // Project scope applies before text search, including empty search results.
     let filter = SessionTitleFilter::new(&workspace.vm().session_filter);
     let mut visible_sessions = crate::view_model::project_session_rows(workspace.vm());
@@ -73,6 +70,8 @@ pub(super) fn render_sidebar(
         .min_h_0()
         .overflow_hidden()
         .bg(skin::glass_sidebar(theme))
+        .border_r_1()
+        .border_color(theme.sidebar_border)
         .child(action_strip(cx))
         .child(projects::render_projects(workspace, window, cx))
         .child(sessions_section(
@@ -84,7 +83,7 @@ pub(super) fn render_sidebar(
             desk.faint,
             armed_delete,
         ))
-        .child(render_sidebar_footer(view, cx))
+        .child(render_sidebar_footer(cx))
 }
 
 /// A new conversation is always reachable, including before the first project.
@@ -93,27 +92,61 @@ fn action_strip(cx: &Context<Workspace>) -> impl IntoElement + use<> {
     div()
         .id("sidebar-actions")
         .flex_shrink_0()
-        .px_3()
+        .px_2()
         .py(px(ACTION_PAD_Y))
         .child(
-            skin::glass_button("new-task", false, theme)
-                .w_full()
+            navigation_row("new-task", false, theme)
                 .h(px(NEW_TASK_H))
-                .justify_start()
+                .font_weight(skin::WEIGHT_STRONG)
                 .on_click(cx.listener(|workspace, _, _, cx| {
                     workspace.on_new_session(cx);
                 }))
-                .child(Icon::new(IconName::Plus).xsmall().flex_shrink_0())
+                .child(
+                    Icon::new(IconName::Plus)
+                        .xsmall()
+                        .flex_shrink_0()
+                        .text_color(theme.primary),
+                )
                 .child(super::chat::new_task_label()),
         )
 }
 
-fn section_label(text: &str, theme: &Theme) -> impl IntoElement {
+fn section_label(text: &'static str, theme: &Theme) -> impl IntoElement {
     div()
         .text_xs()
-        .font_weight(crate::ui::skin::WEIGHT_STRONG)
+        .font_weight(skin::WEIGHT_STRONG)
         .text_color(theme.muted_foreground)
-        .child(text.to_owned())
+        .child(text)
+}
+
+/// Stable indent across idle, hovered and selected navigation rows.
+fn navigation_row(id: impl Into<ElementId>, selected: bool, theme: &Theme) -> Stateful<Div> {
+    let hover = if selected {
+        theme.accent
+    } else {
+        theme.sidebar_accent
+    };
+    div()
+        .id(id)
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .rounded(skin::radius_xs())
+        .border_l_2()
+        .border_color(if selected {
+            theme.sidebar_primary
+        } else {
+            theme.transparent
+        })
+        .text_sm()
+        .text_color(theme.foreground)
+        .when(selected, |row| row.bg(theme.accent))
+        .cursor_pointer()
+        .hover(move |row| row.bg(hover))
 }
 
 /// Sessions of the workspace the sidebar shows. Separate from folders.
@@ -135,7 +168,9 @@ fn sessions_section(
         .min_h_0()
         .flex()
         .flex_col()
-        .mt_3()
+        .mt_2()
+        .border_t_1()
+        .border_color(theme.sidebar_border)
         .overflow_hidden()
         .child(
             div()
@@ -276,19 +311,17 @@ fn session_row(
     let desk = super::desk::Desk::of(theme);
     let is_open = summary.active;
     let title: SharedString = displayed_session_title(summary).to_owned().into();
-    let elsewhere = !summary.corrupt
-        && project.is_some_and(|path| {
-            cwd.is_none_or(|current| !crate::view_model::same_project_path(current, path))
-        });
-    let folder: Option<SharedString> = elsewhere
-        .then(|| project.map(project_label))
-        .flatten()
-        .map(Into::into);
-    let metadata = [relative_time, folder.map(|folder| folder.to_string())]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
+    let folder = project
+        .filter(|path| {
+            !summary.corrupt
+                && cwd.is_none_or(|current| !crate::view_model::same_project_path(current, path))
+        })
+        .map(project_label);
+    let metadata = match (relative_time, folder) {
+        (Some(time), Some(folder)) => format!("{time} · {folder}"),
+        (Some(label), None) | (None, Some(label)) => label,
+        (None, None) => String::new(),
+    };
     let session_id = summary.session_id.clone();
     let open_listener = {
         let session_id = session_id.clone();
@@ -306,81 +339,68 @@ fn session_row(
             cx,
         );
     });
-    div()
-        .id(format!("session-row-{}", summary.session_id))
-        .relative()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .group("session-row")
-        .px_2()
-        .py(px(10.))
-        .rounded(skin::radius_control())
-        .border_1()
-        .border_color(if is_open {
-            theme.border
-        } else {
-            theme.transparent
-        })
-        .when(is_open, |this| this.bg(theme.secondary_hover))
-        .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary_hover))
-        .text_color(if is_open {
-            theme.foreground
-        } else {
-            theme.sidebar_foreground
-        })
-        .when(summary.corrupt, |this| this.on_click(corrupt_listener))
-        .when(!summary.corrupt, |this| this.on_click(open_listener))
-        .min_w_0()
-        .flex_shrink_0()
-        .child(
-            Icon::new(IconName::MessageSquare)
+    navigation_row(
+        format!("session-row-{}", summary.session_id),
+        is_open,
+        theme,
+    )
+    .relative()
+    .group("session-row")
+    .min_h(px(32.))
+    .py_1p5()
+    .when(summary.corrupt, |this| this.on_click(corrupt_listener))
+    .when(!summary.corrupt, |this| this.on_click(open_listener))
+    .when(summary.corrupt, |row| {
+        row.child(
+            Icon::new(IconName::TriangleAlert)
                 .xsmall()
                 .flex_shrink_0()
-                .text_color(if is_open {
-                    theme.primary
-                } else {
-                    theme.muted_foreground
-                }),
+                .text_color(theme.warning),
         )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(div().text_sm().truncate().child(title))
-                .child(
+    })
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .truncate()
+                    .when(is_open, |label| label.font_weight(skin::WEIGHT_STRONG))
+                    .child(title),
+            )
+            .when(!metadata.is_empty(), |row| {
+                row.child(
                     div()
                         .text_xs()
                         .text_color(desk.faint)
                         .truncate()
                         .child(metadata),
-                ),
-        )
-        .map(|row| {
-            let on_delete = cx.listener(move |workspace, _, _, cx| {
-                workspace.on_delete_session(&session_id, cx);
-            });
-            if armed {
-                row.child(armed_delete_button(
-                    format!("session-delete-{}", summary.session_id),
-                    t("Delete?", "删除？"),
-                    on_delete,
-                    theme,
-                ))
-            } else {
-                row.child(super::hover_delete_button(
-                    format!("session-delete-{}", summary.session_id),
-                    IconName::Trash,
-                    "session-row",
-                    on_delete,
-                    cx,
-                ))
-            }
-        })
+                )
+            }),
+    )
+    .map(|row| {
+        let on_delete = cx.listener(move |workspace, _, _, cx| {
+            workspace.on_delete_session(&session_id, cx);
+        });
+        if armed {
+            row.child(armed_delete_button(
+                format!("session-delete-{}", summary.session_id),
+                t("Delete?", "删除？"),
+                on_delete,
+                theme,
+            ))
+        } else {
+            row.child(super::hover_delete_button(
+                format!("session-delete-{}", summary.session_id),
+                IconName::Trash,
+                "session-row",
+                on_delete,
+                cx,
+            ))
+        }
+    })
 }
 
 /// A delete control after its first click: always visible, red, and
@@ -413,39 +433,27 @@ pub(super) fn armed_delete_button(
         .child(label)
 }
 
-fn render_sidebar_footer(view: MainView, cx: &mut Context<Workspace>) -> impl IntoElement {
+fn render_sidebar_footer(cx: &Context<Workspace>) -> impl IntoElement + use<> {
     let theme = cx.theme();
     div()
         .id("sidebar-footer")
         .flex_shrink_0()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .px_3()
-        .py_2()
+        .px_2()
+        .py_1p5()
         .border_t_1()
-        .border_color(theme.border)
-        .child(super::icon_button_marked(
-            "footer-settings",
-            IconName::Settings,
-            view == MainView::Settings,
-            cx.listener(|workspace, _, _, cx| {
-                let next = if workspace.vm().view == MainView::Settings {
-                    MainView::Chat
-                } else {
-                    MainView::Settings
-                };
-                workspace.on_show_main_view(next, cx);
-            }),
-            cx,
-        ))
+        .border_color(theme.sidebar_border)
         .child(
-            div().flex().flex_row().items_center().gap_2().child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(format!("v{}", mycode::app::current_version())),
-            ),
+            navigation_row("footer-settings", false, theme)
+                .h(px(32.))
+                .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.on_show_main_view(MainView::Settings, cx);
+                }))
+                .child(
+                    Icon::new(IconName::Settings)
+                        .xsmall()
+                        .flex_shrink_0()
+                        .text_color(theme.muted_foreground),
+                )
+                .child(t("Settings", "设置")),
         )
 }

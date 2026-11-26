@@ -11,7 +11,7 @@
 
 **从一句想法，到一次可检查的改动。**
 
-采用叠纸像素（Paper-Pixel）视觉语言打造的 Rust + GPUI 原生桌面编码代理，将代码对话、QuickJS CodeMode 工具编排、子代理协作与 Git Diff 审查集成在同一个高效工作台中。
+基于 Rust 和 GPUI 的原生桌面编码代理，在同一个工作台中提供代码对话、QuickJS CodeMode 工具编排、子代理协作和 Git Diff 审查。
 
 [下载版本](https://github.com/MCapricorns/mycode/releases/latest) · [项目主页](https://mcapricorns.github.io/mycode/) · [架构 Wiki](https://mcapricorns.github.io/mycode/wiki/index.html) · [快速开始](#快速开始) · [参与开发](#参与开发) · [更新日志](CHANGELOG.md)
 
@@ -82,8 +82,8 @@ MYCode 由核心运行时 `mycode` 与原生桌面壳 `mycode-desktop` 构成。
 
 ### 项目、会话与检查视图
 
-- **欢迎页与默认空间**：居中的项目入口支持打开文件夹、继续最近项目或直接聊天；未绑定目录时发言会存入「默认聊天」。移除项目入口不会删除磁盘代码或历史会话。
-- **Paper-Pixel 工作台**：支持亮色/深色两套纸感主题与 `S / M / L / XL` 四档界面字号（详见 [DESIGN.md](DESIGN.md)）；窗口大小调整不会静默覆盖字号设置。
+- **开始页与默认空间**：可以打开或切换项目、恢复最近对话，也可以直接聊天。未绑定目录时，消息会存入「默认聊天」。移除项目入口不会删除磁盘代码或历史会话。
+- **桌面工作台**：支持中性色的亮色和深色主题，以及 `S / M / L / XL` 四档界面字号。调整窗口大小时会保留所选字号。详见 [设计说明](DESIGN.md)。
 - **Details 检查面板**：按「子代理任务」「文件改动」「模型与用量」清晰分组，支持右侧固定停靠或浮层展开，点击变更文件即可查看高亮 Git diff。
 - **会话状态隔离**：模型与思考强度按会话独立保存，模型徽章保留网关返回的来源标识（不同来源的同名模型分别列出），思考档位仅展示模型声明的支持级别。
 - **失败后继续**：模型请求失败会保留已收到的内容和已完成的工具结果。通过「继续任务」从当前记录接着工作，不自动重放之前的工具操作，也不覆盖未发送草稿。
@@ -188,7 +188,7 @@ const [hits, cargo] = await Promise.all([
 | Crate | 职责 |
 | --- | --- |
 | `mycode` | 核心运行时：`core`、`config`、`providers`、`tools`、`agent`、`app`、`frontend`（零 GPUI 依赖） |
-| `mycode-desktop` | GPUI 原生窗口、Paper-Pixel 主题界面渲染、剪贴板与桌面交互 |
+| `mycode-desktop` | GPUI 原生窗口、主题渲染、剪贴板与桌面交互 |
 
 ### 环境要求
 

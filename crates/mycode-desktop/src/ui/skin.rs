@@ -1,41 +1,25 @@
-//! Layered paper surfaces, pixel-scale geometry, and translucent panel elevation.
+//! Shared workbench surfaces, corner sizes, and floating panel elevation.
 use gpui_kit::component::theme::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Background, BoxShadow, Div, Hsla, InteractiveElement as _, Stateful, Styled as _, div, hsla,
-    linear_color_stop, linear_gradient, px,
+    BoxShadow, Div, Hsla, InteractiveElement as _, ParentElement as _, Stateful, Styled as _, div,
+    hsla, px, relative,
 };
 
-/// A subdued diagonal tint lets the native window material show through.
-pub(super) fn ambient(theme: &Theme) -> Background {
-    linear_gradient(
-        135.,
-        linear_color_stop(theme.background.opacity(0.94), 0.),
-        linear_color_stop(
-            super::desk::soften(theme.background, theme.primary, 0.07).opacity(0.92),
-            1.,
-        ),
-    )
+pub(super) fn ambient(theme: &Theme) -> Hsla {
+    theme.background
 }
 
-/// Floating surfaces stay dense enough to keep underlying text from bleeding through.
-pub(super) fn panel_fill(theme: &Theme) -> Background {
-    linear_gradient(
-        155.,
-        linear_color_stop(theme.popover.opacity(0.99), 0.),
-        linear_color_stop(
-            super::desk::soften(theme.popover, theme.primary, 0.04).opacity(0.97),
-            1.,
-        ),
-    )
+pub(super) fn panel_fill(theme: &Theme) -> Hsla {
+    theme.popover
 }
 
 pub(super) fn glass(theme: &Theme) -> Hsla {
-    theme.title_bar.opacity(0.84)
+    theme.title_bar
 }
 
 pub(super) fn glass_sidebar(theme: &Theme) -> Hsla {
-    theme.sidebar.opacity(0.94)
+    theme.sidebar
 }
 
 /// Semibold resolves to a real Segoe UI and CJK face on Windows.
@@ -47,6 +31,15 @@ pub(super) fn segment_track(theme: &Theme) -> Hsla {
 
 pub(super) fn segment_thumb(theme: &Theme) -> Hsla {
     theme.popover
+}
+
+pub(super) fn progress_track(fraction: f32, fill: Hsla, theme: &Theme) -> Div {
+    div()
+        .h(px(4.))
+        .rounded_full()
+        .bg(theme.border)
+        .overflow_hidden()
+        .child(div().h_full().w(relative(fraction)).rounded_full().bg(fill))
 }
 
 pub(super) fn modal_scrim(theme: &Theme) -> Hsla {
@@ -64,11 +57,11 @@ pub(super) fn radius_xs() -> gpui_kit::Pixels {
 }
 
 pub(super) fn radius_sm() -> gpui_kit::Pixels {
-    px(8.)
+    px(6.)
 }
 
 pub(super) fn radius_md() -> gpui_kit::Pixels {
-    px(12.)
+    px(8.)
 }
 
 pub(super) fn radius_card() -> gpui_kit::Pixels {
@@ -79,16 +72,13 @@ pub(super) fn radius_control() -> gpui_kit::Pixels {
     radius_sm()
 }
 
-/// A short contact shadow and a soft outer shadow separate floating surfaces.
+/// A single soft shadow separates floating surfaces from the work area.
 pub(super) fn elevation_shadow(theme: &Theme) -> Vec<BoxShadow> {
-    let alpha = if theme.mode.is_dark() { 0.28 } else { 0.10 };
-    vec![
-        BoxShadow::new(px(0.), px(3.), hsla(0., 0., 0., alpha * 0.75)).blur_radius(px(2.)),
-        BoxShadow::new(px(0.), px(12.), hsla(0., 0., 0., alpha)).blur_radius(px(24.)),
-    ]
+    let alpha = if theme.mode.is_dark() { 0.26 } else { 0.12 };
+    vec![BoxShadow::new(px(0.), px(6.), hsla(0., 0., 0., alpha)).blur_radius(px(18.))]
 }
 
-/// One filled primary action; secondary controls keep a quiet Paper frame.
+/// Use a filled primary action and a neutral frame for secondary controls.
 pub(super) fn glass_button(
     id: impl Into<gpui_kit::ElementId>,
     emphasized: bool,
@@ -98,12 +88,12 @@ pub(super) fn glass_button(
         (
             theme.primary,
             theme.primary_foreground,
-            super::desk::deepen(theme.primary),
-            super::desk::deepen(theme.primary),
+            theme.primary_hover,
+            theme.primary_hover,
         )
     } else {
         (
-            theme.secondary.opacity(0.65),
+            theme.secondary,
             theme.foreground,
             theme.border,
             theme.secondary_hover,
@@ -172,6 +162,4 @@ pub(super) fn popover_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -
         .text_color(theme.popover_foreground)
 }
 
-pub(super) fn menu_panel(id: impl Into<gpui_kit::ElementId>, theme: &Theme) -> Stateful<Div> {
-    popover_panel(id, theme).bg(theme.popover)
-}
+pub(super) use popover_panel as menu_panel;

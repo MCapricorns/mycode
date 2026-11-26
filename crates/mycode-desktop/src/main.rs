@@ -10,29 +10,13 @@ use mycode_desktop::workspace;
 
 // The mycode library supplies the process allocator, including this binary.
 
-/// Kit icons plus the embedded application mark used in the title bar.
+/// GPUI kit icons and the original MYCode mark used in the title bar.
 struct BrandAssets;
 
 impl gpui_kit::AssetSource for BrandAssets {
     fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
         if path == "brand/icon.ico" {
             return Ok(Some(Cow::Borrowed(include_bytes!("../assets/icon.ico"))));
-        }
-        const WORDMARKS: [&[u8]; 6] = [
-            include_bytes!("../assets/wordmark-0.png"),
-            include_bytes!("../assets/wordmark-1.png"),
-            include_bytes!("../assets/wordmark-2.png"),
-            include_bytes!("../assets/wordmark-3.png"),
-            include_bytes!("../assets/wordmark-4.png"),
-            include_bytes!("../assets/wordmark-5.png"),
-        ];
-        if let Some(bytes) = path
-            .strip_prefix("brand/wordmark-")
-            .and_then(|path| path.strip_suffix(".png"))
-            .and_then(|index| index.parse::<usize>().ok())
-            .and_then(|index| WORDMARKS.get(index))
-        {
-            return Ok(Some(Cow::Borrowed(*bytes)));
         }
         gpui_kit::assets::AllAssets.load(path)
     }

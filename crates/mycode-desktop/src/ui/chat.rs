@@ -403,9 +403,6 @@ pub(super) fn render_chat(
                             .child(
                                 probe.child(
                                     transcript::transcript_stack()
-                                        .when(show_welcome, |this| {
-                                            this.min_h_full().justify_center()
-                                        })
                                         // Keep the newest row close to the composer
                                         // with one spacing step between the surfaces.
                                         .pb(super::skin::space(3))

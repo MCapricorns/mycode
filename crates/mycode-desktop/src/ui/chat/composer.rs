@@ -102,7 +102,7 @@ pub(super) fn render_composer(
             .then(|| super::menus::render_thinking_menu(workspace, window, cx));
         div()
             .relative()
-            .child(composer_pill_chip(
+            .child(composer_chip(
                 ComposerChip {
                     id: "thinking",
                     icon: Some(IconName::Brain),
@@ -127,7 +127,7 @@ pub(super) fn render_composer(
             .then(|| super::menus::render_model_menu(workspace, window, cx));
         div()
             .relative()
-            .child(composer_pill_chip(
+            .child(composer_chip(
                 ComposerChip {
                     id: "model",
                     icon: Some(IconName::Cpu),
@@ -173,7 +173,7 @@ pub(super) fn render_composer(
     };
     let theme = cx.theme();
     // The manual-compact wait lives where the queue and ask cards do: a
-    // frosted row above the composer, gone when `CompactFinished` lands.
+    // status row above the composer, gone when `CompactFinished` lands.
     let compact_card = compacting.then(|| {
         skin::popover_panel("compact-card", theme)
             .w_full()
@@ -237,7 +237,6 @@ pub(super) fn render_composer(
                         .border_1()
                         .border_color(if focused { theme.ring } else { theme.border })
                         .bg(theme.popover)
-                        .shadow(skin::elevation_shadow(theme))
                         // Dropping a picture or a code file attaches it to
                         // the next prompt; folders still bind the project.
                         .can_drop(|value, _, _| value.is::<gpui_kit::ExternalPaths>())
@@ -283,8 +282,6 @@ pub(super) fn render_composer(
                                 .items_center()
                                 .gap_1()
                                 .p_1()
-                                .rounded(skin::radius_control())
-                                .bg(theme.status_bar)
                                 .w_full()
                                 .min_w_0()
                                 .child(
@@ -301,7 +298,7 @@ pub(super) fn render_composer(
                                             workspace.on_pick_attachments(cx);
                                         })),
                                 )
-                                .child(composer_pill_chip(
+                                .child(composer_chip(
                                     ComposerChip {
                                         id: "project",
                                         icon: Some(IconName::Folder),
@@ -382,7 +379,7 @@ fn composer_steer_button(cx: &Context<Workspace>) -> Button {
         }))
 }
 
-/// One pill chip in the composer row (folder, model, thinking). The label
+/// One control in the composer row (folder, model, thinking). The label
 /// truncates at `max_w`; when `tooltip` is set, hovering shows the
 /// untruncated text.
 struct ComposerChip {
@@ -394,14 +391,14 @@ struct ComposerChip {
     max_w: gpui_kit::Pixels,
 }
 
-fn composer_pill_chip(
+fn composer_chip(
     chip: ComposerChip,
     on_click: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
     let theme = cx.theme();
     let ink = if chip.open {
-        theme.foreground
+        theme.accent_foreground
     } else {
         theme.muted_foreground
     };
@@ -422,17 +419,15 @@ fn composer_pill_chip(
         .border_color(if chip.open {
             theme.primary.opacity(0.5)
         } else {
-            theme.border
+            theme.transparent
         })
-        .bg(if chip.open {
-            theme.accent
-        } else {
-            theme.popover
-        })
+        .when(chip.open, |this| this.bg(theme.accent))
         .text_xs()
         .cursor_pointer()
         .text_color(ink)
-        .hover(|this| this.bg(theme.secondary_hover).text_color(theme.foreground))
+        .when(!chip.open, |this| {
+            this.hover(|style| style.bg(theme.secondary_hover).text_color(theme.foreground))
+        })
         .on_click(cx.listener(move |workspace, _, window, cx| {
             on_click(workspace, window, cx);
         }))
@@ -460,7 +455,7 @@ fn composer_palette_hint(cx: &Context<Workspace>) -> Button {
 }
 
 /// The choice Enter opens on a busy turn: steer the draft in, or stop the
-/// turn and send it. Two rows in the same frosted panel family as the
+/// turn and send it. Two rows in the same panel style as the
 /// steer strip and the ask card; the key hints name the keys that confirm
 /// each row while the choice is open.
 fn render_send_choice(cx: &Context<Workspace>) -> impl IntoElement {
@@ -693,7 +688,7 @@ fn composer_meter_chip(
             this.tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
         })
         .when_some(meter.parts.remaining_percent, |row, percent| {
-            row.child(context_pips(percent, theme))
+            row.child(context_progress(percent, theme))
         })
         .when(!meter.parts.ratio.is_empty(), |row| {
             row.child(
@@ -706,56 +701,25 @@ fn composer_meter_chip(
         })
 }
 
-/// The visible arc: the share of the window in use.
+/// The share of the context window in use.
 fn used_percent(remaining_percent: u64) -> u64 {
     100 - remaining_percent.min(100)
 }
 
-/// Number of pixel pips in the context gauge.
-const CONTEXT_PIP_COUNT: u64 = 5;
-
-/// How many pixel pips light up for `remaining_percent` of the context window.
-#[must_use]
-fn lit_context_pips(remaining_percent: u64) -> usize {
-    let used = used_percent(remaining_percent);
-    if used == 0 {
-        0
-    } else {
-        ((used * CONTEXT_PIP_COUNT).div_ceil(100) as usize).clamp(1, CONTEXT_PIP_COUNT as usize)
-    }
-}
-
-/// Soft pixel-block context gauge: five rounded pips that light up as the
-/// prompt grows, replacing the circular progress ring placeholder.
-fn context_pips(
+fn context_progress(
     remaining_percent: u64,
     theme: &gpui_kit::component::theme::Theme,
 ) -> impl IntoElement {
-    let lit = lit_context_pips(remaining_percent);
-    let active_color = if lit >= CONTEXT_PIP_COUNT as usize {
+    let used = used_percent(remaining_percent);
+    let fill = if used > 80 {
         theme.warning
     } else {
         theme.primary
     };
-    let empty_color = theme.border;
-    div()
-        .id("composer-context-pips")
+    skin::progress_track(used as f32 / 100., fill, theme)
+        .id("composer-context-progress")
+        .w(px(28.))
         .flex_shrink_0()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(2.))
-        .children((0..CONTEXT_PIP_COUNT as usize).map(move |index| {
-            div()
-                .w(px(4.))
-                .h(px(10.))
-                .rounded(px(2.))
-                .bg(if index < lit {
-                    active_color
-                } else {
-                    empty_color
-                })
-        }))
 }
 
 /// The chip keeps the prompt/window ratio on screen; `detail` carries the

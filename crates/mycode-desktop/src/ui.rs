@@ -1,5 +1,4 @@
-//! GPUI workspace: translucent chrome, a flexible transcript, and contextual panels.
-mod brand;
+//! GPUI workspace with navigation, conversation, and contextual panels.
 mod chat;
 pub(crate) mod command_palette;
 mod context;
@@ -237,11 +236,6 @@ fn main_pane(
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .mr(px(8.))
-            .mb(px(8.))
-            .rounded(skin::radius_card())
-            .border_1()
-            .border_color(cx.theme().border.opacity(0.65))
             .overflow_hidden()
             .flex()
             .flex_col()
@@ -300,8 +294,7 @@ fn render_toasts(
                 .max_w_full()
                 .rounded(skin::radius_card())
                 .border_1()
-                .border_b_2()
-                .border_color(theme.input)
+                .border_color(theme.border)
                 .bg(theme.popover)
                 .shadow(skin::elevation_shadow(theme))
                 .text_color(theme.foreground)
@@ -410,14 +403,9 @@ pub(super) fn active_turn_summary(
         })
 }
 
-/// Soft pixel-stamp status lamp.
+/// Compact status indicator.
 pub(super) fn lamp(color: gpui_kit::Hsla) -> impl IntoElement {
-    div()
-        .size(px(8.))
-        .rounded(px(3.))
-        .bg(color)
-        .border_1()
-        .border_color(color.opacity(0.35))
+    div().size(px(6.)).rounded_full().bg(color)
 }
 
 pub(super) fn icon_button(
@@ -426,20 +414,8 @@ pub(super) fn icon_button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
     cx: &Context<Workspace>,
 ) -> impl IntoElement {
-    icon_button_marked(id, icon, false, on_click, cx)
-}
-
-/// Icon button with an optional quiet selected fill. Resting state is muted;
-/// the light background appears on hover, or while `marked` is set.
-pub(super) fn icon_button_marked(
-    id: impl Into<gpui_kit::ElementId>,
-    icon: IconName,
-    marked: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
-    cx: &Context<Workspace>,
-) -> impl IntoElement {
     let theme = cx.theme();
-    skin::apply_active_toggle(div().id(id), marked, theme)
+    skin::apply_active_toggle(div().id(id), false, theme)
         .child(Icon::new(icon).with_size(px(15.)))
         .on_click(on_click)
 }

@@ -1,8 +1,7 @@
-//! Cozy paper-craft palette and warm pixel-inspired tokens for the MYCode workspace.
+//! Semantic colors and native typography for the MYCode workbench.
 //!
-//! Layered paper surfaces, warm charcoal and cocoa inks, and soft coral-vermilion
-//! stamps keep both appearances approachable and legible without harsh edges.
-//! Every surface is opaque so its contrast is independent of the desktop.
+//! Neutral surfaces carry the workspace. The blue accent marks actions and
+//! focus, and status hues stay available for feedback in both appearances.
 //!
 //! Colors apply by overriding the resolved [`Theme`] after every
 //! `Theme::change`, including the button tokens GPUI actually paints.
@@ -22,7 +21,7 @@ pub struct SemanticTokens {
     pub text_1: Hsla,
     pub text_2: Hsla,
     pub text_3: Hsla,
-    /// Assistant prose uses the same warm neutral family as the chrome.
+    /// Assistant prose uses the same neutral family as the chrome.
     pub reply: Hsla,
     /// Reasoning stays quieter than the reply without a competing hue.
     pub thinking: Hsla,
@@ -173,13 +172,13 @@ fn resolved_system_family(
 
 /// A slightly deeper tint for primary hover.
 #[must_use]
-pub(crate) fn deepen(mut color: Hsla) -> Hsla {
+fn deepen(mut color: Hsla) -> Hsla {
     color.l = (color.l - 0.05).max(0.);
     color
 }
 
 /// Moves `from` toward `toward` by `amount` (0 keeps `from`, 1 is `toward`).
-pub(super) fn soften(from: Hsla, toward: Hsla, amount: f32) -> Hsla {
+fn soften(from: Hsla, toward: Hsla, amount: f32) -> Hsla {
     Hsla {
         h: from.h + (toward.h - from.h) * amount,
         s: from.s + (toward.s - from.s) * amount,
@@ -239,49 +238,49 @@ pub fn semantic_tokens(light: bool) -> SemanticTokens {
 
 fn dark_spec() -> Spec {
     Spec {
-        bg: 0x191C1F,
-        surface: 0x22262A,
-        card: 0x2B3034,
-        hover: 0x373E43,
-        ink: 0xF8F2E9,
-        dim: 0xC6BFB5,
-        faint: 0xABA59D,
-        reply: 0xEBE4DA,
-        thinking: 0xC6BFB5,
-        line: 0x434B51,
-        line_strong: 0x908B85,
-        accent: 0xFF927D,
-        accent_ink: 0x241712,
-        tint: 0x49312C,
-        green: 0x86CCA8,
-        amber: 0xEBC27D,
-        red: 0xF49097,
-        info: 0xADC9EA,
-        violet: 0xCBB2E8,
+        bg: 0x171A1F,
+        surface: 0x1D2128,
+        card: 0x252B34,
+        hover: 0x323B47,
+        ink: 0xE8EDF3,
+        dim: 0xAEB8C5,
+        faint: 0x9BA8B8,
+        reply: 0xDDE5EF,
+        thinking: 0xAEB8C5,
+        line: 0x363F4C,
+        line_strong: 0x77879D,
+        accent: 0x8EAED7,
+        accent_ink: 0x131C29,
+        tint: 0x2A394D,
+        green: 0x8BC6A6,
+        amber: 0xDDBA7F,
+        red: 0xE7959E,
+        info: 0x94BDC9,
+        violet: 0xBBA9D7,
     }
 }
 
 fn light_spec() -> Spec {
     Spec {
-        bg: 0xF6F1E8,
-        surface: 0xECE3D7,
-        card: 0xFFFCF7,
-        hover: 0xE5D8C9,
-        ink: 0x26232D,
-        dim: 0x625B64,
-        faint: 0x716873,
-        reply: 0x38323D,
-        thinking: 0x69616A,
-        line: 0xDACDBD,
-        line_strong: 0x8A7C73,
-        accent: 0xAD3B30,
-        accent_ink: 0xFFFDF9,
-        tint: 0xFAE7E0,
-        green: 0x246B4F,
-        amber: 0x84550E,
-        red: 0xA62642,
-        info: 0x355D88,
-        violet: 0x6B4C8C,
+        bg: 0xF8F9FB,
+        surface: 0xEEF1F5,
+        card: 0xFFFFFF,
+        hover: 0xE3E9F1,
+        ink: 0x18212C,
+        dim: 0x49586A,
+        faint: 0x546477,
+        reply: 0x2B3644,
+        thinking: 0x4F5F72,
+        line: 0xD1D9E4,
+        line_strong: 0x76869B,
+        accent: 0x345D8B,
+        accent_ink: 0xFFFFFF,
+        tint: 0xE5EDF7,
+        green: 0x24664E,
+        amber: 0x80530B,
+        red: 0x9C3248,
+        info: 0x326478,
+        violet: 0x654984,
     }
 }
 
@@ -330,8 +329,8 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
     theme.selection = accent.opacity(0.35);
     theme.primary = accent;
     theme.primary_foreground = accent_ink;
-    theme.primary_hover = accent;
-    theme.primary_active = accent;
+    theme.primary_hover = deepen(accent);
+    theme.primary_active = theme.primary_hover;
     theme.link = accent;
     theme.link_hover = accent;
     theme.link_active = accent;
@@ -402,15 +401,13 @@ fn paint(theme: &mut Theme, tokens: &SemanticTokens) {
 /// `Theme::change` resets button tokens to the stock theme. Copy the
 /// Desk colors into both the legacy fields and `tokens`.
 fn sync_controls(theme: &mut Theme) {
-    let primary = theme.primary;
-    let primary_hover = deepen(primary);
-    theme.button_primary = primary;
-    theme.button_primary_hover = primary_hover;
-    theme.button_primary_active = primary_hover;
+    theme.button_primary = theme.primary;
+    theme.button_primary_hover = theme.primary_hover;
+    theme.button_primary_active = theme.primary_active;
     theme.button_primary_foreground = theme.primary_foreground;
-    theme.tokens.button_primary = primary.into();
-    theme.tokens.button_primary_hover = primary_hover.into();
-    theme.tokens.button_primary_active = primary_hover.into();
+    theme.tokens.button_primary = theme.primary.into();
+    theme.tokens.button_primary_hover = theme.primary_hover.into();
+    theme.tokens.button_primary_active = theme.primary_active.into();
     theme.tokens.button_primary_foreground = theme.primary_foreground.into();
 
     theme.button = theme.transparent;
@@ -522,7 +519,7 @@ mod tests {
         );
     }
 
-    /// Red actions remain legible at rest and on hover in both appearances.
+    /// Filled actions remain legible at rest and on hover in both appearances.
     #[test]
     fn primary_actions_have_accessible_ink_and_boundaries() {
         for light in [false, true] {
@@ -562,6 +559,21 @@ mod tests {
             contrast(dark.text_2, dark.surface_1)
         );
         for (mode, tokens) in [("dark", dark), ("light", light)] {
+            for surface in [
+                tokens.bg,
+                tokens.surface_1,
+                tokens.surface_2,
+                tokens.surface_3,
+            ] {
+                assert!(
+                    contrast(tokens.text_3, surface) >= 4.5,
+                    "{mode} muted labels"
+                );
+            }
+            assert!(
+                contrast(tokens.accent, tokens.accent_soft) >= 4.5,
+                "{mode} selected control text"
+            );
             assert!(
                 contrast(tokens.success, tokens.surface_1) >= 4.5
                     && contrast(tokens.warning, tokens.surface_1) >= 4.5

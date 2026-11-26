@@ -4,14 +4,14 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    Window, div, px,
+    Window, div, px, relative,
 };
 
 use super::skin;
 use crate::i18n::t;
 use crate::workspace::Workspace;
 
-pub(super) const HEADER_HEIGHT: f32 = 72.;
+pub(super) const HEADER_HEIGHT: f32 = 60.;
 
 /// The conversation owns its title; its project is secondary context.
 pub(super) fn render_page_band(
@@ -51,10 +51,10 @@ pub(super) fn render_page_band(
         .min_h(px(HEADER_HEIGHT))
         .flex_shrink_0()
         .px_5()
-        .py_3()
+        .py_2()
         .border_b_1()
         .border_color(theme.border)
-        .bg(theme.title_bar.opacity(0.44))
+        .bg(theme.background)
         .flex()
         .flex_row()
         .items_center()
@@ -65,10 +65,11 @@ pub(super) fn render_page_band(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap(px(2.))
                 .child(
                     div()
                         .text_sm()
+                        .line_height(relative(1.2))
                         .font_weight(skin::WEIGHT_STRONG)
                         .truncate()
                         .child(title),
@@ -80,6 +81,7 @@ pub(super) fn render_page_band(
                         .gap_1()
                         .min_w_0()
                         .text_xs()
+                        .line_height(relative(1.2))
                         .text_color(theme.muted_foreground)
                         .child(Icon::new(IconName::Folder).xsmall().flex_shrink_0())
                         .child(div().min_w_0().truncate().child(scope)),
@@ -89,24 +91,42 @@ pub(super) fn render_page_band(
             this.child(
                 div()
                     .max_w(px(180.))
-                    .px_2()
-                    .py(px(3.))
-                    .rounded(skin::radius_xs())
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.secondary)
-                    .truncate()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
                     .text_xs()
                     .font_family(theme.mono_font_family.clone())
                     .text_color(theme.muted_foreground)
-                    .child(git.branch.clone()),
+                    .child(Icon::new(IconName::GitBranch).xsmall().flex_shrink_0())
+                    .child(div().min_w_0().truncate().child(git.branch.clone())),
             )
         })
         .when(vm.project_dir.is_some(), |this| {
+            let review_open = vm.changes_panel_open;
             this.child(
-                skin::glass_button("workbench-changes", false, theme)
-                    .h(px(32.))
+                div()
+                    .id("workbench-changes")
+                    .h(px(30.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
                     .flex_shrink_0()
+                    .rounded(skin::radius_xs())
+                    .text_xs()
+                    .font_weight(skin::WEIGHT_STRONG)
+                    .cursor_pointer()
+                    .when(review_open, |button| {
+                        button.bg(theme.accent).text_color(theme.accent_foreground)
+                    })
+                    .hover(move |button| {
+                        button.bg(if review_open {
+                            theme.accent
+                        } else {
+                            theme.secondary_hover
+                        })
+                    })
                     .on_click(cx.listener(|workspace, _, _, cx| {
                         workspace.on_toggle_changes_panel(true, cx);
                     }))
