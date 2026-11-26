@@ -250,12 +250,7 @@ pub fn selected_model_label(vm: &WorkspaceState) -> String {
 /// provider's full list without the models settings hide.
 pub fn provider_model_choices(vm: &WorkspaceState, provider_id: &str) -> Vec<ModelChoice> {
     let mut choices = all_provider_model_choices(vm, provider_id);
-    if let Some(provider) = vm.settings.as_ref().and_then(|settings| {
-        settings
-            .providers
-            .iter()
-            .find(|provider| provider.id == provider_id)
-    }) {
+    if let Some(provider) = vm.configured_provider(provider_id) {
         choices.retain(|choice| provider_shows_model(vm, provider, &choice.id));
     }
     choices
@@ -277,14 +272,7 @@ pub fn all_provider_model_choices(vm: &WorkspaceState, provider_id: &str) -> Vec
         })
         .unwrap_or_default();
     let configured = vm
-        .settings
-        .as_ref()
-        .and_then(|settings| {
-            settings
-                .providers
-                .iter()
-                .find(|provider| provider.id == provider_id)
-        })
+        .configured_provider(provider_id)
         .map(|provider| {
             provider
                 .models
@@ -323,15 +311,15 @@ pub fn selected_in_provider(
             .selected_provider
             .as_deref()
             .filter(|provider| *provider == provider_id)
-            .and_then(|_| vm.selected_model.clone()),
+            .and(vm.selected_model.as_deref()),
         ModelPickerTarget::Role(role) => vm
             .settings
             .as_ref()
             .and_then(|settings| settings.subagents.role(role))
             .filter(|entry| entry.provider.as_deref() == Some(provider_id))
-            .and_then(|entry| entry.model.clone()),
+            .and_then(|entry| entry.model.as_deref()),
     };
-    selected.map(|model| canonical_model_id(vm, provider_id, &model))
+    selected.map(|model| canonical_model_id(vm, provider_id, model))
 }
 
 /// Enabled providers as `(id, display name)` rows.

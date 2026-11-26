@@ -247,6 +247,18 @@ pub struct WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// The settings row for a provider, even when the catalog has no entry.
+    pub(in crate::frontend) fn configured_provider(
+        &self,
+        provider_id: &str,
+    ) -> Option<&crate::config::ProviderSettings> {
+        self.settings
+            .as_ref()?
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+    }
+
     /// Agent snapshots for the open session only.
     pub fn subagent_session(&self) -> Option<&super::subagents::SubagentSession> {
         self.subagents.session(

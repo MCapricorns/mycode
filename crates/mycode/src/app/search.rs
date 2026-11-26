@@ -25,41 +25,64 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
     // Keep only the best results, but inspect the whole bounded walk. Stopping
     // after the first matching files made filesystem enumeration order hide
     // shorter paths in later directories.
-    let mut matches: BinaryHeap<(usize, String)> = BinaryHeap::new();
+    let mut matches: BinaryHeap<(usize, String)> = BinaryHeap::with_capacity(MAX_MATCHES);
     let mut queue = VecDeque::from([root.to_path_buf()]);
     let mut visited = 0usize;
     while let Some(dir) = queue.pop_front() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
+        let Ok(relative_dir) = dir.strip_prefix(root) else {
+            continue;
+        };
+        let mut spelling = relative_dir.to_string_lossy().replace('\\', "/");
+        if !spelling.is_empty() {
+            spelling.push('/');
+        }
+        // Reuse the normalized directory prefix and the file-name buffer.
+        let prefix_len = spelling.len();
         for entry in entries.flatten() {
             visited += 1;
             if visited > MAX_VISIT {
                 return finish_mention_matches(matches);
             }
-            let path = entry.path();
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
+            let name = entry.file_name();
             if file_type.is_dir() {
-                if let Some(name) = path.file_name().and_then(|name| name.to_str())
+                if let Some(name) = name.to_str()
                     && (SKIP_DIRS.contains(&name) || (name.starts_with('.') && name != ".agents"))
                 {
                     continue;
                 }
-                queue.push_back(path);
+                queue.push_back(dir.join(name));
             } else if file_type.is_file() {
-                let Ok(rel) = path.strip_prefix(root) else {
+                let name = name.to_string_lossy();
+                let length = prefix_len + name.len();
+                // A longer path cannot displace any kept result. Equal
+                // lengths still need the spelling as a tie-breaker.
+                if matches.len() == MAX_MATCHES
+                    && matches.peek().is_some_and(|(worst, _)| length > *worst)
+                {
                     continue;
-                };
-                let spelling = rel.to_string_lossy().replace('\\', "/");
-                if needle.is_empty() || contains_ignore_ascii_case(&spelling, &needle) {
-                    let candidate = (spelling.len(), spelling);
-                    if matches.len() < MAX_MATCHES {
-                        matches.push(candidate);
-                    } else if matches.peek().is_some_and(|worst| &candidate < worst) {
-                        *matches.peek_mut().expect("the result heap is full") = candidate;
-                    }
+                }
+                spelling.truncate(prefix_len);
+                if name.contains('\\') {
+                    spelling.push_str(&name.replace('\\', "/"));
+                } else {
+                    spelling.push_str(&name);
+                }
+                if !contains_ignore_ascii_case(&spelling, &needle) {
+                    continue;
+                }
+                if matches.len() < MAX_MATCHES {
+                    matches.push((length, spelling.clone()));
+                } else if matches.peek().is_some_and(|(worst_len, worst)| {
+                    (length, spelling.as_str()) < (*worst_len, worst.as_str())
+                }) {
+                    *matches.peek_mut().expect("the result heap is full") =
+                        (length, spelling.clone());
                 }
             }
         }
@@ -136,5 +159,39 @@ mod tests {
             Some("src/lib.rs"),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn fragments_match_directory_names_and_span_path_separators() {
+        let root = std::env::temp_dir().join(format!("mycode-mention-{}", uuid::Uuid::new_v4()));
+        let parser = root.join("Modules").join("Parser");
+        std::fs::create_dir_all(&parser).unwrap();
+        std::fs::write(parser.join("Readme.md"), "").unwrap();
+        std::fs::write(root.join("Modules").join("Other.md"), "").unwrap();
+
+        let directories = super::search_project_files(&root, "MODU");
+        let spanning = super::search_project_files(&root, "LES/PARSER/RE");
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(
+            directories,
+            ["Modules/Other.md", "Modules/Parser/Readme.md"]
+        );
+        assert_eq!(spanning, ["Modules/Parser/Readme.md"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn literal_backslashes_in_file_names_are_rendered_as_separators() {
+        let root = std::env::temp_dir().join(format!("mycode-mention-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Left\\Right.txt"), "").unwrap();
+
+        let normalized = super::search_project_files(&root, "T/R");
+        let raw = super::search_project_files(&root, "t\\r");
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(normalized, ["Left/Right.txt"]);
+        assert!(raw.is_empty());
     }
 }

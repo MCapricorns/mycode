@@ -6,21 +6,11 @@ use crate::frontend::view_model::{CacheBreak, WorkspaceState};
 
 /// The `ProviderSelected` transition: the model picker selected a provider.
 pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
-    // A provider or model change restarts the prompt cache: the next turn's
-    // prefix belongs to a different cache namespace. Arm the watch so a
-    // collapsed hit explains itself instead of silently billing full price.
-    let before = (
-        state.selected_provider.clone(),
-        state.selected_model.clone(),
-    );
-    state.selected_provider = Some(provider.clone());
     // The configured row first: a turn only runs models the row lists, so
     // a catalog-first pick the row lacks showed one model and ran another
     // whenever the follow-up model pick was refused.
-    state.selected_model = state
-        .settings
-        .as_ref()
-        .and_then(|settings| settings.providers.iter().find(|p| p.id == provider))
+    let model = state
+        .configured_provider(&provider)
         .and_then(|provider| provider.models.first().cloned())
         .or_else(|| {
             state
@@ -30,43 +20,33 @@ pub(super) fn provider_selected(state: &mut WorkspaceState, provider: String) {
                 .and_then(|provider| provider.models.first())
                 .map(|model| model.id.clone())
         });
-    state.model_menu_open = false;
-    if !selected_model_supports_reasoning(state) {
-        state.reasoning_menu_open = false;
-    }
-    if (
-        state.selected_provider.clone(),
-        state.selected_model.clone(),
-    ) != before
-    {
-        arm_cache_watch(state, CacheBreak::Switch);
-    }
-    // As in `model_selected`: the stored effort survives the switch. The
-    // projection falls back to the strongest advertised rung (or Default
-    // when the new model publishes none), and the pick returns when a
-    // supporting model comes back.
-    remember_active_session_model(state);
+    let changed = state.selected_provider.as_deref() != Some(provider.as_str())
+        || state.selected_model != model;
+    state.selected_provider = Some(provider);
+    state.selected_model = model;
+    finish_model_pick(state, changed);
 }
 
 /// The `ModelSelected` transition: the model picker selected a model.
 pub(super) fn model_selected(state: &mut WorkspaceState, model: String) {
-    if let Some(provider) = state.selected_provider.clone() {
-        crate::config::remember_model(&mut state.recent_models, &provider, &model);
+    if let Some(provider) = state.selected_provider.as_deref() {
+        crate::config::remember_model(&mut state.recent_models, provider, &model);
     }
     let changed = state.selected_model.as_deref() != Some(model.as_str());
     state.selected_model = Some(model);
+    finish_model_pick(state, changed);
+}
+
+fn finish_model_pick(state: &mut WorkspaceState, changed: bool) {
     if changed {
+        // The next turn's prefix belongs to a different cache namespace.
         arm_cache_watch(state, CacheBreak::Switch);
     }
     state.model_menu_open = false;
     if !selected_model_supports_reasoning(state) {
         state.reasoning_menu_open = false;
     }
-    // The stored effort is deliberately not reset here: a rung the new
-    // model does not advertise still projects as the strongest advertised
-    // rung (or Default when none is published; see
-    // `selected_reasoning_level`), and switching back to a model that
-    // supports it restores the pick without asking the user again.
+    // Keep the stored effort so a model that supports it can restore it.
     remember_active_session_model(state);
 }
 
@@ -88,13 +68,8 @@ pub(super) fn ensure_model_selection(state: &mut WorkspaceState) {
     }
     let selected_valid = state
         .selected_provider
-        .as_ref()
-        .and_then(|provider_id| {
-            settings
-                .providers
-                .iter()
-                .find(|provider| &provider.id == provider_id)
-        })
+        .as_deref()
+        .and_then(|id| state.configured_provider(id))
         .is_some_and(|provider| {
             provider.enabled
                 && state
@@ -130,13 +105,12 @@ pub fn selected_model_supports_reasoning(state: &WorkspaceState) -> bool {
     let Some(provider_id) = state.selected_provider.as_deref() else {
         return true;
     };
-    let base_url = endpoint_base_url(state, provider_id).map(str::to_owned);
     let Some(catalog) = state.catalog.as_ref() else {
         return true;
     };
     match state.selected_model.as_deref() {
         Some(model_id) => catalog
-            .model_for_endpoint(provider_id, base_url.as_deref(), model_id)
+            .model_for_endpoint(provider_id, endpoint_base_url(state, provider_id), model_id)
             .map(|model| model.reasoning)
             .unwrap_or(true),
         None => catalog
@@ -147,13 +121,9 @@ pub fn selected_model_supports_reasoning(state: &WorkspaceState) -> bool {
 }
 
 fn endpoint_base_url<'a>(state: &'a WorkspaceState, provider_id: &str) -> Option<&'a str> {
-    state.settings.as_ref().and_then(|settings| {
-        settings
-            .providers
-            .iter()
-            .find(|provider| provider.id == provider_id)
-            .map(|provider| provider.base_url.as_str())
-    })
+    state
+        .configured_provider(provider_id)
+        .map(|row| row.base_url.as_str())
 }
 
 /// Thinking choices advertised for one catalog model.
@@ -170,11 +140,10 @@ pub fn reasoning_levels_for(
     let (Some(provider_id), Some(model_id)) = (provider_id, model_id) else {
         return unpublished_reasoning_levels(state);
     };
-    let base_url = endpoint_base_url(state, provider_id).map(str::to_owned);
     let Some(catalog) = state.catalog.as_ref() else {
         return unpublished_reasoning_levels(state);
     };
-    match catalog.model_for_endpoint(provider_id, base_url.as_deref(), model_id) {
+    match catalog.model_for_endpoint(provider_id, endpoint_base_url(state, provider_id), model_id) {
         Some(model) => model.reasoning_levels(),
         None => unpublished_reasoning_levels(state),
     }
@@ -186,11 +155,10 @@ fn unpublished_reasoning_levels(state: &WorkspaceState) -> Vec<String> {
     if let Some(stored) = state
         .settings
         .as_ref()
-        .and_then(|settings| settings.reasoning.clone())
+        .and_then(|settings| settings.reasoning.as_deref())
         && stored != "default"
-        && !levels.iter().any(|level| level == &stored)
     {
-        levels.push(stored);
+        levels.push(stored.to_owned());
     }
     levels
 }
@@ -221,8 +189,8 @@ pub(super) fn remember_active_session_model(state: &mut WorkspaceState) {
 /// Stores the current picker on `session_id`.
 pub(super) fn remember_session_model(state: &mut WorkspaceState, session_id: &str) {
     let (Some(provider), Some(model)) = (
-        state.selected_provider.clone(),
-        state.selected_model.clone(),
+        state.selected_provider.as_deref(),
+        state.selected_model.as_deref(),
     ) else {
         return;
     };
@@ -233,8 +201,8 @@ pub(super) fn remember_session_model(state: &mut WorkspaceState, session_id: &st
     crate::config::upsert_session_model(
         &mut state.session_models,
         session_id,
-        &provider,
-        &model,
+        provider,
+        model,
         reasoning,
     );
 }

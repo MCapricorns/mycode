@@ -14,7 +14,7 @@ use gpui_kit::{
 
 use super::{project_label, skin};
 use crate::i18n::t;
-use crate::view_model::{MainView, SessionSummary};
+use crate::view_model::{MainView, SessionSummary, SessionTitleFilter};
 use crate::workspace::Workspace;
 
 mod menus;
@@ -51,21 +51,13 @@ pub(super) fn render_sidebar(
     let cwd = workspace.vm().project_dir.as_deref();
     let view = workspace.vm().view;
     // Project scope applies before text search, including empty search results.
-    let filter = &workspace.vm().session_filter;
-    let rows = crate::view_model::project_session_rows(workspace.vm());
-    let session_count = rows.len();
-    let filtering = !filter.trim().is_empty();
-    let visible_sessions: Vec<(&SessionSummary, Option<&str>)> = rows
-        .into_iter()
-        .filter(|(summary, _)| {
-            !filtering
-                || crate::view_model::session_title_matches(
-                    displayed_session_title(summary),
-                    filter,
-                )
-        })
-        .collect();
-    let filter_miss = filtering && visible_sessions.is_empty() && session_count > 0;
+    let filter = SessionTitleFilter::new(&workspace.vm().session_filter);
+    let mut visible_sessions = crate::view_model::project_session_rows(workspace.vm());
+    let has_sessions = !visible_sessions.is_empty();
+    if !filter.is_empty() {
+        visible_sessions.retain(|(summary, _)| filter.matches(displayed_session_title(summary)));
+    }
+    let filter_miss = has_sessions && visible_sessions.is_empty();
     let filter_input = workspace.session_filter_input();
     let theme = cx.theme();
     let desk = super::desk::Desk::of(theme);

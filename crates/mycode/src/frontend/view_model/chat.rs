@@ -173,17 +173,46 @@ pub const COMPOSER_COMMANDS: &[(&str, &str, &str)] = &[
     ("/settings", "settings", "设置"),
 ];
 
-/// Whether `title` matches a sidebar filter. An empty filter matches every
-/// title. The comparison is case-insensitive and does not touch disk.
+/// A sidebar search query prepared for matching against multiple titles.
+pub struct SessionTitleFilter {
+    terms: Vec<String>,
+}
+
+impl SessionTitleFilter {
+    /// Normalizes the query once, regardless of the number of titles.
+    #[must_use]
+    pub fn new(query: &str) -> Self {
+        Self {
+            terms: query.split_whitespace().map(str::to_lowercase).collect(),
+        }
+    }
+
+    /// Whether the query is blank.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.terms.is_empty()
+    }
+
+    /// Whether the title contains every search term in any order.
+    #[must_use]
+    pub fn matches(&self, title: &str) -> bool {
+        if self.is_empty() {
+            return true;
+        }
+        let title = title.to_lowercase();
+        self.terms.iter().all(|term| title.contains(term))
+    }
+}
+
+/// Whether `title` matches a case-insensitive sidebar search query.
 #[must_use]
 pub fn session_title_matches(title: &str, filter: &str) -> bool {
-    let filter = filter.trim();
-    filter.is_empty() || title.to_lowercase().contains(&filter.to_lowercase())
+    SessionTitleFilter::new(filter).matches(title)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::session_title_matches;
+    use super::{SessionTitleFilter, session_title_matches};
 
     #[test]
     fn a_live_job_title_names_the_role() {
@@ -267,5 +296,16 @@ mod tests {
         assert!(!session_title_matches("Hello Title", "other"));
         assert!(session_title_matches("", ""));
         assert!(!session_title_matches("", "x"));
+    }
+
+    #[test]
+    fn title_filter_requires_every_term_in_any_order() {
+        let filter = SessionTitleFilter::new("  侧栏\tÜB ");
+        assert!(!filter.is_empty());
+        assert!(filter.matches("Überprüfung：改进侧栏搜索"));
+        assert!(filter.matches("侧栏：überarbeiten"));
+        assert!(!filter.matches("改进侧栏搜索"));
+        assert!(!filter.matches("Überprüfung"));
+        assert!(SessionTitleFilter::new("\t \u{3000}").is_empty());
     }
 }

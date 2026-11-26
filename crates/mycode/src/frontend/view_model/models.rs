@@ -90,11 +90,7 @@ fn unlisted_model_label(model_id: &str) -> String {
 pub fn model_context_window(vm: &WorkspaceState) -> u64 {
     let shown = vm.selected_model.as_deref();
     let provider_id = vm.selected_provider.as_deref();
-    let provider_row = provider_id.and_then(|id| {
-        vm.settings
-            .as_ref()
-            .and_then(|settings| settings.providers.iter().find(|provider| provider.id == id))
-    });
+    let provider_row = provider_id.and_then(|id| vm.configured_provider(id));
     if let Some(limit) = provider_row
         .and_then(|provider| provider.context_limit)
         .filter(|context| *context > 0)

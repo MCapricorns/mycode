@@ -25,8 +25,8 @@ pub use crate::app::{
 };
 
 pub use self::chat::{
-    LiveJob, MentionGroup, MentionItem, MentionKind, elapsed_label, session_title_matches,
-    subagent_cancellable, subagent_wait_status,
+    LiveJob, MentionGroup, MentionItem, MentionKind, SessionTitleFilter, elapsed_label,
+    session_title_matches, subagent_cancellable, subagent_wait_status,
 };
 pub use self::command_palette::{
     PaletteCatalog, PaletteCommand, PaletteGroup, PaletteGroupId, PaletteItem, palette_catalog,
