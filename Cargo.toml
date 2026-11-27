@@ -9,7 +9,7 @@ clippy.mod_module_files = "deny"
 rust.unused = "deny"
 
 [workspace.package]
-version = "0.12.49"
+version = "0.12.50"
 edition = "2024"
 license = "Apache-2.0"
 
