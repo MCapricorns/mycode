@@ -171,7 +171,6 @@ pub(crate) fn run_core(
                 }
                 BridgeCommand::SummarizeTitle {
                     session,
-                    provider_id,
                     model,
                     seed,
                 } => {
@@ -181,7 +180,6 @@ pub(crate) fn run_core(
                         state.clone(),
                         events.clone(),
                         session,
-                        provider_id,
                         model,
                         seed,
                     );

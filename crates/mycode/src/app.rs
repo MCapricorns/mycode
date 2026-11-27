@@ -136,9 +136,7 @@ pub enum BridgeCommand {
     SummarizeTitle {
         /// Target session.
         session: SessionId,
-        /// Provider identity from settings.
-        provider_id: String,
-        /// Model id offered by that provider.
+        /// Model id offered by Magpie.
         model: String,
         /// The first user message the title should describe.
         seed: String,

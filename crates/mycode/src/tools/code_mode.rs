@@ -335,8 +335,8 @@ impl Tool for WaitCodeTool {
     }
 
     fn description(&self) -> &str {
-        "Wait for the run_code cell `cell_id`, or stop it with `terminate: true`. Returns new \
-         output while the script runs and its result once it finishes."
+        "Collect a running `run_code` cell by `cell_id`, or request a stop with \
+         `terminate: true`. Returns the cell ID while the script runs and its output once it ends."
     }
 
     /// Collecting a cell can let its script finish its remaining writes, so
@@ -381,11 +381,11 @@ impl Tool for WaitCodeTool {
             cell.wait_settled(yield_epoch),
         );
         tokio::pin!(settle);
-        let waited = loop {
+        let cancelled = loop {
             tokio::select! {
                 biased;
-                () = ctx.cancel.cancelled() => break None,
-                finished = &mut settle => break Some(finished.is_ok()),
+                () = ctx.cancel.cancelled() => break true,
+                _ = &mut settle => break false,
                 item = progress.recv() => {
                     if let Ok(message) = item {
                         out.progress(message);
@@ -394,7 +394,7 @@ impl Tool for WaitCodeTool {
             }
         };
         drain_progress(&mut progress, out);
-        if waited.is_none() {
+        if cancelled {
             return Err(ToolError::Execution(format!(
                 "wait_code cancelled{INTERRUPTED_NOTE}"
             )));
@@ -413,21 +413,22 @@ impl Tool for WaitCodeTool {
 /// The summaries are what let a frontend name the real tools a script
 /// called: the journal beside them holds only hashes, by design.
 fn result_for(cell: &ScriptCell) -> ToolResult {
-    let snapshot = cell.snapshot();
+    let snapshot = cell.result_snapshot();
+    let phase = snapshot.phase;
     let details = json!({
         "cell_id": snapshot.cell_id,
-        "phase": snapshot.phase,
+        "phase": phase,
         "calls": snapshot.calls,
         "journal": snapshot.journal.entries(),
         "inner_calls": snapshot.inner_calls,
         "agent_states": cell.agent_states(),
     });
-    let text = snapshot.render();
-    let mut result = match snapshot.phase {
-        CellPhase::Completed => ToolResult::text(text).with_details(details),
-        CellPhase::Failed | CellPhase::Terminated => ToolResult::error(text).with_details(details),
-        CellPhase::Running | CellPhase::Yielded => ToolResult::text(text).with_details(details),
-    };
+    let text = snapshot.into_rendered();
+    let mut result = match phase {
+        CellPhase::Failed | CellPhase::Terminated => ToolResult::error(text),
+        CellPhase::Completed | CellPhase::Running | CellPhase::Yielded => ToolResult::text(text),
+    }
+    .with_details(details);
     result.content.extend(
         cell.take_images()
             .into_iter()

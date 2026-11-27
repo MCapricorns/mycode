@@ -225,8 +225,7 @@ async fn agent_loop(
     let mut aborted = false;
 
     // Stream→tool cycles while the model keeps calling tools.
-    let mut has_tool_calls = true;
-    while has_tool_calls {
+    loop {
         if token.is_cancelled() {
             aborted = true;
             break;
@@ -280,10 +279,7 @@ async fn agent_loop(
             // with an error result and do not run them. An interrupted
             // response ends as failed so continuation is an explicit action.
             if assistant.stop_reason == StopReason::Error {
-                for call in calls
-                    .iter()
-                    .filter(|call| !call.id.is_empty() && !call.name.is_empty())
-                {
+                for call in &calls {
                     let message = turn::fail_interrupted_call(env, call);
                     turn::push_shared(env, state, message);
                 }
@@ -301,44 +297,31 @@ async fn agent_loop(
             // No further tool calls: this response would end the turn.
             // A steer that landed while it streamed starts another cycle
             // in the same turn instead of being dropped.
-            has_tool_calls = drain_steers(env, state);
+            if !drain_steers(env, state) {
+                break;
+            }
         } else if assistant.stop_reason == StopReason::Length {
             // Truncated arguments are never executed (pi parity);
-            // the model re-issues the calls. Calls without an id or name
-            // cannot be paired on the wire, so they are dropped, matching
-            // the error branch above.
-            let mut answered = false;
-            for call in calls
-                .iter()
-                .filter(|call| !call.id.is_empty() && !call.name.is_empty())
-            {
+            // the model re-issues the calls. The response merge already
+            // removed calls that could not be paired.
+            for call in &calls {
                 let message = turn::fail_truncated_call(env, call);
                 turn::push_shared(env, state, message);
-                answered = true;
             }
-            has_tool_calls = answered || drain_steers(env, state);
         } else {
             // `agent` calls overlap the rest of this response, so a child
             // and another tool requested together actually run together.
             // Adjacent read-only calls run as one batch; every other tool
             // runs alone, in model order. Results go back in call order.
-            let valid_calls: Vec<&ToolCall> = calls
-                .into_iter()
-                .filter(|call| !call.id.is_empty() && !call.name.is_empty())
-                .collect();
-            if valid_calls.is_empty() {
-                has_tool_calls = drain_steers(env, state);
-                continue;
-            }
             if token.is_cancelled() {
-                for call in &valid_calls {
+                for call in &calls {
                     let message = turn::fail_cancelled_call(env, call);
                     turn::push_shared(env, state, message);
                 }
                 aborted = true;
                 break;
             }
-            let results = dispatch_response_calls(env, token, &valid_calls).await;
+            let results = dispatch_response_calls(env, token, &calls).await;
             for message in results {
                 turn::push_shared(env, state, message);
             }
@@ -346,7 +329,6 @@ async fn agent_loop(
                 aborted = true;
                 break;
             }
-            has_tool_calls = true;
         }
     }
 

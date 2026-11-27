@@ -21,7 +21,11 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
         ".mycode",
         "checkpoints",
     ];
-    let needle = query.to_ascii_lowercase();
+    let needle = if cfg!(windows) {
+        query.replace('\\', "/").to_ascii_lowercase()
+    } else {
+        query.to_ascii_lowercase()
+    };
     // Keep only the best results, but inspect the whole bounded walk. Stopping
     // after the first matching files made filesystem enumeration order hide
     // shorter paths in later directories.
@@ -35,7 +39,12 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
         let Ok(relative_dir) = dir.strip_prefix(root) else {
             continue;
         };
-        let mut spelling = relative_dir.to_string_lossy().replace('\\', "/");
+        let relative_dir = relative_dir.to_string_lossy();
+        let mut spelling = if cfg!(windows) {
+            relative_dir.replace('\\', "/")
+        } else {
+            relative_dir.into_owned()
+        };
         if !spelling.is_empty() {
             spelling.push('/');
         }
@@ -68,11 +77,7 @@ pub(crate) fn search_project_files(root: &std::path::Path, query: &str) -> Vec<S
                     continue;
                 }
                 spelling.truncate(prefix_len);
-                if name.contains('\\') {
-                    spelling.push_str(&name.replace('\\', "/"));
-                } else {
-                    spelling.push_str(&name);
-                }
+                spelling.push_str(&name);
                 if !contains_ignore_ascii_case(&spelling, &needle) {
                     continue;
                 }
@@ -171,6 +176,11 @@ mod tests {
 
         let directories = super::search_project_files(&root, "MODU");
         let spanning = super::search_project_files(&root, "LES/PARSER/RE");
+        #[cfg(windows)]
+        assert_eq!(
+            super::search_project_files(&root, r"LES\PARSER\RE"),
+            spanning
+        );
         std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(
@@ -182,16 +192,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn literal_backslashes_in_file_names_are_rendered_as_separators() {
+    fn literal_backslashes_in_project_paths_remain_resolvable() {
         let root = std::env::temp_dir().join(format!("mycode-mention-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("Left\\Right.txt"), "").unwrap();
+        let dir = root.join("Left\\Right");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("File\\Name.txt"), "").unwrap();
 
-        let normalized = super::search_project_files(&root, "T/R");
-        let raw = super::search_project_files(&root, "t\\r");
+        let paths = super::search_project_files(&root, "t\\r");
+        assert_eq!(paths, ["Left\\Right/File\\Name.txt"]);
+        assert!(root.join(&paths[0]).is_file());
+        assert!(super::search_project_files(&root, "t/r").is_empty());
         std::fs::remove_dir_all(&root).unwrap();
-
-        assert_eq!(normalized, ["Left/Right.txt"]);
-        assert!(raw.is_empty());
     }
 }

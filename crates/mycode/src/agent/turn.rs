@@ -211,7 +211,7 @@ pub(crate) async fn stream_assistant(
                     );
                 }
                 StreamEvent::Done { message } => {
-                    let message = merge_draft(message, &draft_thinking, &draft_text);
+                    let message = merge_draft(message, draft_thinking, draft_text);
                     let shared: SharedMessage = Arc::new(Message::Assistant(message));
                     state.messages.push(Arc::clone(&shared));
                     emit(env, AgentEvent::MessageAdded(Arc::clone(&shared)));
@@ -387,7 +387,7 @@ fn commit_interrupted(
 }
 
 /// Fills thinking or text the reducer omitted when the draft already has it.
-fn merge_draft(mut message: AssistantMessage, thinking: &str, text: &str) -> AssistantMessage {
+fn merge_draft(mut message: AssistantMessage, thinking: String, text: String) -> AssistantMessage {
     // Never commit an unpairable tool call: filtering only at dispatch would
     // still resend it from history on the next user turn or after a steer.
     let before = message.blocks.len();
@@ -396,17 +396,23 @@ fn merge_draft(mut message: AssistantMessage, thinking: &str, text: &str) -> Ass
         _ => true,
     });
     let discarded_call = message.blocks.len() != before;
-    let has_thinking = message
-        .blocks
-        .iter()
-        .any(|block| matches!(block, ContentBlock::Thinking(_)));
-    if !has_thinking && !thinking.is_empty() {
+    if !thinking.is_empty()
+        && !message
+            .blocks
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Thinking(_)))
+    {
         message.blocks.insert(
             0,
             ContentBlock::Thinking(crate::core::ThinkingBlock::new(thinking)),
         );
     }
-    if message.text().is_empty() && !text.is_empty() {
+    if !text.is_empty()
+        && !message
+            .blocks
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text(text) if !text.text.is_empty()))
+    {
         message
             .blocks
             .push(ContentBlock::Text(crate::core::TextBlock::new(text)));

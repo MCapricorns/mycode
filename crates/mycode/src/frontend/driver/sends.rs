@@ -76,16 +76,10 @@ impl FrontendDriver {
             }
         };
         if let Some(seed) = seed
-            && let BridgeCommand::ChatTurn {
-                session,
-                provider_id,
-                model,
-                ..
-            } = &command
+            && let BridgeCommand::ChatTurn { session, model, .. } = &command
         {
             self.dispatch(BridgeCommand::SummarizeTitle {
                 session: session.clone(),
-                provider_id: provider_id.clone(),
                 model: model.clone(),
                 seed,
             });

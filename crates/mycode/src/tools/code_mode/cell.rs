@@ -498,16 +498,33 @@ impl ScriptCell {
         }
     }
 
-    /// A consistent copy of everything a caller reports to the model.
+    /// A consistent snapshot, including output buffered by a live script.
     #[must_use]
     pub fn snapshot(&self) -> CellSnapshot {
+        self.snapshot_with_output(true)
+    }
+
+    /// Tool polls report the cell ID until the script finishes. Avoid copying
+    /// its accumulated output while the result does not display it.
+    pub(super) fn result_snapshot(&self) -> CellSnapshot {
+        self.snapshot_with_output(false)
+    }
+
+    fn snapshot_with_output(&self, include_live_output: bool) -> CellSnapshot {
         let inner = self.inner.read();
-        let mut output = inner.output.clone();
-        if inner.truncated {
-            output.push_str(&format!(
+        let include_output = include_live_output || inner.phase.is_terminal();
+        let mut output = if include_output {
+            inner.output.clone()
+        } else {
+            String::new()
+        };
+        if include_output && inner.truncated {
+            use std::fmt::Write as _;
+            let _ = write!(
+                output,
                 "\n(output truncated at {} bytes)",
                 self.max_output_bytes
-            ));
+            );
         }
         CellSnapshot {
             cell_id: self.cell_id.clone(),
@@ -541,21 +558,36 @@ impl CellSnapshot {
     /// The text a tool result should carry.
     #[must_use]
     pub fn render(&self) -> String {
-        let output = if self.output.is_empty() {
-            "(no output)".to_owned()
-        } else {
+        Self::render_parts(&self.cell_id, self.phase, self.calls, || {
             self.output.clone()
-        };
-        match self.phase {
-            CellPhase::Completed => output,
-            CellPhase::Failed => output,
-            CellPhase::Terminated => format!("{output}\n(terminated)"),
-            CellPhase::Running | CellPhase::Yielded => format!(
+        })
+    }
+
+    pub(super) fn into_rendered(self) -> String {
+        Self::render_parts(&self.cell_id, self.phase, self.calls, || self.output)
+    }
+
+    fn render_parts(
+        cell_id: &str,
+        phase: CellPhase,
+        calls: u64,
+        output: impl FnOnce() -> String,
+    ) -> String {
+        if !phase.is_terminal() {
+            return format!(
                 "Script running with cell ID {} ({} calls so far). Call wait_code with this \
                  id to keep waiting, or wait_code with terminate: true to stop it.",
-                self.cell_id, self.calls
-            ),
+                cell_id, calls
+            );
         }
+        let mut output = output();
+        if output.is_empty() {
+            output.push_str("(no output)");
+        }
+        if phase == CellPhase::Terminated {
+            output.push_str("\n(terminated)");
+        }
+        output
     }
 }
 
@@ -668,6 +700,18 @@ mod tests {
         );
         assert!(snapshot.output.contains("output truncated at 32 bytes"));
         assert!(snapshot.output.len() < 40 + 64);
+    }
+
+    #[test]
+    fn tool_polls_skip_buffered_output_until_the_cell_finishes() {
+        let cell = CodeCells::new().create("s", 4096);
+        let log = "a".repeat(2048);
+        cell.push_output(&log);
+        cell.mark_yielded();
+        assert!(cell.result_snapshot().output.is_empty());
+        assert_eq!(cell.snapshot().output, log);
+        cell.finish(ScriptOutcome::Completed);
+        assert_eq!(cell.result_snapshot().into_rendered(), log);
     }
 
     #[test]

@@ -4,9 +4,8 @@ use std::fmt::Write;
 
 use crate::tools::ToolRegistry;
 
-const HEADER: &str = "\
-Use the current tool catalog and its calling conventions. Support claims with inspected \
-sources or tool results; never claim a command ran without its result.";
+const HEADER: &str =
+    "Use the current tool catalog. Base claims on inspected sources and actual tool results.";
 
 /// Names the one shell tool in `tools`, if the process registered one.
 pub fn shell_tool_name(tools: &ToolRegistry) -> Option<String> {
@@ -21,25 +20,21 @@ fn tool_calling(tools: &ToolRegistry, code_mode: bool) -> String {
     let mut rules = String::from("<tool_calling>\n");
     if code_mode {
         rules.push_str(
-            "- Call the direct tools by name. Call the tools under Tools inside run_code only from \
-a `run_code` script, with the schemas listed there; a script cannot call `run_code` or \
-`wait_code`.\n\
-- In a script, batch independent reads and searches with `await Promise.all([...])` over \
-`callAsync(name, args)` and await each dependent step. Writes, shell commands, and other \
-exclusive calls run alone in submission order. Await required work before `complete(value)`, \
-which ends the script and cancels outstanding calls.\n\
-- Inspect each tool result's `is_error` before using it in a dependent step. Return the \
-relevant evidence and artifact paths with `log` or `complete`; a script result is not proof \
-that every nested call succeeded.\n\
-- When `run_code` returns a `cell_id`, collect that cell with `wait_code` until it \
-finishes; never resubmit the script.\n",
+            "- Call direct tools by name. For a tool listed under Tools inside run_code, use \
+`await callAsync(name, args)` in a `run_code` script with the listed schema. Call `run_code` \
+and `wait_code` directly.\n\
+- Batch independent reads and searches with `await Promise.all([...])`. Await dependent \
+steps and writes in order. Check each result's `is_error` before using it. Return relevant \
+evidence and artifact paths with `log(value)` or `complete(value)`. Await required work \
+before `complete(value)`, which cancels pending calls.\n\
+- If the result says the script is still running, pass its `cell_id` to `wait_code`. \
+Collect the same cell until it ends. Inspect its final result before retrying any action.\n",
         );
     }
     if tools.get("use_tool").is_some() {
         rules.push_str(
-            "- MCP discovery schemas describe targets for `use_tool`; they do not register new \
-direct tools. Native tools keep their calling convention above and do not go through \
-`search_tool` or `use_tool`.\n",
+            "- Use `tool_search` or `search_tool` to discover MCP schemas, then `use_tool` to call \
+the returned MCP name. Use the advertised calling convention for native tools.\n",
         );
     }
     let shell = shell_tool_name(tools);
